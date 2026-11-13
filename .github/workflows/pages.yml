@@ -35,7 +35,7 @@ jobs:
       # pendant un an, or chaque nouvelle version porte de nouveaux noms
       # de fichiers. Ce fichier lui indique de ne pas ajouter ce cache.
       - name: Éviter le cache long de GitHub Pages
-        run: touch soundblend-app/public/.nojekyll
+        run: mkdir -p public && touch public/.nojekyll
 
       - uses: actions/setup-node@v4
         with:
