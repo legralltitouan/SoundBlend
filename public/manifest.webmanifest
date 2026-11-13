@@ -1,0 +1,26 @@
+{
+  "name": "SoundBlend AI — la playlist sur-mesure",
+  "short_name": "SoundBlend",
+  "description": "Compose ta playlist YouTube Music : tes favoris, les pépites des mêmes artistes et des découvertes choisies par l'IA.",
+  "lang": "fr",
+  "dir": "ltr",
+  "id": "./",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "categories": ["music", "entertainment"],
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Bibliothèque", "short_name": "Blends", "url": "./?source=pwa&go=library", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Nouveau blend", "short_name": "Nouveau", "url": "./?source=pwa&go=new", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+  ]
+}

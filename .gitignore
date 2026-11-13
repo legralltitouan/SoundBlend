@@ -1,0 +1,15 @@
+# Jamais dans le dépôt : les dépendances, le site compilé, et surtout
+# toute variable d'environnement — elle contient les vraies clés.
+node_modules/
+dist/
+.DS_Store
+
+.env
+.env.*
+!.env.example
+*.local
+.env*.backup
+
+# divers
+*.log
+Thumbs.db
