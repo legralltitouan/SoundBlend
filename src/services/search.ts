@@ -19,11 +19,14 @@ export type Video = { videoId: string; title: string; artist: string; durationSe
 
 /* ─────────────── Piped : la recherche sans clé ─────────────── */
 
+/* Vérifiés vivants : deux seulement répondent encore en 2026. Les autres
+   sont gardés en dernier recours — un hôte mort coûte une coupure de 9 s
+   et une erreur CORS dans la console, donc ils passent après. */
 const PIPED_HOSTS = [
   'https://pipedapi.ducks.party',
+  'https://api.piped.private.coffee',
   'https://pipedapi.adminforge.de',
   'https://pipedapi.kavin.rocks',
-  'https://api.piped.yt',
 ];
 
 const hostDown = new Map<string, number>();
@@ -150,3 +153,58 @@ export const verifyVideo = async (
 
 /** L'identifiant a-t-il la forme d'un identifiant YouTube ? */
 export const looksLikeVideoId = (v?: string) => !!v && /^[A-Za-z0-9_-]{11}$/.test(v);
+
+/* ─────────────── les voisins d'un artiste ───────────────
+
+   Quand aucun modèle ne répond, il reste une vérité exploitable sans
+   aucune IA : les morceaux qui **vont ensemble** sont souvent sur la même
+   chaîne, dans la même playlist, ou à côté dans les résultats de
+   recherche. On demande donc à Piped les morceaux d'un artiste proche de
+   celui des piliers — jamais l'artiste des piliers lui-même pour les
+   découvertes — et on garde ce qui ressemble.
+
+   Ce n'est pas du goût, c'est du voisinage : moins fin qu'un modèle, mais
+   réel, vérifiable, et disponible même quand Gemini est à sec. */
+
+const voisinCache = new Map<string, { at: number; items: Video[] }>();
+const VOISIN_TTL = 30 * 60 * 1000;
+
+/** Des morceaux de cet artiste. Le tri (déjà vus, doublons) se fait chez
+    l'appelant : le cache garde la liste brute, donc il sert à tout. */
+export const artistTracks = async (artist: string): Promise<Video[]> => {
+  const key = artist.toLowerCase().trim();
+  const hit = voisinCache.get(key);
+  if (hit && Date.now() - hit.at < VOISIN_TTL) return hit.items;
+  /* `music_songs` est le catalogue de YouTube Music : titres propres
+     (« Nightcall »), artiste exact dans `uploaderName`. `videos` ramenait
+     des conférences et des cours de philosophie pour « Justice » — le
+     filtre par chaîne attrapait « Justice » n'importe où. On prend donc
+     le catalogue d'abord, et les vidéos seulement s'il ne dit rien.
+     (`pipedSearch` rend déjà des `Video` : les repasser par `toVideos`
+     les vidait, il attend la forme brute de Piped.) */
+  let found = await pipedSearch(artist, 'music_songs');
+  /* l'artiste doit être celui qu'on a demandé : « Kevinsky » n'est pas
+     « Kavinsky », et un homonyme n'est pas une face cachée */
+  let items = found.filter((v) => {
+    const up = (v.artist || '').toLowerCase();
+    return up.includes(key);
+  });
+  if (items.length < 3) {
+    found = await pipedSearch(`${artist} topic`, 'videos');
+    items = found.filter((v) => (v.artist || '').toLowerCase().includes(key));
+  }
+  voisinCache.set(key, { at: Date.now(), items });
+  return items;
+};
+
+/** Les artistes proches d'un nom, quand on n'a pas de modèle pour les nommer. */
+export const relatedArtists = async (artist: string): Promise<string[]> => {
+  const q = await pipedSearch(`${artist} mix`, 'music_songs');
+  const counts = new Map<string, number>();
+  for (const v of q) {
+    const a = (v.artist || '').replace(/\s*-\s*topic$/i, '').trim();
+    if (!a || a.toLowerCase() === artist.toLowerCase().trim()) continue;
+    counts.set(a, (counts.get(a) || 0) + 1);
+  }
+  return [...counts.entries()].sort((x, y) => y[1] - x[1]).slice(0, 6).map(([a]) => a);
+};

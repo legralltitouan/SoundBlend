@@ -31,12 +31,32 @@ export const getStoredSettings = (): AppSettings => {
         googleClientId: parsed.googleClientId || DEFAULT_SETTINGS.googleClientId,
         youtubeApiKey: parsed.youtubeApiKey ?? DEFAULT_SETTINGS.youtubeApiKey,
         geminiApiKey: parsed.geminiApiKey ?? DEFAULT_SETTINGS.geminiApiKey,
+        geminiApiKeys: Array.isArray(parsed.geminiApiKeys)
+          ? parsed.geminiApiKeys.filter((k: unknown) => typeof k === 'string' && k.trim()).map((k: string) => k.trim())
+          : [],
       };
     }
   } catch (e) {
     console.error('Error reading settings from localStorage:', e);
   }
   return DEFAULT_SETTINGS;
+};
+
+/**
+ * Toutes les clés Gemini disponibles, la principale d'abord.
+ *
+ * Une clé gratuite a un quota par jour et **par modèle** : quand un
+ * modèle est à sec, un autre modèle peut encore répondre avec la même
+ * clé. Et quand toute la clé est à sec, une seconde clé (autre projet)
+ * repart de zéro. On donne donc au moteur non pas une clé mais la liste,
+ * dans l'ordre où les essayer.
+ */
+export const geminiKeys = (settings?: AppSettings): string[] => {
+  const s = settings || getStoredSettings();
+  const all = [s.geminiApiKey, ...(s.geminiApiKeys || [])]
+    .map((k) => (k || '').trim())
+    .filter(Boolean);
+  return all.filter((k, i) => all.indexOf(k) === i);
 };
 
 export const saveStoredSettings = (settings: AppSettings): void => {

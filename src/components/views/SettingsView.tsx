@@ -22,6 +22,11 @@ export const SettingsView: React.FC = () => {
   const [clientId, setClientId] = useState(settings.googleClientId);
   const [ytKey, setYtKey] = useState(settings.youtubeApiKey || '');
   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
+  /* les clés de secours : une ligne de texte, une clé par ligne ou par
+     virgule. Deux projets Google = deux quotas distincts ; c'est le seul
+     remède simple à un 429 journalier. */
+  const [geminiExtra, setGeminiExtra] = useState((settings.geminiApiKeys || []).join('\n'));
+  const extraKeys = () => geminiExtra.split(/[\s,;]+/).map((k) => k.trim()).filter(Boolean);
 
   /* ── le diagnostic du moteur ──
      On demande à l'API, avec la clé saisie, ce qu'elle sait faire. Ce
@@ -41,6 +46,7 @@ export const SettingsView: React.FC = () => {
       googleClientId: clientId.trim(),
       youtubeApiKey: ytKey.trim(),
       geminiApiKey: geminiKey.trim(),
+      geminiApiKeys: extraKeys(),
     });
     showToast('Réglages enregistrés.');
   };
@@ -154,10 +160,30 @@ export const SettingsView: React.FC = () => {
         <Field label="Clé API YouTube Data v3 (optionnelle)" value={ytKey} onChange={setYtKey} placeholder="AIza…" />
         <Field label="Clé API Gemini" value={geminiKey} onChange={setGeminiKey} placeholder="AIza…" />
         <p className="ink-3" style={{ margin: '2px 0 0', fontSize: 11.5 }}>
-          Le moteur ne contient aucun nom de modèle : au premier appel, il demande à
-          Google la liste de ce que cette clé peut utiliser, garde les modèles capables
-          d’écrire du texte, les trie du plus capable au plus léger, puis essaie les
-          suivants si l’un refuse.
+          Une clé d’offre gratuite a un quota <b>par jour et par modèle</b>. Le moteur demande
+          à Google la liste de ce que cette clé peut utiliser, écarte seul les modèles déjà à
+          court (10 minutes), et garde une réserve. Si tout est à sec, il compose quand même
+          un blend — par voisinage sur YouTube, sans IA.
+        </p>
+        <label style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+          <span className="ink-3" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase' }}>
+            Clés Gemini de secours (facultatif)
+          </span>
+          <textarea
+            className="field"
+            rows={2}
+            value={geminiExtra}
+            onChange={(e) => setGeminiExtra(e.target.value)}
+            placeholder="Une clé par ligne — d’un autre projet Google"
+            spellCheck={false}
+            style={{ resize: 'vertical', fontFamily: 'inherit' }}
+          />
+        </label>
+        <p className="ink-3" style={{ margin: '2px 0 0', fontSize: 11.5 }}>
+          À quoi ça sert, concrètement : le quota journalier de l’offre gratuite est compté
+          par projet. Une deuxième clé, créée dans un <b>autre projet</b> Google Cloud,
+          repart avec son propre quota — c’est ce qui fait passer un blend bloqué en
+          « quota atteint ». Deux clés du même projet ne changent rien.
         </p>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
@@ -199,7 +225,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.12
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.13
         </span>
       </div>
     </div>

@@ -1,9 +1,9 @@
 import { BlendConfig, TasteMemory, Track, TrackCategory } from '../types';
-import { getStoredSettings, getSeenTracks, rememberSeenTrack, getStoredPortrait } from './storage';
+import { getStoredSettings, getSeenTracks, rememberSeenTrack, getStoredPortrait, geminiKeys } from './storage';
 import { youtubeService, withTimeout } from './youtube';
 import { dedupeTracks, uniqueByVideo } from '../lib/dedupe';
-import { matchesAsked, norm } from '../lib/track';
-import { verifyVideo, looksLikeVideoId } from './search';
+import { matchesAsked, norm, cleanTitle } from '../lib/track';
+import { verifyVideo, looksLikeVideoId, artistTracks, relatedArtists } from './search';
 import {
   analysisPrompt, parseAnalysis, toPortrait, rememberPortrait, portraitFor,
   listPrompt, parsePicks, splitCounts, replacePrompt,
@@ -99,9 +99,13 @@ function rankOf(m: ApiModel): number {
      d'abord, les variantes génériques (`latest`) ensuite, le reste après */
   const gen = (n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1];
   const version = parseFloat(gen || '0');
+  /* pro = 0, flash = 1 : plus le chiffre est petit, plus le modèle est
+     capable — et `rankOf` trie du plus petit au plus grand. Le signe
+     comptait à l'envers : `flash` passait devant `pro`, alors que tout
+     le reste du moteur promet le contraire. */
   const family = /-pro/.test(n) ? 0 : /-flash/.test(n) ? 1 : /-nerf|ultra/.test(n) ? 0.5 : 2;
   /* on préfère le plus puissant : ce qui peut écrire le plus passe devant */
-  return -version * 100 - family * 10 - Math.min(99, powerOf(m) / 4000);
+  return -version * 100 + family * 10 - Math.min(9, powerOf(m) / 100000);
 }
 
 type Engine = { model: string; at: number; queue: string[] };
@@ -109,6 +113,25 @@ const engineCache = new Map<string, Engine>();
 /** un modèle qui a refusé la requête (400/404) : on ne le rappelle pas */
 const brokenModels = new Map<string, number>();
 const ENGINE_TTL = 30 * 60 * 1000;
+
+/* ─────────── les modèles à court de quota ───────────
+   Le mur qu'on a vraiment rencontré : `gemini-2.5-pro` renvoie 429 sur
+   l'offre gratuite, tout de suite, alors que `gemini-2.5-flash` répond
+   parfaitement. Or le moteur demandait le plus puissant d'abord, à chaque
+   fois — donc chaque blend perdait son analyse, ses faces cachées et ses
+   découvertes sur le même refus, en le payant d'une requête à chaque
+   appel. Un quota épuisé ne se répare pas en insistant : on met le
+   modèle de côté un moment, et on le sait sans le redemander.
+   C'est en mémoire seulement : un rechargement de page redonne sa chance
+   au modèle (le quota a pu se rouvrir entre-temps). */
+const quotaOut = new Map<string, number>();
+const QUOTA_TTL = 10 * 60 * 1000;
+const outOfQuota = (model: string) => {
+  const until = quotaOut.get(model) || 0;
+  if (until && Date.now() > until) { quotaOut.delete(model); return false; }
+  return !!until;
+};
+const noteQuota = (model: string) => quotaOut.set(model, Date.now() + QUOTA_TTL);
 
 /**
  * Les modèles de texte que cette clé peut appeler, du plus puissant au
@@ -135,6 +158,7 @@ async function listTextModels(apiKey: string): Promise<string[]> {
   return all
     .filter(canWriteText)
     .filter((m) => !brokenModels.has(m.name.replace(/^models\//, '')))
+    .filter((m) => !outOfQuota(m.name.replace(/^models\//, '')))
     .sort((a, b) => rankOf(a) - rankOf(b))
     .map((m) => m.name.replace(/^models\//, ''))
     .filter((n, i, arr) => arr.indexOf(n) === i);
@@ -296,7 +320,16 @@ function explain(e: any): string {
   const st = e?.status;
   if (st === 403) return 'clé Gemini refusée (403) — vérifie la clé et que l’API Generative Language est autorisée';
   if (st === 401) return 'clé Gemini invalide (401)';
-  if (st === 429) return 'quota Gemini dépassé (429) — réessaie demain ou change de projet';
+  if (st === 429) {
+    /* Le message de Google distingue deux murs très différents : un débit
+       (réessayer dans quelques secondes) et un quota journalier (attendre
+       demain, ou changer de clé). Les confondre faisait dire « réessaie
+       demain » pour un simple débit. */
+    if (/per.?day|PerDay|daily/i.test(String(e?.detail || ''))) {
+      return 'quota journalier Gemini atteint (429) — une autre clé, ou demain';
+    }
+    return 'Gemini limite le débit (429) — réessaie dans un instant';
+  }
   if (st === 404) return 'modèle introuvable (404)';
   if (st === 400) return 'requête refusée par le modèle (400)';
   const m = String(e?.message || e || '');
@@ -352,7 +385,10 @@ export class GeminiService {
     onProgress?: (message: string) => void
   ): Promise<Track[]> {
     const settings = getStoredSettings();
-    const apiKey = settings.geminiApiKey;
+    /* une clé, ou plusieurs : la seconde sert quand la première a tout
+       consommé. Chacune a son quota, donc chacune rend le blend possible. */
+    const keys = geminiKeys(settings);
+    const apiKey = keys[0] || '';
 
     /* la durée demandée, en morceaux de ~3,5 min */
     const targetCount = Math.max(4, Math.round(config.durationMinutes / 3.5));
@@ -374,30 +410,64 @@ export class GeminiService {
     const seedArtistSet = new Set(seedTracks.map((t) => t.artist.toLowerCase().trim()));
 
     if (!apiKey) {
-      /* Sans clé, on le dit franchement. Le catalogue de secours a été
-         vidé de ses « morceaux d'office » : il ne contient plus que les
-         amorces et des suggestions neutres, et il est annoncé comme tel. */
-      onProgress?.('Aucune clé Gemini : impossible d’analyser les morceaux. Ajoute une clé dans Réglages → Clés & API.');
-      await new Promise((r) => setTimeout(r, 900));
-      return this.anchorsOnly(seedTracks, counts.anchor);
+      /* Sans clé, on ne peut ni analyser ni nommer. Mais on peut encore
+         **chercher** : les artistes qui figurent à côté des piliers sur
+         YouTube sont de vrais voisins musicaux. On le dit, et on le fait
+         au lieu de rendre les piliers en annonçant un échec. */
+      onProgress?.('Aucune clé Gemini — analyse impossible. On compose autrement : par voisinage sur YouTube.');
+      return this.parVoisinage(seedTracks, counts, onProgress);
     }
 
-    const models = (await engineQueue(apiKey)).slice(0, 3);
-    if (!models.length) {
-      onProgress?.('Aucun modèle de texte disponible pour cette clé — analyse impossible.');
-      await new Promise((r) => setTimeout(r, 700));
-      return this.anchorsOnly(seedTracks, counts.anchor);
+    /* ── la réserve ──
+       Un 429 sur `gemini-2.5-pro` ne dit rien des autres : le quota de
+       l'offre gratuite est compté **par modèle**. On garde donc, pour
+       cette clé, le premier modèle qui répond et UNE seule réserve —
+       pas trois. Trois tentatives qui échouent sur le même mur, c'est
+       ce qui remplissait la console de cinq 429 et donnait un blend
+       réduit aux piliers sans qu'on sache pourquoi. */
+    const chain: { model: string; key: string }[] = [];
+    for (const k of keys.slice(0, 2)) {
+      try {
+        const models = await engineQueue(k);
+        /* première clé : le modèle du moment + une réserve ; clé
+           suivante : son meilleur modèle seulement */
+        chain.push(...models.slice(0, chain.length ? 1 : 2).map((m) => ({ model: m, key: k })));
+      } catch { /* cette clé ne donne pas sa liste : la suivante essaiera */ }
     }
+    if (!chain.length) {
+      onProgress?.('Aucun modèle de texte disponible — on compose par voisinage sur YouTube.');
+      return this.parVoisinage(seedTracks, counts, onProgress);
+    }
+
+    /* état visible du mur, pour l'avouer à l'écran si tout tombe */
+    let dernierMur = '';
+    const epuisees = new Set<string>();
 
     const call: CallModel = async (prompt, temperature, budgetMs) => {
       let last: any = null;
-      for (const m of models) {
+      for (const step of chain) {
+        /* un modèle déjà à sec n'est pas rappelé : sinon chaque appel du
+           blend repayait un 429 sur le même modèle, cinq fois de suite */
+        if (outOfQuota(step.model)) continue;
         try {
-          const raw = await callModelResilient(m, apiKey, prompt, temperature, { json: true, budgetMs });
-          if (raw) { rememberEngine(apiKey, m); return raw; }
+          const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
+          if (raw) { rememberEngine(step.key, step.model); return raw; }
         } catch (e: any) {
           last = e;
-          if (e?.status === 429 || e?.status === 403 || e?.status === 401) throw e;
+          const st = e?.status;
+          /* quota : on met ce modèle de côté (10 min) et on essaie la
+             réserve. La clé refusée ou invalide, elle, condamne le
+             couple clé+modèle : c'est la clé qu'on abandonne. */
+          if (st === 429) {
+            noteQuota(step.model);
+            dernierMur = explain(e);
+            continue;
+          }
+          if (st === 403 || st === 401) {
+            epuisees.add(step.key);
+            dernierMur = explain(e);
+            continue;
+          }
         }
       }
       if (last) throw last;
@@ -536,6 +606,19 @@ export class GeminiService {
       ask('fresh', counts.fresh),
     ]);
 
+    /* ── le mur, s'il est là ──
+       Si les deux listes sont vides **et** que le modèle a refusé (429,
+       clé, réseau), ce n'est pas « le modèle n'a rien trouvé » : c'est le
+       moteur qui n'a pas répondu. Rendre les piliers en disant « aucune
+       face cachée crédible » serait un mensonge. On compose alors par
+       voisinage — un vrai blend, trouvé sur YouTube — et on dit lequel
+       des deux chemins a servi. */
+    if (!dives.length && !fresh.length && analyseErreur) {
+      onProgress?.(`Le moteur n’a pas répondu (${analyseErreur}). On compose par voisinage à la place.`);
+      const secours = await this.parVoisinage(seedTracks, counts, onProgress);
+      if (secours.length > counts.anchor) return secours;
+    }
+
     /* ═══ 4. vérifier sur YouTube, puis rassembler ═══ */
     onProgress?.('Vérification des titres sur YouTube…');
     /* Les pertes sont comptées : si des places restent vides, c'est
@@ -652,6 +735,115 @@ export class GeminiService {
       + (manque > 0 ? ` ${plur(manque, 'place reste vide', 'places restent vides')} — ${raisonDesVides(pertes)}.` : ''),
     );
     return unique;
+  }
+
+  /**
+   * Composer sans modèle : par voisinage.
+   *
+   * C'est la réponse au seul vrai mur qu'on ait trouvé — un moteur d'IA
+   * à court de quota. Plutôt que de rendre les piliers en disant
+   * « impossible », on interroge YouTube pour ce qu'il sait sans IA :
+   *   · les **faces cachées** viennent de l'artiste des piliers lui-même
+   *     (l'album, les faces B, les versions — ce que la recherche par
+   *     titre ne montrait pas) ;
+   *   · les **découvertes** viennent des artistes qui apparaissent à côté
+   *     des piliers dans les résultats de recherche — de vrais voisins.
+   *
+   * Aucune de ces deux listes n'est inventée : chaque morceau a un
+   * identifiant YouTube réel, et les doublons sont écartés. C'est moins
+   * fin qu'un modèle, mais c'est un blend.
+   */
+  private async parVoisinage(
+    seedTracks: Track[],
+    counts: { anchor: number; deepDive: number; fresh: number },
+    onProgress?: (m: string) => void,
+  ): Promise<Track[]> {
+    const out: Track[] = this.anchorsOnly(seedTracks, counts.anchor);
+    console.debug(`[voisinage] départ : ${out.length} piliers, on cherche ${counts.deepDive} faces cachées et ${counts.fresh} découvertes`);
+    const vus = new Set(out.map((t) => `${t.artist} — ${t.title}`.toLowerCase().trim()));
+    const vusTitres = new Set(out.map((t) => t.title.toLowerCase().trim()));
+    const videoIds = new Set(out.map((t) => t.videoId));
+    const artistesAmorces = [...new Set(seedTracks.map((t) => t.artist))];
+
+    const ajoute = (vi: { videoId: string; title: string; artist: string }, cat: TrackCategory, pourquoi: string) => {
+      /* Piped rend « Artiste - Titre (Official Audio) » et une chaîne du
+         genre « KAVINSKY and Record Makers ». On sépare les deux avec le
+         même outil que partout ailleurs : sans ça la liste affichait
+         « Kavinsky - Nightcall (Drive… » en titre et la chaîne en
+         artiste. */
+      const propre = cleanTitle(vi.title || '');
+      const chaine = (vi.artist || '').replace(/\s*-\s*Topic$/i, '')
+        /* « KAVINSKY and Record Makers », « Mr.Kitty Official » : le nom
+           de la chaîne est un nom d'artiste noyé dans des mots-clés.
+           On coupe avant le premier « and / official / records ». */
+        .replace(/\s+(?:and|&|official|records|music|topic)\b.*$/i, '')
+        .trim();
+      const titre = propre.title;
+      const artiste = (propre.artist || chaine || vi.artist || '').trim();
+      const k = `${artiste} — ${titre}`.toLowerCase().trim();
+      if (!titre || !artiste || vus.has(k) || vusTitres.has(titre.toLowerCase().trim())) return false;
+      /* Le voisinage sans IA ramène parfois du bruit : groupes de reprise,
+         karaoké, « NYE Party Band », versions piano pour bébés. Ce n'est
+         pas une découverte, c'est un remplissage. On les écarte. */
+      const bruit = /\b(karaoke|karaoké|tribute|cover band|covers?|party band|nye|hits|8-bit|lullaby|berceuse|string quartet|piano version|piano cover|instrumental version|made famous|originally performed)\b/i;
+      if (bruit.test(artiste) || bruit.test(titre)) return false;
+      if (videoIds.has(vi.videoId)) return false;
+      vus.add(k); vusTitres.add(titre.toLowerCase().trim()); videoIds.add(vi.videoId);
+      out.push({
+        id: `voisin-${vi.videoId}`,
+        videoId: vi.videoId,
+        title: titre,
+        artist: artiste,
+        thumbnailUrl: `https://i.ytimg.com/vi/${vi.videoId}/hqdefault.jpg`,
+        durationSeconds: 0,
+        durationFormatted: '',
+        videoUrl: `https://www.youtube.com/watch?v=${vi.videoId}`,
+        category: cat,
+        rationale: pourquoi,
+      });
+      return true;
+    };
+
+    /* 1. les faces cachées : le même artiste, un autre morceau */
+    onProgress?.('Faces cachées : on fouille les artistes de ta sélection sur YouTube…');
+    /* On répartit : deux morceaux par artiste avant de revenir au
+       premier. Sinon les quatre faces cachées venaient toutes du même
+       groupe, et le blend ressemblait à un album. */
+    const listes = await Promise.all(
+      artistesAmorces.slice(0, 4).map((a) => artistTracks(a).catch(() => [])),
+    );
+    listes.forEach((l, i) => console.debug(`[voisinage] ${artistesAmorces[i]} : ${l.length} morceaux rendus`));
+    for (let tour = 0; tour < 3; tour++) {
+      for (let a = 0; a < listes.length; a++) {
+        if (out.filter((t) => t.category === 'deep_dive').length >= counts.deepDive) break;
+        const vi = listes[a][tour];
+        if (vi) ajoute(vi, 'deep_dive', `Voisinage : un autre morceau de ${artistesAmorces[a]}, trouvé sur sa chaîne.`);
+      }
+    }
+
+    /* 2. les découvertes : les artistes qui sortent à côté des piliers */
+    onProgress?.('Découvertes : on cherche les artistes qui jouent dans la même cour…');
+    const voisins: string[] = [];
+    for (const artiste of artistesAmorces.slice(0, 2)) {
+      const proches = await relatedArtists(artiste).catch(() => []);
+      console.debug(`[voisinage] voisins de ${artiste} : ${proches.join(', ') || 'aucun'}`);
+      for (const p of proches) if (!voisins.includes(p)) voisins.push(p);
+    }
+    for (const artiste of voisins) {
+      if (out.filter((t) => t.category === 'fresh').length >= counts.fresh) break;
+      const liste = await artistTracks(artiste).catch(() => []);
+      for (const vi of liste.slice(0, 3)) {
+        if (out.filter((t) => t.category === 'fresh').length >= counts.fresh) break;
+        ajoute(vi, 'fresh', `Voisinage : ${artiste} apparaît aux côtés de ${artistesAmorces[0]}.`);
+      }
+    }
+
+    const d = out.filter((t) => t.category === 'deep_dive').length;
+    const f = out.filter((t) => t.category === 'fresh').length;
+    onProgress?.(
+      `Blend composé sans IA : ${out.length} morceaux — ${out.length - d - f} piliers, ${d} face${d > 1 ? 's' : ''} cachée${d > 1 ? 's' : ''}, ${f} découverte${f > 1 ? 's' : ''}. Trouvés sur YouTube, jamais inventés.`,
+    );
+    return out;
   }
 
   /** Sans modèle : on ne fabrique rien, on rend au moins les amorces. */

@@ -71,6 +71,8 @@ export interface AppSettings {
   googleClientId: string;
   youtubeApiKey: string;
   geminiApiKey: string;
+  /** clés de secours, essayées quand la première est à court de quota */
+  geminiApiKeys?: string[];
 }
 
 export interface UserProfile {
