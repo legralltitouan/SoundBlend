@@ -1,5 +1,5 @@
 import { BlendConfig, TasteMemory, Track, TrackCategory } from '../types';
-import { getStoredSettings, getSeenTracks, rememberSeenTrack, getStoredPortrait, geminiKeys } from './storage';
+import { getStoredSettings, getSeenTracks, rememberSeenTrack, getStoredPortrait } from './storage';
 import { youtubeService, withTimeout } from './youtube';
 import { dedupeTracks, uniqueByVideo } from '../lib/dedupe';
 import { matchesAsked, norm, cleanTitle } from '../lib/track';
@@ -385,10 +385,7 @@ export class GeminiService {
     onProgress?: (message: string) => void
   ): Promise<Track[]> {
     const settings = getStoredSettings();
-    /* une clé, ou plusieurs : la seconde sert quand la première a tout
-       consommé. Chacune a son quota, donc chacune rend le blend possible. */
-    const keys = geminiKeys(settings);
-    const apiKey = keys[0] || '';
+    const apiKey = settings.geminiApiKey;
 
     /* la durée demandée, en morceaux de ~3,5 min */
     const targetCount = Math.max(4, Math.round(config.durationMinutes / 3.5));
@@ -415,7 +412,7 @@ export class GeminiService {
          YouTube sont de vrais voisins musicaux. On le dit, et on le fait
          au lieu de rendre les piliers en annonçant un échec. */
       onProgress?.('Aucune clé Gemini — analyse impossible. On compose autrement : par voisinage sur YouTube.');
-      return this.parVoisinage(seedTracks, counts, onProgress);
+      return this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, 'aucune clé Gemini');
     }
 
     /* ── la réserve ──
@@ -425,23 +422,26 @@ export class GeminiService {
        pas trois. Trois tentatives qui échouent sur le même mur, c'est
        ce qui remplissait la console de cinq 429 et donnait un blend
        réduit aux piliers sans qu'on sache pourquoi. */
+    /* le modèle du moment, et UNE réserve — pas trois candidats qui
+       échoueront sur le même mur */
     const chain: { model: string; key: string }[] = [];
-    for (const k of keys.slice(0, 2)) {
-      try {
-        const models = await engineQueue(k);
-        /* première clé : le modèle du moment + une réserve ; clé
-           suivante : son meilleur modèle seulement */
-        chain.push(...models.slice(0, chain.length ? 1 : 2).map((m) => ({ model: m, key: k })));
-      } catch { /* cette clé ne donne pas sa liste : la suivante essaiera */ }
-    }
+    try {
+      const models = await engineQueue(apiKey);
+      chain.push(...models.slice(0, 2).map((m) => ({ model: m, key: apiKey })));
+    } catch { /* la liste n'a pas répondu : on le dira plus bas */ }
     if (!chain.length) {
       onProgress?.('Aucun modèle de texte disponible — on compose par voisinage sur YouTube.');
-      return this.parVoisinage(seedTracks, counts, onProgress);
+      return this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, 'aucun modèle disponible');
     }
 
     /* état visible du mur, pour l'avouer à l'écran si tout tombe */
     let dernierMur = '';
     const epuisees = new Set<string>();
+
+    /* ── la trace : par quel moyen ce blend est né ──
+       posée au fil des appels, pas devinée à la fin : `answer` retient le
+       modèle qui a réellement répondu, `dernierMur` la raison du silence. */
+    let modeleQuiRepond = '';
 
     const call: CallModel = async (prompt, temperature, budgetMs) => {
       let last: any = null;
@@ -451,7 +451,11 @@ export class GeminiService {
         if (outOfQuota(step.model)) continue;
         try {
           const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
-          if (raw) { rememberEngine(step.key, step.model); return raw; }
+          if (raw) {
+            rememberEngine(step.key, step.model);
+            modeleQuiRepond = step.model;
+            return raw;
+          }
         } catch (e: any) {
           last = e;
           const st = e?.status;
@@ -615,7 +619,7 @@ export class GeminiService {
        des deux chemins a servi. */
     if (!dives.length && !fresh.length && analyseErreur) {
       onProgress?.(`Le moteur n’a pas répondu (${analyseErreur}). On compose par voisinage à la place.`);
-      const secours = await this.parVoisinage(seedTracks, counts, onProgress);
+      const secours = await this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, analyseErreur);
       if (secours.length > counts.anchor) return secours;
     }
 
@@ -723,6 +727,19 @@ export class GeminiService {
     ];
     const unique = uniqueByVideo(dedupeTracks(blend));
 
+    /* ── le moyen, dit et gardé ──
+       Le voisinage a servi si le chemin d'urgence a été emprunté, ou si
+       aucune liste n'est revenue du modèle. On ne le devine pas : on
+       regarde ce qui a effectivement produit des morceaux. */
+    const parIA = this.derniereMethode === 'gemini'
+      && !!(modeleQuiRepond && (dives.length || fresh.length));
+    this.derniereMethode = parIA ? 'gemini' : 'voisinage';
+    this.derniereNote = parIA
+      ? `Composé par ${modeleQuiRepond}.`
+      : (dernierMur
+        ? `Composé par voisinage YouTube (${dernierMur}). Aucun morceau n’a été inventé.`
+        : 'Composé par voisinage YouTube, sans modèle d’IA. Aucun morceau n’a été inventé.');
+
     /* les comptes sont ceux du résultat FINAL, pas des intentions */
     const n = (c: TrackCategory) => unique.filter((t) => t.category === c).length;
     const plur = (k: number, un: string, des: string) => `${k} ${k > 1 ? des : un}`;
@@ -756,14 +773,40 @@ export class GeminiService {
   private async parVoisinage(
     seedTracks: Track[],
     counts: { anchor: number; deepDive: number; fresh: number },
+    taste: TasteMemory,
     onProgress?: (m: string) => void,
+    raison = '',
   ): Promise<Track[]> {
+    this.derniereMethode = 'voisinage';
+    /* La phrase de la trace est posée ici et non plus loin : ce chemin
+       sort de `generateBlend` par un `return` anticipé, et la note serait
+       restée vide — le blend aurait affiché « voisinage » sans dire
+       pourquoi. */
+    this.derniereNote = raison
+      ? `Composé par voisinage YouTube (${raison}). Aucun morceau n’a été inventé.`
+      : 'Composé par voisinage YouTube, sans modèle d’IA. Aucun morceau n’a été inventé.';
     const out: Track[] = this.anchorsOnly(seedTracks, counts.anchor);
-    console.debug(`[voisinage] départ : ${out.length} piliers, on cherche ${counts.deepDive} faces cachées et ${counts.fresh} découvertes`);
     const vus = new Set(out.map((t) => `${t.artist} — ${t.title}`.toLowerCase().trim()));
     const vusTitres = new Set(out.map((t) => t.title.toLowerCase().trim()));
     const videoIds = new Set(out.map((t) => t.videoId));
     const artistesAmorces = [...new Set(seedTracks.map((t) => t.artist))];
+
+    /* ── les goûts, même sans IA ──
+       Le voisinage ne devine pas : il reçoit les mêmes règles que le
+       modèle. Un artiste écarté ne peut pas entrer, et un artiste aimé
+       déjà présent dans le blend n'a pas à revenir — sinon « éviter
+       David Guetta » ne servait à rien dès que Gemini tombait. */
+    const artistesEcartes = new Set(
+      [...taste.dislikedArtists, ...taste.dislikedTracks.map((t) => t.artist)]
+        .map((a) => a.toLowerCase().trim()).filter(Boolean),
+    );
+    const artistesAimes = new Set(
+      [...taste.likedArtists, ...taste.likedTracks.map((t) => t.artist)]
+        .map((a) => a.toLowerCase().trim()).filter(Boolean),
+    );
+    /* les morceaux déjà aimés ne sont pas des découvertes : on les écarte
+       des propositions (les remettre serait une redite, pas un cadeau) */
+    const dejaAimes = new Set(taste.likedTracks.map((t) => t.title.toLowerCase().trim()));
 
     const ajoute = (vi: { videoId: string; title: string; artist: string }, cat: TrackCategory, pourquoi: string) => {
       /* Piped rend « Artiste - Titre (Official Audio) » et une chaîne du
@@ -787,6 +830,9 @@ export class GeminiService {
          pas une découverte, c'est un remplissage. On les écarte. */
       const bruit = /\b(karaoke|karaoké|tribute|cover band|covers?|party band|nye|hits|8-bit|lullaby|berceuse|string quartet|piano version|piano cover|instrumental version|made famous|originally performed)\b/i;
       if (bruit.test(artiste) || bruit.test(titre)) return false;
+      /* les goûts de la personne, appliqués ici aussi */
+      if (artistesEcartes.has(artiste.toLowerCase().trim())) return false;
+      if (dejaAimes.has(titre.toLowerCase().trim())) return false;
       if (videoIds.has(vi.videoId)) return false;
       vus.add(k); vusTitres.add(titre.toLowerCase().trim()); videoIds.add(vi.videoId);
       out.push({
@@ -812,7 +858,6 @@ export class GeminiService {
     const listes = await Promise.all(
       artistesAmorces.slice(0, 4).map((a) => artistTracks(a).catch(() => [])),
     );
-    listes.forEach((l, i) => console.debug(`[voisinage] ${artistesAmorces[i]} : ${l.length} morceaux rendus`));
     for (let tour = 0; tour < 3; tour++) {
       for (let a = 0; a < listes.length; a++) {
         if (out.filter((t) => t.category === 'deep_dive').length >= counts.deepDive) break;
@@ -826,9 +871,13 @@ export class GeminiService {
     const voisins: string[] = [];
     for (const artiste of artistesAmorces.slice(0, 2)) {
       const proches = await relatedArtists(artiste).catch(() => []);
-      console.debug(`[voisinage] voisins de ${artiste} : ${proches.join(', ') || 'aucun'}`);
       for (const p of proches) if (!voisins.includes(p)) voisins.push(p);
     }
+    /* Un artiste aimé qui n'est pas dans les piliers passe devant : c'est
+       le goût explicite de la personne, pas une déduction. */
+    const prochesDesGouts = [...artistesAimes].filter((a) => !artistesAmorces.some((x) => x.toLowerCase().trim() === a));
+    for (const a of prochesDesGouts) if (!voisins.includes(a)) voisins.unshift(a);
+
     for (const artiste of voisins) {
       if (out.filter((t) => t.category === 'fresh').length >= counts.fresh) break;
       const liste = await artistTracks(artiste).catch(() => []);
@@ -845,6 +894,13 @@ export class GeminiService {
     );
     return out;
   }
+
+  /* ── la trace de la composition ──
+     « Par quel moyen ce blend est-il né ? » a une réponse, et elle est
+     gardée : `methode` est posée par le chemin qui a réellement servi,
+     `note` est la phrase à montrer. `DataContext` les attache au blend. */
+  public derniereMethode: 'gemini' | 'voisinage' = 'gemini';
+  public derniereNote = '';
 
   /** Sans modèle : on ne fabrique rien, on rend au moins les amorces. */
   private anchorsOnly(seedTracks: Track[], anchorCount: number): Track[] {

@@ -26,9 +26,16 @@ const STEPS = [
 ];
 
 export const GeneratingOverlay: React.FC = () => {
-  const { modal, mode } = useUI();
+  const { mode } = useUI();
   const { generating, generatingStatus } = useData();
-  const open = modal === 'generating' || generating;
+  /* ── ne jamais rester par-dessus le blend ──
+     `modal === 'generating'` est posé par l'écran de configuration, et
+     c'est ce même écran qui le retire quand la génération rend la main.
+     Mais quand elle échoue, le `catch` affiche un message et s'arrête
+     là : le modal restait ouvert, plein écran, par-dessus le blend qu'on
+     venait de composer. L'écran de composition ne s'affiche donc que
+     pendant que le moteur travaille réellement. */
+  const open = generating;
   const dark = mode === 'dark';
   const [step, setStep] = useState(0);
 

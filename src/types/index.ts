@@ -45,7 +45,23 @@ export interface GeneratedBlend {
   tracks: Track[];
   exportedPlaylistId?: string;
   exportedUrl?: string;
+  /** par quel moyen ce blend a été composé — dit sur le blend lui-même */
+  methode?: BlendMethod;
 }
+
+/**
+ * Comment ce blend a été composé. On le garde sur le blend, pas seulement
+ * à l'écran de composition : une semaine plus tard, la question « c'est
+ * l'IA ou du voisinage ? » doit encore avoir sa réponse.
+ */
+export type BlendMethod = {
+  /** 'gemini' = le modèle a composé ; 'voisinage' = sans IA ; 'mixte' = les deux */
+  kind: 'gemini' | 'voisinage' | 'mixte';
+  /** le modèle qui a répondu, s'il y en a un */
+  model?: string;
+  /** une phrase pour l'écran, déjà rédigée */
+  detail: string;
+};
 
 export interface TasteMemoryItem {
   id: string;
@@ -71,8 +87,6 @@ export interface AppSettings {
   googleClientId: string;
   youtubeApiKey: string;
   geminiApiKey: string;
-  /** clés de secours, essayées quand la première est à court de quota */
-  geminiApiKeys?: string[];
 }
 
 export interface UserProfile {

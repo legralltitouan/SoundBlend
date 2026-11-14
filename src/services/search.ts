@@ -1,16 +1,17 @@
 /* ═══════════════════════════════════════════════════════════════
-   Retrouver un morceau sur YouTube, sans dépendre d'une seule voie.
+   Retrouver un morceau sur YouTube, et composer sans modèle.
 
-   Trois façons, essayées dans cet ordre, indépendantes les unes des
-   autres :
+   Trois voies seulement, essayées dans cet ordre par `youtube.ts` :
 
-     1. l'API Data v3, avec la clé de la personne — la voie normale ;
-     2. une instance Piped — le même catalogue, sans clé ;
-     3. les listes de lecture (celle de l'auditeur, plus une poignée de
-        playlists publiques « Topic », qui rassemblent les albums des
-        artistes). Une playlist est lue avec **1 unité** de quota là où
-        une recherche en coûte 100 : c'est la voie de secours qui ne
-        s'épuise pas, et qui connaît les faces B.
+     1. l'API Data v3, avec la clé de la personne ;
+     2. le jeton OAuth de la session ;
+     3. Piped — le même catalogue, lu par un service public : ni clé,
+        ni quota. Deux hôtes vivants, deux en dernier recours.
+
+   S'y ajoutent deux outils qui ne servent qu'aux cas dégradés :
+   `verifyVideo()` (contrôler un identifiant donné par le modèle, sans
+   clé) et le voisinage (`artistTracks`, `relatedArtists`), utilisé
+   seulement quand aucun modèle ne répond.
 
    Ce fichier ne décide de rien : il cherche et rend des candidats.
    ═══════════════════════════════════════════════════════════════ */
@@ -84,39 +85,6 @@ export const pipedSearch = async (query: string, filter: 'music_songs' | 'videos
   }
   return [];
 };
-
-/* ─────────────── les listes de lecture, à 1 unité de quota ─────────────── */
-
-/**
- * Le cache des morceaux par liste : une liste lue une fois sert pour
- * toutes les recherches de la session.
- */
-const listCache = new Map<string, { at: number; items: Video[] }>();
-const LIST_TTL = 30 * 60 * 1000;
-
-export type ListFetcher = (playlistId: string) => Promise<Video[]>;
-
-/** Cherche dans des listes déjà connues, sans appel réseau si elles sont en cache. */
-export const searchInLists = async (
-  lists: string[],
-  fetchList: ListFetcher,
-  predicate: (v: Video) => boolean,
-): Promise<Video[]> => {
-  const out: Video[] = [];
-  for (const id of lists) {
-    let entry = listCache.get(id);
-    if (!entry || Date.now() - entry.at > LIST_TTL) {
-      const items = await fetchList(id).catch(() => [] as Video[]);
-      entry = { at: Date.now(), items };
-      listCache.set(id, entry);
-    }
-    for (const v of entry.items) if (predicate(v)) out.push(v);
-    if (out.length >= 6) break;
-  }
-  return out;
-};
-
-export const peekList = (id: string): Video[] | null => listCache.get(id)?.items || null;
 
 /* ─────────────── vérifier une vidéo, sans clé ─────────────── */
 

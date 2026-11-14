@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import {
   Play, Pause, ThumbsUp, ThumbsDown, Trash2, RefreshCw, Share2, ExternalLink,
-  ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles,
+  ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass,
   MoreHorizontal, ArrowRight, Download, Radio,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
@@ -283,6 +283,25 @@ export const BlendView: React.FC = () => {
           <p className="sb-blend-counts">
             {stats.anchor} {stats.anchor > 1 ? 'piliers' : 'pilier'} · {stats.deep} {stats.deep > 1 ? 'faces cachées' : 'face cachée'} · {stats.fresh} {stats.fresh > 1 ? 'découvertes' : 'découverte'}
           </p>
+
+          {/* D'où vient ce blend ? La question se pose à chaque écoute, et
+              la réponse ne doit pas demander d'ouvrir la console : le
+              modèle a composé, ou bien c'est le voisinage YouTube — deux
+              choses très différentes, dites avec deux icônes. */}
+          {blend.methode && (
+            <p className="sb-blend-origin" data-kind={blend.methode.kind}>
+              {blend.methode.kind === 'gemini'
+                ? <Cpu size={13} strokeWidth={1.9} />
+                : <Compass size={13} strokeWidth={1.9} />}
+              <span>
+                <b>{blend.methode.kind === 'gemini' ? 'Composé par Gemini' : 'Composé par voisinage YouTube'}</b>
+                {' — '}
+                {blend.methode.kind === 'gemini'
+                  ? 'le modèle a choisi et justifié chaque morceau.'
+                  : 'sans IA : les artistes proches de tes piliers, aucun morceau inventé.'}
+              </span>
+            </p>
+          )}
 
           <div className="sb-blend-buttons">
             <button

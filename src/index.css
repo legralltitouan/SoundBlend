@@ -508,6 +508,22 @@ html[data-mode='light'] .ytm-search { background: color-mix(in srgb, #000 5%, tr
 .sb-title-edit:hover { background: var(--bg-2); color: var(--ink); }
 .sb-blend-counts { margin: 0 0 16px; font-size: 13px; color: var(--ink-2); }
 .sb-blend-buttons { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
+/* d'où vient le blend : modèle ou voisinage — deux couleurs, deux mots */
+.sb-blend-origin {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 0 0 16px; padding: 9px 12px; border-radius: 12px;
+  font-size: 12.5px; line-height: 1.45; color: var(--ink-2);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  max-width: 520px;
+}
+.sb-blend-origin b { color: var(--ink); font-weight: 600; }
+.sb-blend-origin svg { flex: none; margin-top: 1.5px; }
+.sb-blend-origin[data-kind='gemini'] svg { color: var(--accent); }
+.sb-blend-origin[data-kind='voisinage'] {
+  background: color-mix(in srgb, #e0a23c 10%, transparent);
+}
+.sb-blend-origin[data-kind='voisinage'] svg { color: #c98a2a; }
 .sb-rename { display: flex; align-items: center; gap: 8px; max-width: 460px; margin-bottom: 12px; }
 
 /* lignes du blend */

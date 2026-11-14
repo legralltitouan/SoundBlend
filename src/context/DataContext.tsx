@@ -321,6 +321,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           expiresAt: expires.toISOString(),
           seedTracks: selectedTracks,
           tracks: uniqueTracks(generatedTracks),
+          /* par quel moyen : la réponse reste attachée au blend, pas
+             seulement à l'écran qui l'a vu naître */
+          methode: {
+            kind: geminiService.derniereMethode,
+            model: /Composé par (gemini[^\s.]+)/.exec(geminiService.derniereNote)?.[1],
+            detail: geminiService.derniereNote,
+          },
         };
 
         saveBlendToStorage(blend);
