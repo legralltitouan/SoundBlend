@@ -137,6 +137,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                pas des pauses, on ne touche pas à l'état affiché */
             if (event.data === 1) {
               setIsPlaying(true);
+              /* la musique est là : ni message, ni échéance en attente */
+              window.clearTimeout(pauseTimer.current ?? undefined);
               setRepriseRefusee(false);
               const d = playerRef.current?.getDuration?.() || 0;
               if (d > 0) setDuration(d);
@@ -145,18 +147,40 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                  navigateur qui a suspendu la page — pas la personne : on
                  garde l'intention, et la reprise se fera au retour. */
               setIsPlaying(false);
-              /* Une pause que personne n'a demandée : l'intention d'écouter
-                 est toujours là et la page est à l'écran. C'est le
-                 navigateur qui a coupé (restriction d'autoplay, économie
-                 d'énergie, appel entrant…). On ne relance pas — insister
-                 donne la bagarre play/pause — on propose la reprise. */
+              /* Une pause que personne n'a demandé : l'intention d'écouter
+                 est toujours là et la page est à l'écran.
+
+                 ── pourquoi on attend avant de le dire ──
+                 Au démarrage d'un morceau, YouTube passe par « non
+                 démarré » (5) puis parfois par une micro-pause le temps de
+                 mettre en tampon. On annonçait donc « la lecture s'est
+                 arrêtée » à chaque changement de piste, alors que tout
+                 allait bien — le bandeau apparaissait, puis disparaissait
+                 aussitôt que la musique repartait : ce clignotement.
+
+                 Désormais chaque passage en pause pose une échéance, et
+                 c'est la **dernière** qui décide. Toute reprise l'annule.
+                 Il faut donc que le silence dure pour que le message
+                 s'affiche — et un morceau qui démarre ne le déclenche
+                 jamais (on ne signale pas une pause sur une piste à 0:00,
+                 le lecteur n'a pas encore eu sa chance). */
               if (wantedPlay.current && document.visibilityState === 'visible') {
-                window.setTimeout(() => {
+                /* la position au moment de la pause : si elle était déjà
+                   installée (plus d'une seconde), c'est un morceau qui
+                   tournait — donc un vrai arrêt. Si elle était à zéro,
+                   c'est un démarrage : le lecteur n'a pas encore eu sa
+                   chance, et on ne dit rien. */
+                const dejaAvance = currentTime.current > 1;
+                window.clearTimeout(pauseTimer.current ?? undefined);
+                pauseTimer.current = window.setTimeout(() => {
                   try {
                     const st = playerRef.current?.getPlayerState?.();
-                    if (wantedPlay.current && st !== 1 && st !== 3) setRepriseRefusee(true);
+                    const t1 = currentTime.current;
+                    if (wantedPlay.current && st !== 1 && st !== 3 && (dejaAvance || t1 > 1)) {
+                      setRepriseRefusee(true);
+                    }
                   } catch { /* lecteur absent : rien à dire */ }
-                }, 700);
+                }, 2600);
               }
             } else if (event.data === 0) {
               advance.current();
@@ -292,6 +316,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      s'éteint dès que la lecture repart. */
   const [repriseRefusee, setRepriseRefusee] = useState(false);
   const verifierRefus = useRef<number | null>(null);
+  /* l'échéance du « la lecture s'est arrêtée » : elle se repousse à chaque
+     pause, et seule la dernière aboutit (voir onStateChange) */
+  const pauseTimer = useRef<number | null>(null);
+  /* la position réelle du lecteur, lue sans provoquer de rendu : elle dit
+     si la piste a seulement commencé à avancer */
+  const currentTime = useRef(0);
 
   /* « Reprendre » : c'est le geste que la personne fait elle-même quand
      elle revient dans l'app et que le navigateur a refusé la reprise.
@@ -337,9 +367,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         try {
           const st = p2?.getPlayerState?.();
           if (st === 1 || st === 3) { setRepriseRefusee(false); return; }
+          /* même prudence qu'ailleurs : si la piste n'a pas encore avancé,
+             c'est un démarrage, pas un arrêt */
+          if (progressRef.current < 0.6) return;
           setRepriseRefusee(true);
         } catch { /* lecteur absent : rien à dire */ }
-      }, 1100);
+      }, 1800);
     };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
@@ -392,6 +425,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const total = durationRef.current || 210;
       if (pos >= total) pos = total;
       progressRef.current = pos;
+      /* la position RÉELLE du lecteur, pour distinguer un démarrage d'un
+         arrêt (voir onStateChange) */
+      currentTime.current = player?.getCurrentTime ? (player.getCurrentTime() || 0) : pos;
       setProgress(pos);
       intervalRef.current = requestAnimationFrame(tick);
     };
@@ -424,6 +460,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCurrentIndex(idx >= 0 ? idx : 0);
     setCurrentTrack(track);
     setProgress(0);
+    currentTime.current = 0;
 
     markWanted(true);
     setIsPlaying(true);

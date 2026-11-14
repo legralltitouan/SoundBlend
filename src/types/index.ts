@@ -48,6 +48,17 @@ export interface GeneratedBlend {
   tracks: Track[];
   exportedPlaylistId?: string;
   exportedUrl?: string;
+  /** Ce que la playlist YouTube contient — et s'appelle — depuis le
+      dernier envoi. C'est cette référence qui décide s'il faut proposer
+      « Mettre à jour » : on compare le blend à ce qu'on a réellement
+      envoyé, et non à une relecture distante qui peut arriver en retard
+      (d'où les fausses alertes juste après un export). */
+  exportedMeta?: {
+    sig: string;
+    title: string;
+    privacy: 'private' | 'public';
+    at: string;
+  };
   /** par quel moyen ce blend a été composé — dit sur le blend lui-même */
   methode?: BlendMethod;
 }

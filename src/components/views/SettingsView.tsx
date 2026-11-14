@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   KeyRound, ShieldCheck, Check, ExternalLink, Palette, MonitorSmartphone,
-  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, RefreshCw, CloudOff,
+  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, Cloud,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
@@ -13,7 +13,7 @@ import { clientIdGoogle, GEMINI_API_KEY } from '../../config/app';
 /* Réglages : apparence (clair / sombre), compte YouTube, clés & API.
    Le modèle Gemini n'est plus un choix : la cascade est automatique. */
 export const SettingsView: React.FC = () => {
-  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState, syncNow } = useData();
+  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState } = useData();
   const { mode, toggleMode, showToast, restartOnboarding } = useUI();
   const pwa = useInstall();
   /* aucune clé par défaut : si elles manquent, on le dit ici, en clair,
@@ -134,8 +134,16 @@ export const SettingsView: React.FC = () => {
         )}
       </Card>
 
-      {/* compte */}
-      <Card icon={<ShieldCheck size={17} />} title="Compte YouTube" sub={isAuthenticated ? `Connecté en tant que ${userProfile?.name || 'compte YouTube'}` : 'Non connecté — une bibliothèque d’exemple est affichée.'}>
+      {/* compte — c'est aussi la synchro : une seule connexion pour tout */}
+      <Card
+        icon={<ShieldCheck size={17} />}
+        title="Compte Google"
+        sub={
+          isAuthenticated
+            ? `Connecté en tant que ${userProfile?.name || 'ton compte'}`
+            : 'Non connecté — une bibliothèque d’exemple est affichée.'
+        }
+      >
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {isAuthenticated ? (
             <Button variant="outline" onClick={logout}>Se déconnecter</Button>
@@ -151,18 +159,30 @@ export const SettingsView: React.FC = () => {
             utilisent l’app n’ont jamais à s’en occuper.
           </p>
         )}
+        {/* ── la synchro : une ligne, pas un réglage ──
+            Elle se fait toute seule dès qu'il y a un changement, et se
+            rattrape toutes les trois minutes si un envoi a été manqué.
+            Il n'y a donc rien à boutonner — sauf quand Google refuse, et
+            dans ce cas un seul geste suffit. */}
+        {isAuthenticated && (
+          <p className="ink-3 sb-sync-line">
+            <Cloud size={13} strokeWidth={1.7} />
+            <span>
+              {syncState.phase === 'sans-portee'
+                ? 'La synchro demande un accès Drive qui manque à cette connexion.'
+                : syncState.phase === 'erreur'
+                  ? 'Synchro en attente — tes données restent sur cet appareil, elles repartiront d’elles-mêmes.'
+                  : 'Synchronisation active : tes goûts, tes avis, ton mode et ton blend te suivent sur tous tes appareils.'}
+            </span>
+            {syncState.phase === 'sans-portee' && (
+              <button className="btn-ghost" onClick={login}>Réactiver</button>
+            )}
+          </p>
+        )}
         <p className="ink-3" style={{ margin: '10px 0 0', fontSize: 11.5 }}>
           Une playlist manque ? Vérifie que le compte choisi dans la fenêtre Google est bien celui où se trouvent tes playlists.
         </p>
       </Card>
-
-      {/* synchro */}
-      <SyncCard
-        connecte={isAuthenticated}
-        etat={syncState}
-        onConnecter={login}
-        onSync={() => void syncNow()}
-      />
 
       {/* clés */}
       <Card
@@ -170,7 +190,7 @@ export const SettingsView: React.FC = () => {
         title="Clés & API"
         sub={
           isAuthenticated
-            ? 'Ta clé reste dans l’app — et, avec la synchro, dans ton Drive privé.'
+            ? 'Ta clé reste dans l’app — et suit ton compte sur tes autres appareils.'
             : 'Stockée uniquement dans ce navigateur.'
         }
       >
@@ -191,65 +211,10 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.22
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.23
         </span>
       </div>
     </div>
-  );
-};
-
-/* ── la synchro ──
-   Elle n'a qu'un bouton, et seulement quand il sert. Le reste du temps,
-   elle dit simplement où elle en est : c'est tout ce qu'on demande à un
-   réglage qui doit être invisible. */
-const SyncCard: React.FC<{
-  connecte: boolean;
-  etat: { phase: string; dernierEnvoi?: string; message?: string };
-  onConnecter: () => void;
-  onSync: () => void;
-}> = ({ connecte, etat, onConnecter, onSync }) => {
-  const heure = etat.dernierEnvoi
-    ? new Date(etat.dernierEnvoi).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-    : null;
-
-  const sous = !connecte
-    ? 'Connecte ton compte : tes goûts, tes avis et tes blends suivront sur tous tes appareils.'
-    : etat.phase === 'sans-portee'
-      ? 'La connexion actuelle ne couvre pas le Drive : reconnecte-toi une fois pour l’activer.'
-      : etat.phase === 'erreur'
-        ? 'La synchro n’a pas abouti — rien n’est perdu, tout reste sur cet appareil.'
-        : etat.phase === 'envoi'
-          ? 'Enregistrement en cours…'
-          : heure
-            ? `Activée · enregistré à ${heure}`
-            : 'Activée · en attente du premier envoi';
-
-  return (
-    <Card icon={<RefreshCw size={17} />} title="Synchro" sub={sous}>
-      <p className="ink-3" style={{ margin: '0 0 10px', fontSize: 11.5 }}>
-        Un fichier discret, rangé dans l’espace privé de ton Drive (invisible dans
-        ton dossier) : goûts, avis, blends récents, clair ou sombre, et ta clé Gemini
-        si tu en as une. Tes jetons de connexion n’y sont jamais.
-      </p>
-      {!connecte ? (
-        <Button onClick={onConnecter}>Connecter mon compte</Button>
-      ) : etat.phase === 'sans-portee' ? (
-        <Button onClick={onConnecter}>Réactiver la synchro</Button>
-      ) : (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Button variant="outline" onClick={onSync} disabled={etat.phase === 'envoi'}>
-            {etat.phase === 'envoi'
-              ? <><Loader2 size={15} className="anim-spin" /> Synchronisation…</>
-              : <><RefreshCw size={15} /> Synchroniser maintenant</>}
-          </Button>
-          {etat.phase === 'erreur' && (
-            <span className="ink-3" style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <CloudOff size={13} /> {etat.message || 'Nouvel essai au prochain geste.'}
-            </span>
-          )}
-        </div>
-      )}
-    </Card>
   );
 };
 

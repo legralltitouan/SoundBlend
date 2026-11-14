@@ -786,6 +786,35 @@ export class YouTubeService {
   }
 
   /**
+   * Renommer une playlist, et/ou changer sa visibilité.
+   *
+   * YouTube ne sépare pas les deux : la même requête `playlists.update`
+   * porte le titre (snippet) et la confidentialité (status). On envoie
+   * donc les deux à chaque fois — c'est aussi ce qui garantit qu'un
+   * renommage ne rend pas publique une playlist privée par accident.
+   */
+  public async updatePlaylistMeta(
+    playlistId: string,
+    meta: { title: string; privacy?: 'private' | 'public'; description?: string },
+  ): Promise<boolean> {
+    if (!this.isAuthenticated() || playlistId.startsWith('mock-')) return false;
+    const body: any = { id: playlistId, snippet: { title: meta.title } };
+    if (meta.description) body.snippet.description = meta.description;
+    if (meta.privacy) body.status = { privacyStatus: meta.privacy };
+
+    const resp = await fetch(`${YOUTUBE_API_BASE}/playlists?part=snippet,status`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${this.accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      console.warn('updatePlaylistMeta a échoué', await resp.text());
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Add tracks to a playlist
    */
   public async addTracksToPlaylist(

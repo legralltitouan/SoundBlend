@@ -2408,7 +2408,9 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
      aucun bord visible où que la boule passe */
   contain: strict;
 }
-.sb-organic-svg {
+/* c'est un canvas désormais : le filtre SVG recalculé à chaque image
+   laissait un bord net et des marches dans les dégradés sombres */
+.sb-organic-canvas {
   position: absolute; inset: 0;
   display: block;
   width: 100%; height: 100%;
@@ -2446,6 +2448,17 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
     rgba(8,6,10,.38) 78%,
     rgba(8,6,10,0) 100%);
 }
+
+/* ── la ligne de synchro (Réglages) ──
+   Ce n'est pas un réglage : c'est une certitude affichée. Une icône, une
+   phrase, et rien à toucher. Seul le refus de Google fait apparaître un
+   geste, parce que là il y a vraiment quelque chose à faire. */
+.sb-sync-line {
+  display: flex; align-items: flex-start; gap: 7px;
+  margin: 12px 0 0; font-size: 11.5px; line-height: 1.45;
+}
+.sb-sync-line svg { flex: none; margin-top: 1px; opacity: .75; }
+.sb-sync-line .btn-ghost { flex: none; margin-left: auto; font-size: 11.5px; }
 
 /* ── le diagnostic des modèles (Réglages) ────────────────────────
    Une liste numérotée, le premier en évidence : c'est lui qui sera

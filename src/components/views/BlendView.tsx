@@ -37,7 +37,12 @@ export const BlendView: React.FC = () => {
 
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(currentBlend?.title || '');
-  const [priv, setPriv] = useState(true);
+  /* la visibilité suit ce qui a réellement été envoyé : un blend exporté
+     en public ne doit pas afficher « Privée » au rechargement */
+  const [priv, setPriv] = useState(() => (currentBlend?.exportedMeta?.privacy || 'private') === 'private');
+  useEffect(() => {
+    if (currentBlend?.exportedMeta?.privacy) setPriv(currentBlend.exportedMeta.privacy === 'private');
+  }, [currentBlend?.exportedPlaylistId, currentBlend?.exportedMeta?.privacy]);
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState<string | null>(currentBlend?.exportedUrl || null);
   const queue = useReplaceQueue();
@@ -76,40 +81,77 @@ export const BlendView: React.FC = () => {
   const [canSync, setCanSync] = useState(false);
   useEffect(() => { setCanSync(youtubeService.isAuthenticated()); }, [blend.exportedPlaylistId]);
 
+  /* ═══ « Mettre à jour » : quand, et pourquoi ═══
+     Avant, à chaque affichage, on relisait la playlist distante et on la
+     comparait au blend. Deux défauts en sortaient :
+
+     · juste après un export, YouTube n'a pas fini d'enregistrer les
+       morceaux ; la relecture revenait incomplète et l'app proposait
+       aussitôt « Mettre à jour » — pour une playlist qui venait d'être
+       mise à jour ;
+     · le titre et la confidentialité ne comptaient pas du tout : on
+       pouvait renommer un blend ou le passer en public sans que rien ne
+       propose de le reporter sur YouTube Music.
+
+     Désormais on compare le blend à ce qu'on a **réellement envoyé**
+     (titre, visibilité, liste des morceaux) — une référence locale,
+     écrite à chaque export et à chaque mise à jour. Pas de relecture
+     réseau, donc pas de course, et le titre compte comme le reste. */
+  const signature = useMemo(() => {
+    const ids = (blend.tracks.map((t) => t.videoId).filter(Boolean) as string[]).filter((v, i, a) => a.indexOf(v) === i);
+    return `${blend.title.trim()}|${priv ? 'private' : 'public'}|${ids.join(',')}`;
+  }, [blend.tracks, blend.title, priv]);
+
   useEffect(() => {
-    let alive = true;
-    const check = async () => {
-      const pid = blend.exportedPlaylistId;
-      /* on interroge le service : le jeton peut avoir été restauré après le
-         premier rendu (le contexte, lui, garde la valeur du démarrage) */
-      if (!pid || !youtubeService.isAuthenticated()) { setOutOfSync(false); return; }
-      const remote = await youtubeService.getPlaylistItems(pid).catch(() => []);
-      if (!alive || !remote.length) { setOutOfSync(false); return; }   // rien à comparer
-      /* l'ordre compte autant que le contenu : un titre déplacé dans le
-         blend doit aussi se déplacer sur YouTube Music */
-      const there = remote.map((r) => r.videoId);
-      const here = (blend.tracks.map((t) => t.videoId).filter(Boolean) as string[])
-        .filter((v, i, a) => a.indexOf(v) === i);
-      const same = there.length === here.length && here.every((v, i) => there[i] === v);
-      setOutOfSync(!same);
-    };
-    void check();
-    return () => { alive = false; };
-  }, [blend.exportedPlaylistId, blend.tracks, isAuthenticated]);
+    if (!blend.exportedPlaylistId) { setOutOfSync(false); return; }
+    const ref = blend.exportedMeta;
+    /* pas de référence (export d'une version précédente) : on ne sait pas,
+       donc on ne réclame rien. Le premier « Mettre à jour » la posera. */
+    setOutOfSync(!!ref && ref.sig !== signature);
+  }, [blend.exportedPlaylistId, blend.exportedMeta, signature]);
 
   const updateOnYT = async () => {
     const pid = blend.exportedPlaylistId;
     if (!pid || updating) return;
     setUpdating(true);
     try {
+      /* 1. le titre et la visibilité — ce que YouTube ne met jamais à jour
+            tout seul, et que le blend a pu changer */
+      const ref = blend.exportedMeta;
+      const renomme = !ref || ref.title.trim() !== blend.title.trim();
+      const visibilite = !ref || ref.privacy !== (priv ? 'private' : 'public');
+      let metaOk = true;
+      if (renomme || visibilite) {
+        metaOk = await youtubeService.updatePlaylistMeta(pid, {
+          title: blend.title,
+          privacy: priv ? 'private' : 'public',
+        });
+      }
+
+      /* 2. les morceaux, dans l'ordre */
       const res = await youtubeService.syncPlaylist(pid, blend.tracks);
+
+      const ids = (blend.tracks.map((t) => t.videoId).filter(Boolean) as string[]).filter((v, i, a) => a.indexOf(v) === i);
+      updateBlend({
+        ...blend,
+        exportedMeta: {
+          sig: `${blend.title.trim()}|${priv ? 'private' : 'public'}|${ids.join(',')}`,
+          title: blend.title,
+          privacy: priv ? 'private' : 'public',
+          at: new Date().toISOString(),
+        },
+      });
       setOutOfSync(false);
+
       const bits = [
+        renomme && metaOk ? 'titre' : '',
+        visibilite && metaOk ? 'visibilité' : '',
         res.added ? `${res.added} ajout${res.added > 1 ? 's' : ''}` : '',
         res.removed ? `${res.removed} retrait${res.removed > 1 ? 's' : ''}` : '',
         res.moved ? `${res.moved} déplacement${res.moved > 1 ? 's' : ''}` : '',
       ].filter(Boolean);
-      showToast(bits.length ? `Playlist mise à jour : ${bits.join(', ')}.` : 'La playlist était déjà à jour.');
+      if (!metaOk) showToast('Les morceaux sont à jour, mais YouTube a refusé le titre ou la visibilité.');
+      else showToast(bits.length ? `Playlist mise à jour : ${bits.join(', ')}.` : 'La playlist était déjà à jour.');
     } catch (e: any) {
       showToast(e?.message || 'Mise à jour impossible.');
     } finally {
@@ -220,11 +262,25 @@ export const BlendView: React.FC = () => {
     setExporting(true);
     try {
       const desc = `Blend SoundBlend AI — amorces : ${blend.seedTracks.map((t) => t.title).join(', ')}`;
-      const id = await youtubeService.createPlaylist(title || blend.title, desc, priv);
+      const nom = title || blend.title;
+      const id = await youtubeService.createPlaylist(nom, desc, priv);
       await youtubeService.addTracksToPlaylist(id, blend.tracks);
       const url = `https://music.youtube.com/playlist?list=${id}`;
       setExported(url);
-      updateBlend({ ...blend, exportedPlaylistId: id, exportedUrl: url });
+      /* la référence de ce qui vient d'être envoyé : c'est elle qui
+         empêche la fausse alerte « Mettre à jour » juste après l'export */
+      const ids = (blend.tracks.map((t) => t.videoId).filter(Boolean) as string[]).filter((v, i, a) => a.indexOf(v) === i);
+      updateBlend({
+        ...blend,
+        exportedPlaylistId: id,
+        exportedUrl: url,
+        exportedMeta: {
+          sig: `${nom.trim()}|${priv ? 'private' : 'public'}|${ids.join(',')}`,
+          title: nom,
+          privacy: priv ? 'private' : 'public',
+          at: new Date().toISOString(),
+        },
+      });
       confetti({ particleCount: 110, spread: 75, origin: { y: 0.62 }, colors: ['#7b61ff', '#0a84ff', '#f0568c'] });
       showToast('Playlist créée sur YouTube Music.');
     } catch (e: any) {

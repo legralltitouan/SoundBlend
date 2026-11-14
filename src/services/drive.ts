@@ -70,6 +70,10 @@ export type EtatSync = {
 };
 
 let etat: EtatSync = { phase: 'inactif' };
+/* y a-t-il eu un changement depuis le dernier envoi ? C'est ce drapeau
+   qui rend la synchro gratuite quand rien ne bouge : le contrôle
+   périodique regarde ici, et n'appelle le réseau que s'il le faut. */
+let aEnvoyer = false;
 const abonnes = new Set<(e: EtatSync) => void>();
 
 export const surEtatSync = (cb: (e: EtatSync) => void): (() => void) => {
@@ -311,6 +315,7 @@ export const demarrerSync = async (): Promise<boolean> => {
     const distant = await lireDistant(t);
     if (distant) appliquerDistant(distant);
     await ecrireDistant(t, composer());
+    aEnvoyer = false;
     poserEtat({ phase: 'pret', dernierEnvoi: new Date().toISOString(), message: undefined });
     return true;
   } catch (e) {
@@ -321,12 +326,13 @@ export const demarrerSync = async (): Promise<boolean> => {
 
 /** envoie l'état courant (après une modification locale) */
 export const envoyerSync = async (): Promise<boolean> => {
-  if (!youtubeService.isAuthenticated()) return false;
+  if (!youtubeService.isAuthenticated()) return false;   /* le drapeau reste : il partira à la connexion */
   const t = await jeton();
   if (!t) return false;
   try {
     poserEtat({ phase: 'envoi', message: undefined });
     await ecrireDistant(t, composer());
+    aEnvoyer = false;
     poserEtat({ phase: 'pret', dernierEnvoi: new Date().toISOString(), message: undefined });
     return true;
   } catch (e) {
@@ -342,14 +348,43 @@ export const envoyerSync = async (): Promise<boolean> => {
 let minuteur: any = null;
 
 export const planifierEnvoi = (): void => {
+  aEnvoyer = true;
   if (!youtubeService.isAuthenticated()) return;
   clearTimeout(minuteur);
-  minuteur = setTimeout(() => { void envoyerSync(); }, 4000);
+  minuteur = setTimeout(() => { void envoyerSync(); }, 2500);
+};
+
+/* ═══ le filet de sécurité ═══
+   Les gestes sont déjà couverts (un avis, un réglage, un blend partent
+   2,5 s plus tard). Ce contrôle-là rattrape ce qui n'a pas de geste :
+   un onglet resté ouvert, une coupure réseau au mauvais moment. Il ne
+   coûte rien tant que rien n'a changé — c'est un simple test de drapeau,
+   sans réseau. Toutes les trois minutes, comme demandé. */
+const PERIODE = 3 * 60 * 1000;
+let veille: any = null;
+
+const armerVeille = () => {
+  if (veille) return;
+  veille = setInterval(() => {
+    if (!aEnvoyer) return;
+    if (!youtubeService.isAuthenticated()) return;
+    void envoyerSync();
+  }, PERIODE);
+};
+
+const desarmerVeille = () => {
+  clearInterval(veille);
+  veille = null;
 };
 
 /** coupe la synchro quand la personne se déconnecte */
 export const oublierSync = (): void => {
   clearTimeout(minuteur);
+  desarmerVeille();
+  aEnvoyer = false;
   garderId(null);
   poserEtat({ phase: 'inactif', dernierEnvoi: undefined, message: undefined });
 };
+
+/** y a-t-il quelque chose en attente d'envoi ? (pour les tests et le diag) */
+export const enAttente = (): boolean => aEnvoyer;
