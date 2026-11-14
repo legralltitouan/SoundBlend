@@ -263,28 +263,47 @@ ${roleText[role]}
 Règles pour CHAQUE titre :
 · c'est un vrai morceau, avec son vrai titre et son vrai artiste — aucune invention,
   aucun remix imaginaire, aucun « à paraître » ;
-· il doit exister en écoute sur YouTube ;
+· il existe en écoute sur YouTube, et tu en donnes l'identifiant :
+  le champ "videoId" contient les 11 caractères du paramètre v de son adresse
+  YouTube (par exemple pour https://www.youtube.com/watch?v=dQw4w9WgXcQ, videoId vaut
+  « dQw4w9WgXcQ »). Si tu ne connais pas l'identifiant avec certitude, mets null —
+  n'invente JAMAIS un identifiant au hasard, un faux identifiant donnerait un
+  morceau muet ;
 · il ne figure ni dans les amorces, ni dans les interdits ci-dessus ;
 · la justification dit ce qui relie le morceau à ce blend précis (un instrument, une
   couleur de production, un tempo ressenti, une filiation) — pas « même ambiance ».
 
 Réponds STRICTEMENT en JSON, sans texte autour :
 { "analyse": "une phrase sur le choix de cette liste",
-  "titres": [ { "title": "…", "artist": "…", "rationale": "…" } ] }`;
+  "titres": [ { "title": "…", "artist": "…", "rationale": "…", "videoId": "11 caractères ou null" } ] }`;
 };
 
-export type Pick = { title: string; artist: string; rationale: string };
+export type Pick = {
+  title: string;
+  artist: string;
+  rationale: string;
+  /** l'identifiant de la vidéo YouTube, quand le modèle le connaît —
+      c'est ce qui permet de composer un blend sans AUCUNE recherche */
+  videoId?: string;
+};
 
 export const parsePicks = (raw: string | null): { analyse: string; titres: Pick[] } => {
   const v = firstJson(raw);
   const list = Array.isArray(v) ? v : Array.isArray(v?.titres) ? v.titres : Array.isArray(v?.suggestions) ? v.suggestions : [];
   const titres: Pick[] = list
     .filter((i: any) => i && typeof i.title === 'string' && typeof i.artist === 'string')
-    .map((i: any) => ({
-      title: String(i.title).trim().slice(0, 120),
-      artist: String(i.artist).trim().slice(0, 120),
-      rationale: String(i.rationale || '').trim().slice(0, 260),
-    }))
+    .map((i: any) => {
+      /* un identifiant YouTube ne fait que 11 caractères, mais on tolère
+         un lien complet — on en extrait la partie utile */
+      const brut = String(i.videoId || i.id || i.url || i.link || '').trim();
+      const v = (brut.match(/([A-Za-z0-9_-]{11})(?:[?&\s]|$)/) || [])[1] || '';
+      return {
+        title: String(i.title).trim().slice(0, 120),
+        artist: String(i.artist).trim().slice(0, 120),
+        rationale: String(i.rationale || '').trim().slice(0, 260),
+        videoId: /^[A-Za-z0-9_-]{11}$/.test(v) ? v : undefined,
+      };
+    })
     .filter((p: Pick) => p.title.length > 1 && p.artist.length > 1);
   return {
     analyse: typeof v?.analyse === 'string' ? v.analyse.trim() : '',

@@ -1808,6 +1808,24 @@ html[data-mode='light'] .sb-task {
    la largeur de l'écran moins 74 px. Le bloc glisse, il ne se remplace
    pas. Aucune opacité n'est animée entre les deux états : on ne doit
    jamais voir deux objets, ni un fondu. */
+/* l'invitation à reprendre : même objet que le bandeau, mais cliquable
+   et d'une couleur qui appelle le geste */
+.sb-task--reprise {
+  cursor: pointer; border: 0;
+  /* un bouton, pas un bloc : sans ça il se cale à gauche et perd
+     l'alignement du bandeau */
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+.sb-task--reprise:hover { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
+.sb-task-dot--play {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
 .sb-task[data-state='peek'] {
   /* rangé, il ne reste qu'un congé de carte collé au bord : c'est le
      coin supérieur gauche du bloc qui dépasse, arrondi comme lui */
@@ -1821,7 +1839,25 @@ html[data-mode='light'] .sb-task {
 }
 /* la poignée est posée dans la tranche visible, pas dans la partie
    cachée : elle doit tomber sous le curseur quand le bloc est rangé */
-html[data-mode='light'] .sb-task[data-state='peek'] {
+html[data-mode='light'] /* l'invitation à reprendre : même objet que le bandeau, mais cliquable
+   et d'une couleur qui appelle le geste */
+.sb-task--reprise {
+  cursor: pointer; border: 0;
+  /* un bouton, pas un bloc : sans ça il se cale à gauche et perd
+     l'alignement du bandeau */
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+.sb-task--reprise:hover { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
+.sb-task-dot--play {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.sb-task[data-state='peek'] {
   background: color-mix(in srgb, #ffffff 97%, transparent);
   box-shadow:
     -14px 12px 34px -24px rgba(0,0,0,.34),

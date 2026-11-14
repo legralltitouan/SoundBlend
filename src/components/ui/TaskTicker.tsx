@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, Check, Clock } from 'lucide-react';
 import { useUI } from '../../context/UIContext';
 import { useReplaceQueue, stepLabel } from '../../context/ReplaceQueueContext';
+import { usePlayer } from '../../context/PlayerContext';
+import { Play } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════════════
    Le bandeau de progression.
@@ -34,6 +36,7 @@ const isNarrow = () => typeof window !== 'undefined' && window.innerWidth <= 819
 export const TaskTicker: React.FC = () => {
   const { task } = useUI();
   const queue = useReplaceQueue();
+  const { repriseRefusee, reprendre, currentTrack } = usePlayer();
 
   const running = useMemo(
     () => queue?.jobs.find((j) => j.status === 'running') || null,
@@ -89,6 +92,36 @@ export const TaskTicker: React.FC = () => {
     window.clearTimeout(timer.current ?? undefined);
     timer.current = window.setTimeout(() => setOpen(false), PEEK_MS);
   };
+
+  /* ── le navigateur a refusé de relancer ──
+     On ne se bat pas avec lui : une reprise déclenchée par l'onglet n'est
+     pas un geste, et iOS la refuse. En revanche un appui, si. On propose
+     donc la reprise — un tap, et ça repart exactement où c'était. */
+  if (!active && repriseRefusee && currentTrack) {
+    return (
+      <AnimatePresence>
+        <motion.button
+          key="reprise"
+          className="sb-task sb-task--reprise"
+          role="status"
+          aria-live="polite"
+          onClick={reprendre}
+          initial={{ opacity: 0, y: 10, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 8 }}
+          transition={{ type: 'spring', stiffness: 340, damping: 30 }}
+        >
+          <span className="sb-task-dot sb-task-dot--play" aria-hidden>
+            <Play size={12} fill="currentColor" />
+          </span>
+          <span className="sb-task-text">
+            <span className="sb-task-head">La lecture s’est arrêtée</span>
+            <span className="sb-task-sub">Touche ici pour reprendre « {currentTrack.title} ».</span>
+          </span>
+        </motion.button>
+      </AnimatePresence>
+    );
+  }
 
   /* état vide : rien du tout */
   if (!active) {

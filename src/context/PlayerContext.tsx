@@ -25,6 +25,10 @@ interface PlayerContextType {
   toggleVideoModal: () => void;
   rateTrack: (track: Track, rating?: 'liked' | 'disliked') => void;
   clearRating: (track: Track) => void;
+  /** reprendre la lecture d'un geste de la personne (toujours accepté) */
+  reprendre: () => void;
+  /** vrai quand le navigateur a refusé la reprise en arrière-plan */
+  repriseRefusee: boolean;
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
@@ -115,13 +119,27 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                pas des pauses, on ne touche pas à l'état affiché */
             if (event.data === 1) {
               setIsPlaying(true);
+              setRepriseRefusee(false);
               const d = playerRef.current?.getDuration?.() || 0;
               if (d > 0) setDuration(d);
             } else if (event.data === 2) {
               /* une pause vient du lecteur. Si l'onglet est caché, c'est le
                  navigateur qui a suspendu la page — pas la personne : on
-                 garde l'intention et le guetteur relancera. */
+                 garde l'intention, et la reprise se fera au retour. */
               setIsPlaying(false);
+              /* Une pause que personne n'a demandée : l'intention d'écouter
+                 est toujours là et la page est à l'écran. C'est le
+                 navigateur qui a coupé (restriction d'autoplay, économie
+                 d'énergie, appel entrant…). On ne relance pas — insister
+                 donne la bagarre play/pause — on propose la reprise. */
+              if (wantedPlay.current && document.visibilityState === 'visible') {
+                window.setTimeout(() => {
+                  try {
+                    const st = playerRef.current?.getPlayerState?.();
+                    if (wantedPlay.current && st !== 1 && st !== 3) setRepriseRefusee(true);
+                  } catch { /* lecteur absent : rien à dire */ }
+                }, 700);
+              }
             } else if (event.data === 0) {
               advance.current();
             }
@@ -190,6 +208,23 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      action de la personne (lecture, pause) ou en fin de file — jamais
      sur un événement du lecteur. */
   const lastResume = useRef(0);
+  /* le navigateur a mis en pause et a refusé la reprise : on ne se bat
+     pas, on le dit. Ce drapeau s'allume quand une reprise échoue et
+     s'éteint dès que la lecture repart. */
+  const [repriseRefusee, setRepriseRefusee] = useState(false);
+  const verifierRefus = useRef<number | null>(null);
+
+  /* « Reprendre » : c'est le geste que la personne fait elle-même quand
+     elle revient dans l'app et que le navigateur a refusé la reprise.
+     Une reprise déclenchée par un appui est toujours acceptée, là où une
+     reprise déclenchée par l'onglet ne l'est jamais sur iOS. */
+  const reprendre = React.useCallback(() => {
+    const p = playerRef.current;
+    markWanted(true);
+    setRepriseRefusee(false);
+    setIsPlaying(true);
+    try { p?.playVideo?.(); } catch { /* lecteur absent */ }
+  }, []);
 
   useEffect(() => {
     const resume = () => {
@@ -198,53 +233,43 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!p) return;
       try {
         const state = p.getPlayerState?.();
-        /* 1 = en lecture, 3 = en tampon, 5 = en file d'attente juste
-           après un `playVideo` : on laisse faire, sinon on la fait sauter */
+        /* 1 = en lecture, 3 = en tampon : la musique tourne déjà */
         if (state === 1 || state === 3) return;
         p.playVideo?.();
       } catch { /* lecteur pas encore prêt : rien à faire */ }
     };
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
-      /* Le navigateur mobile peut mettre plusieurs secondes à rendre la
-         main au lecteur — et il le remet parfois en pause une seconde
-         après la reprise. On insiste donc à quatre moments, pendant les
-         six premières secondes. Chaque essai vérifie l'état réel : dès
-         que la musique tourne, les suivants ne font rien. */
+      /* Un seul essai, franc. Insister pendant six secondes ne servait à
+         rien et donnait exactement ce qu'on ne veut pas : une bagarre
+         entre l'app et le navigateur, « lecture » contre « pause ». Si le
+         navigateur refuse la reprise, il n'y a pas de round d'après :
+         on le dit à la personne (voir le bandeau plus bas). */
       lastResume.current = Date.now();
       resume();
-      [400, 1200, 2600, 5000].forEach((ms) => window.setTimeout(resume, ms));
+      /* et on regarde, une seconde plus tard, si la reprise a été
+         acceptée. Si le lecteur est toujours en pause alors qu'on veut
+         écouter, c'est que le navigateur a refusé : on le dira, au lieu
+         de relancer en boucle. */
+      window.clearTimeout(verifierRefus.current ?? undefined);
+      verifierRefus.current = window.setTimeout(() => {
+        if (!wantedPlay.current) return;
+        const p2 = playerRef.current;
+        try {
+          const st = p2?.getPlayerState?.();
+          if (st === 1 || st === 3) { setRepriseRefusee(false); return; }
+          setRepriseRefusee(true);
+        } catch { /* lecteur absent : rien à dire */ }
+      }, 1100);
     };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
     window.addEventListener('pageshow', onVisible);
 
-    /* ── le guetteur ──
-       Certains navigateurs mobiles ne se contentent pas de mettre en
-       pause au passage en arrière-plan : ils remettent en pause à chaque
-       fois qu'ils reprennent la main. Un minuteur discret surveille
-       l'état réel quand l'onglet est caché et qu'une lecture était
-       voulue, et relance s'il le faut. Il ne tourne que tant que la
-       personne veut écouter. */
-    const veille = window.setInterval(() => {
-      if (!wantedPlay.current) return;
-      if (document.visibilityState === 'visible') return;
-      const p = playerRef.current;
-      if (!p) return;
-      /* pas de limite de temps : la personne a demandé de la musique.
-         Seul le retour au premier plan arrête ce minuteur. */
-      try {
-        const state = p.getPlayerState?.();
-        if (state === 1 || state === 3) return;
-        p.playVideo?.();
-      } catch { /* ignore */ }
-    }, 1500);
-
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
       window.removeEventListener('pageshow', onVisible);
-      window.clearInterval(veille);
     };
   }, []);
 
@@ -453,6 +478,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         toggleVideoModal,
         rateTrack,
         clearRating,
+        reprendre,
+        repriseRefusee,
       }}
     >
       {children}

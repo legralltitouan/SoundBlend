@@ -34,8 +34,14 @@ export const GeneratingOverlay: React.FC = () => {
 
   const friendly = useMemo(() => {
     if (!generatingStatus) return STEPS[step];
-    const technical = /quota|basculement|connexion au modèle|modèle|moteur|tentative|fallback/i.test(generatingStatus);
-    return technical ? STEPS[step] : generatingStatus.replace(/…$/, '');
+    /* Ce qui compte, c'est que la personne voie POURQUOI ça bloque :
+       « Analyse impossible — clé Gemini refusée (403)… » est justement
+       la phrase utile. On ne masque donc plus que les notes purement
+       internes (basculement d'un modèle à l'autre, quota atteint côté
+       YouTube), pas les diagnostics de la clé. */
+    const interne = /basculement|tentative|fallback/i.test(generatingStatus);
+    const diagnostic = /clé Gemini|quota Gemini|Analyse impossible|Aucune (face|découverte|pilier)/i.test(generatingStatus);
+    return interne && !diagnostic ? STEPS[step] : generatingStatus.replace(/…$/, '');
   }, [generatingStatus, step]);
 
   useEffect(() => {

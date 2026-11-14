@@ -3,6 +3,7 @@ import { getStoredSettings, getSeenTracks, rememberSeenTrack, getStoredPortrait 
 import { youtubeService, withTimeout } from './youtube';
 import { dedupeTracks, uniqueByVideo } from '../lib/dedupe';
 import { matchesAsked, norm } from '../lib/track';
+import { verifyVideo, looksLikeVideoId } from './search';
 import {
   analysisPrompt, parseAnalysis, toPortrait, rememberPortrait, portraitFor,
   listPrompt, parsePicks, splitCounts, replacePrompt,
@@ -283,6 +284,26 @@ async function callModelResilient(
   }
 }
 
+
+/**
+ * Traduire un échec de l'API en une phrase utilisable.
+ *
+ * Avant, une clé refusée ou un modèle indisponible se soldait par un
+ * blend réduit aux piliers, sans un mot d'explication. C'est ce qui
+ * donnait l'impression que « ça ne marche pas » sans savoir pourquoi.
+ */
+function explain(e: any): string {
+  const st = e?.status;
+  if (st === 403) return 'clé Gemini refusée (403) — vérifie la clé et que l’API Generative Language est autorisée';
+  if (st === 401) return 'clé Gemini invalide (401)';
+  if (st === 429) return 'quota Gemini dépassé (429) — réessaie demain ou change de projet';
+  if (st === 404) return 'modèle introuvable (404)';
+  if (st === 400) return 'requête refusée par le modèle (400)';
+  const m = String(e?.message || e || '');
+  if (/abort|timeout/i.test(m)) return 'le modèle n’a pas répondu à temps';
+  return m ? `erreur du modèle : ${m.slice(0, 90)}` : 'erreur inconnue du modèle';
+}
+
 /** Le premier bloc JSON d'une réponse, tableau ou objet. */
 function firstJson(raw: string): any | null {
   if (!raw) return null;
@@ -386,16 +407,27 @@ export class GeminiService {
     /* ═══ 1. écouter ═══ */
     onProgress?.('Écoute des morceaux sélectionnés : genre, textures, énergie…');
     const known = portraitFor(tasteMemory);
-    let analysis = parseAnalysis(await call(analysisPrompt(seedTracks, tasteMemory, known), 0.4, 26000).catch(() => null));
+    /* l'analyse est la première marche : si elle tombe, on continue avec
+       le portrait enregistré OU avec une description neutre — jamais avec
+       une exception qui emporte tout le blend */
+    let analyseErreur = '';
+    let analysis = parseAnalysis(
+      await call(analysisPrompt(seedTracks, tasteMemory, known), 0.4, 26000)
+        .catch((e) => { analyseErreur = explain(e); return null; }),
+    );
 
     if (analysis) {
       /* on montre ce que le moteur a compris : c'est la preuve visible que
          la sélection part d'une écoute, pas d'un tirage */
       onProgress?.(`Ton fil : ${analysis.fil}`);
     } else {
-      /* le modèle n'a rien rendu d'exploitable : on le dit, et on se
-         rabat sur une description neutre pour ne pas bloquer la suite */
-      onProgress?.('Analyse indisponible — on continue avec le profil enregistré.');
+      /* le modèle n'a rien rendu d'exploitable : on le dit franchement,
+         avec la raison quand on la connaît, puis on continue */
+      onProgress?.(
+        analyseErreur
+          ? `Analyse impossible — ${analyseErreur}. On continue sans elle.`
+          : 'Analyse indisponible — on continue avec le profil enregistré.',
+      );
       analysis = known
         ? { fil: known.style, genres: known.genres, textures: known.textures, epoques: [], energie: known.energy, gout: '', eviter: known.avoid }
         : { fil: `Autour de ${seedTracks.map((t) => t.artist).slice(0, 3).join(', ')}`, genres: [], textures: [], epoques: [], energie: '', gout: '', eviter: [] };
@@ -412,12 +444,14 @@ export class GeminiService {
       if (count <= 0) return [] as Pick[];
       const label = role === 'anchor' ? 'piliers' : role === 'deep_dive' ? 'faces cachées' : 'découvertes';
       onProgress?.(`Sélection des ${count} ${label}…`);
+      let passe1 = '';
+      let passe2 = '';
       /* On demande de la marge : le modèle propose plus que nécessaire,
          parce que la vérification YouTube en écartera une partie. Sans
          cette marge, deux titres introuvables laissaient deux trous. */
       const marge = Math.min(12, count + Math.max(2, Math.round(count * 0.6)));
       const raw = await call(listPrompt(role, marge, seedTracks, analysis!, tasteMemory, forbiddenList()), role === 'fresh' ? 0.85 : 0.7, 26000)
-        .catch(() => null);
+        .catch((e) => { passe1 = explain(e); return null; });
       const { analyse, titres } = parsePicks(raw);
       if (analyse) onProgress?.(analyse);
       /* on écarte ce qui est interdit, doublon ou déjà proposé AVANT de
@@ -447,8 +481,9 @@ export class GeminiService {
          à moitié vide alors que la clé et le modèle fonctionnent. */
       if (clean.length < count) {
         const reste = count - clean.length;
+        /* une seconde passe ne doit jamais faire échouer la première */
         const raw2 = await call(listPrompt(role, reste + 2, seedTracks, analysis!, tasteMemory, forbiddenList()), 0.9, 24000)
-          .catch(() => null);
+          .catch((e) => { passe2 = explain(e); return null; });
         const suite = parsePicks(raw2).titres;
         for (const p of suite) {
           const keyA = `${p.artist} — ${p.title}`.toLowerCase().trim();
@@ -467,12 +502,18 @@ export class GeminiService {
         if (suite.length) console.debug(`[curateur] ${role} : 2e passe, ${suite.length} de plus, total ${clean.length}/${count}`);
       }
       if (!clean.length) {
+        /* deux cas très différents : le modèle n'a pas répondu (on le dit
+           avec la raison), ou il a répondu mais rien ne passait les
+           contrôles (on dit lequel) */
+        const raison = passe1 || passe2;
         onProgress?.(
-          role === 'deep_dive'
-            ? 'Le modèle n’a proposé aucune face cachée crédible — on ne remplit pas avec du connu.'
-            : role === 'fresh'
-              ? 'Le modèle n’a proposé aucune découverte crédible — on ne remplit pas avec du hasard.'
-              : 'Aucun pilier exploitable dans cette réponse.',
+          raison
+            ? `Aucune ${label} : ${raison}. Le modèle n’a pas pu répondre.`
+            : role === 'deep_dive'
+              ? 'Le modèle n’a proposé aucune face cachée crédible — on ne remplit pas avec du connu.'
+              : role === 'fresh'
+                ? 'Le modèle n’a proposé aucune découverte crédible — on ne remplit pas avec du hasard.'
+                : 'Aucun pilier exploitable dans cette réponse.',
         );
       }
       picked.push({ cat: role, picks: clean });
@@ -507,6 +548,43 @@ export class GeminiService {
           && s.artist.toLowerCase().trim() === p.artist.toLowerCase().trim(),
       );
       if (seed) return { ...seed, category: cat, rationale: p.rationale || seed.rationale };
+
+      /* ── l'identifiant donné par le modèle ──
+         Quand il le connaît, c'est la voie la plus directe : aucune
+         recherche, aucun quota, aucune dépendance à la clé YouTube. Ce
+         chemin-là fonctionne même quand tout le reste est muet. */
+      if (looksLikeVideoId(p.videoId) && !seedTracks.some((s2) => s2.videoId === p.videoId)) {
+        /* On VÉRIFIE l'identifiant avant de l'utiliser : l'endpoint oembed
+           de YouTube répond sans clé et sans quota, et rend le vrai titre.
+           Un identifiant inventé par le modèle était sinon une piste
+           muette dans le blend — exactement le genre de faux succès qu'on
+           veut éviter. Si la vérification est impossible (réseau muet),
+           on fait confiance : le format seul est déjà un bon filtre. */
+        const vid: string = p.videoId!;
+        const check = await verifyVideo(vid).catch(() => null);
+        const titreOfficiel = check?.title || '';
+        const artOfficiel = check?.author || '';
+        const credible = !check
+          || matchesAsked(p.title, p.artist, titreOfficiel, artOfficiel)
+          || matchesAsked(p.title, p.artist, titreOfficiel, p.artist);
+        if (credible) {
+        return {
+          id: `gen-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          videoId: p.videoId,
+          title: p.title,
+          artist: p.artist,
+          thumbnailUrl: `https://i.ytimg.com/vi/${p.videoId}/mqdefault.jpg`,
+          durationSeconds: 215,
+          durationFormatted: '3:35',
+          videoUrl: `https://www.youtube.com/watch?v=${p.videoId}`,
+          category: cat,
+          rationale: p.rationale || 'Choisi par la sélection.',
+        } as Track;
+        }
+        pertes.titreDouteux += 1;
+        console.debug(`[curateur] ${p.title} : identifiant ${p.videoId} écarté — YouTube dit « ${titreOfficiel} »`);
+      }
+
       const found = await youtubeService.findPlayable(p.title, p.artist).catch(() => null);
       if (!found?.videoId) {
         pertes.introuvable += 1;

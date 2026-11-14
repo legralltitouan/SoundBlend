@@ -2,7 +2,8 @@ import { Playlist, Track, UserProfile } from '../types';
 import { MOCK_PLAYLISTS } from '../data/mockData';
 import { getStoredSettings } from './storage';
 import { cleanTitle, matchesAsked } from '../lib/track';
-import { searchWithoutKey } from './ytFallback';
+import type { Video } from './search';
+import { pipedSearch } from './search';
 
 /* Aucun appel réseau ne doit pouvoir pendre indéfiniment : au-delà de
    dix secondes, on considère que c'est perdu et on passe à la suite. */
@@ -356,7 +357,6 @@ export class YouTubeService {
     title: string,
     artist: string,
   ): Promise<{ videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string } | null> {
-    const q = `${artist} ${title} audio`;
     const cacheKey = `find::${artist} - ${title}`.toLowerCase().trim();
     const cached = searchCache.get(cacheKey);
     if (cached !== undefined) {
@@ -367,86 +367,139 @@ export class YouTubeService {
     const settings = getStoredSettings();
     const apiKey = settings.youtubeApiKey;
 
-    /* ── choisir le BON résultat parmi les trois ──
-       `maxResults=3`, mais on ne prenait que le premier. Un titre court
-       (« So », « Genesis ») ramène souvent un repiquage en tête de liste
-       avant l'original : on parcourt donc les trois et on garde celui qui
-       correspond au titre demandé. Si aucun ne correspond, on rend `null`
-       et l'appelant passe au titre suivant ou à une autre formulation —
-       c'est préférable à un morceau qui n'a rien à voir. */
-    const read = (data: any) => {
-      const items: any[] = (data.items || []).filter((i: any) => i?.id?.videoId);
-      if (!items.length) return null;
-      const pickOne = (item: any) => {
-        const videoId = item.id.videoId as string;
-        const rawTitle = decodeEntities(item.snippet?.title || title);
-        const cleaned = cleanTitle(rawTitle);
-        return {
-          videoId,
-          title: cleaned.title || title,
-          artist: cleaned.artist
-            || decodeEntities(item.snippet?.videoOwnerChannelTitle?.replace(' - Topic', '')
-              || item.snippet?.channelTitle?.replace(' - Topic', '')
-              || artist),
-        };
-      };
-      const scored = items.map(pickOne);
-      const best = scored.find((c) => matchesAsked(title, artist, c.title, c.artist));
-      if (!best) return null;
-      return best;
-    };
+    const fmt = (v: Video) => ({
+      videoId: v.videoId,
+      title: v.title || title,
+      artist: v.artist || artist,
+      durationSeconds: v.durationSeconds,
+      durationFormatted: v.durationSeconds
+        ? `${Math.floor(v.durationSeconds / 60)}:${String(v.durationSeconds % 60).padStart(2, '0')}`
+        : undefined,
+    });
+
+    /* ── 1. l'API officielle, avec la clé ──
+       C'est la voie normale. On ne la tente que s'il y a une clé. */
     if (apiKey) {
-      try {
-        const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(q)}&maxResults=3&key=${apiKey}`;
-        const resp = await fetch(url, { headers: { Accept: 'application/json' } });
-        if (resp.ok) {
-          const hit = read(await resp.json());
-          if (hit) { searchCache.set(cacheKey, hit.videoId); return hit; }
+      for (const q of [`${artist} ${title} audio`, `${title} ${artist}`]) {
+        try {
+          const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(q)}&maxResults=5&key=${apiKey}`;
+          const resp = await fetch(url, { headers: { Accept: 'application/json' } });
+          if (!resp.ok) {
+            console.warn(`Recherche YouTube (clé) : ${resp.status}`);
+            break;
+          }
+          const data = await resp.json();
+          const items: any[] = (data.items || []).filter((i: any) => i?.id?.videoId);
+          /* plusieurs résultats : on garde celui qui correspond au titre
+             demandé, pas forcément le premier de la liste */
+          for (const item of items) {
+            const rawTitle = decodeEntities(item.snippet?.title || title);
+            const cleaned = cleanTitle(rawTitle);
+            const cand = {
+              videoId: item.id.videoId as string,
+              title: cleaned.title || title,
+              artist: cleaned.artist
+                || decodeEntities(item.snippet?.videoOwnerChannelTitle?.replace(' - Topic', '')
+                  || item.snippet?.channelTitle?.replace(' - Topic', '')
+                  || artist),
+            };
+            if (matchesAsked(title, artist, cand.title, cand.artist)) {
+              searchCache.set(cacheKey, cand.videoId);
+              return cand;
+            }
+          }
+        } catch (err) {
+          console.warn('Recherche YouTube (clé) impossible :', err);
+          break;
         }
-      } catch (err) {
-        console.warn('Recherche YouTube (clé) impossible :', err);
       }
     }
 
     if (this.isAuthenticated()) {
       try {
-        const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(q)}&maxResults=3`;
+        const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(`${artist} ${title} audio`)}&maxResults=5`;
         const resp = await fetch(url, {
           headers: { Authorization: `Bearer ${this.accessToken}`, Accept: 'application/json' },
         });
         if (resp.ok) {
-          const hit = read(await resp.json());
-          if (hit) { searchCache.set(cacheKey, hit.videoId); return hit; }
+          const items: any[] = ((await resp.json()).items || []).filter((i: any) => i?.id?.videoId);
+          for (const item of items) {
+            const cleaned = cleanTitle(decodeEntities(item.snippet?.title || title));
+            const cand = {
+              videoId: item.id.videoId as string,
+              title: cleaned.title || title,
+              artist: cleaned.artist || artist,
+            };
+            if (matchesAsked(title, artist, cand.title, cand.artist)) {
+              searchCache.set(cacheKey, cand.videoId);
+              return cand;
+            }
+          }
         }
       } catch (err) {
         console.warn('Recherche YouTube (jeton) impossible :', err);
       }
     }
 
-    /* ── la deuxième voie, sans clé ──
-       Sans clé API (ou avec un quota épuisé), les deux tentatives
-       ci-dessus échouent et l'appelant recevait `null` pour CHAQUE titre
-       proposé par le modèle : le blend ne gardait alors que les piliers.
-       Une instance Piped rend le même service, sans clé. */
-    const fallback = await searchWithoutKey(`${artist} ${title}`).catch(() => null);
-    if (fallback?.videoId) {
-      const cleaned = cleanTitle(fallback.title || title);
-      const hit = {
-        videoId: fallback.videoId,
-        title: cleaned.title || title,
-        artist: cleaned.artist || fallback.artist || artist,
-        durationSeconds: fallback.durationSeconds,
-        durationFormatted: fallback.durationSeconds
-          ? `${Math.floor(fallback.durationSeconds / 60)}:${String(fallback.durationSeconds % 60).padStart(2, '0')}`
-          : undefined,
-      };
-      searchCache.set(cacheKey, hit.videoId);
-      return hit;
+    /* ── 2. une instance Piped : le même catalogue, sans clé ──
+       C'est la voie qui a manqué jusqu'ici : sans clé YouTube (ou avec
+       un quota épuisé), tous les titres proposés par le modèle étaient
+       déclarés introuvables, et le blend ne gardait que les piliers.
+       On essaie trois formulations, du plus précis au plus large. */
+    for (const q of [`${artist} ${title}`, `${title} ${artist}`, title]) {
+      const vids = await pipedSearch(q, 'music_songs');
+      const hit = vids.find((v) => matchesAsked(title, artist, v.title, v.artist))
+        || (q === title ? vids[0] : undefined);
+      if (hit) {
+        const cleaned = cleanTitle(hit.title || title);
+        const out = {
+          videoId: hit.videoId,
+          title: cleaned.title || hit.title || title,
+          artist: cleaned.artist || hit.artist || artist,
+          durationSeconds: hit.durationSeconds,
+          durationFormatted: hit.durationSeconds
+            ? `${Math.floor(hit.durationSeconds / 60)}:${String(hit.durationSeconds % 60).padStart(2, '0')}`
+            : undefined,
+        };
+        searchCache.set(cacheKey, out.videoId);
+        return out;
+      }
     }
 
-    /* rien de trouvé nulle part : on retient le fait, pour ne pas
-       redépenser de quota sur la même requête dans la minute qui suit */
+    /* ── 3. dans les listes déjà chargées (1 unité de quota) ──
+       Le pont final : une playlist contient déjà les identifiants, on
+       n'a qu'à y chercher le titre. C'est ce qui rattrape les morceaux
+       que les recherches ne trouvent pas. */
+    const fromLists = this.searchLoadedLists(title, artist);
+    if (fromLists) {
+      searchCache.set(cacheKey, fromLists.videoId);
+      return fromLists;
+    }
+
     searchCache.set(cacheKey, '');
+    return null;
+  }
+
+  /**
+   * Cherche un morceau dans les listes de lecture **déjà en mémoire**
+   * (aucun appel réseau, aucun quota). Sert de dernier recours, et de
+   * premier recours quand la clé YouTube manque.
+   */
+  public searchLoadedLists(title: string, artist: string): { videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string } | null {
+    for (const tracks of playlistTracksCache.values()) {
+      for (const t of tracks) {
+        if (!t.videoId) continue;
+        if (matchesAsked(title, artist, t.title, t.artist)) {
+          return {
+            videoId: t.videoId,
+            title: t.title,
+            artist: t.artist,
+            durationSeconds: t.durationSeconds,
+            durationFormatted: t.durationFormatted,
+          };
+        }
+      }
+    }
     return null;
   }
 
