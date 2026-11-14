@@ -22,6 +22,16 @@ export const withTimeout = async <T,>(p: Promise<T>, ms = 10000, fallback: T): P
 const decodeEntities = (s: string) =>
   (s || '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&gt;/g, '>').replace(/&lt;/g, '<');
 
+/* Les droits demandés, en un seul endroit.
+   `drive.appdata` ne donne accès qu'à un dossier caché réservé à cette
+   application : ni les fichiers de la personne, ni son Drive visible.
+   Google le classe « non sensible » — pas de vérification, pas d'écran
+   d'alerte. C'est ce scope qui permet à la synchro d'exister. */
+const SCOPE_YOUTUBE =
+  'https://www.googleapis.com/auth/youtube ' +
+  'https://www.googleapis.com/auth/drive.appdata ' +
+  'https://www.googleapis.com/auth/userinfo.profile';
+
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 /* une vidéo vérifiée l'est pour une heure : ni quota, ni clé, mais pas
    besoin de la redemander à chaque morceau du blend non plus */
@@ -86,7 +96,11 @@ export class YouTubeService {
   }
 
   /**
-   * Initialize Google Identity Services OAuth Token Client
+   * Préparer la fenêtre de connexion Google.
+   *
+   * Le même identifiant de jeton sert à deux choses : lire les playlists
+   * YouTube, et ranger un petit fichier de goûts dans l'espace privé du
+   * Drive (voir `drive.ts`). Un seul consentement pour les deux.
    */
   public async initOAuth(clientId: string): Promise<void> {
     if (typeof window === 'undefined') return;
@@ -97,7 +111,7 @@ export class YouTubeService {
           try {
             this.tokenClient = window.google.accounts.oauth2.initTokenClient({
               client_id: clientId,
-              scope: 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/userinfo.profile',
+              scope: SCOPE_YOUTUBE,
               callback: async (resp: any) => {
                 if (resp.access_token) {
                   this.accessToken = resp.access_token;
@@ -145,29 +159,37 @@ export class YouTubeService {
   }
 
   /**
-   * Request user login with Google popup
+   * Ouvrir la fenêtre Google et attendre le consentement.
    */
   public login(clientId?: string): Promise<string> {
-    const settings = getStoredSettings();
-    const effectiveClientId = clientId || settings.googleClientId;
-
     return new Promise((resolve, reject) => {
+      /* la promesse n'est réglée qu'une fois : soit le jeton arrive, soit
+         Google refuse en le disant. Une promesse qui ne se règle jamais
+         laisserait l'écran tourner indéfiniment sur « connexion en
+         cours » — c'est exactement ce qui arrivait quand la fenêtre
+         Google se refermait sans rien renvoyer. */
+      let regle = false;
+      const reussi = (t: string) => { if (!regle) { regle = true; resolve(t); } };
+      const echoue = (e: Error) => { if (!regle) { regle = true; reject(e); } };
+
+      const settings = getStoredSettings();
+      const effectiveClientId = clientId || settings.googleClientId;
       if (!window.google?.accounts?.oauth2) {
-        reject(new Error("Le script Google Identity Services n'est pas encore prêt. Vérifiez votre connexion."));
+        echoue(new Error("La fenêtre Google n'est pas encore prête. Vérifie ta connexion, puis réessaie."));
         return;
       }
 
       if (!effectiveClientId) {
-        reject(new Error("Veuillez renseigner votre Google Client ID dans les Réglages."));
+        echoue(new Error("Cette installation n'a pas d'identifiant Google : la connexion ne peut pas s'ouvrir."));
         return;
       }
 
       this.tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: effectiveClientId,
-        scope: 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/userinfo.profile',
+        scope: SCOPE_YOUTUBE,
         callback: async (resp: any) => {
           if (resp.error) {
-            reject(new Error(resp.error_description || resp.error));
+            echoue(new Error(resp.error_description || resp.error));
             return;
           }
           if (resp.access_token) {
@@ -176,15 +198,26 @@ export class YouTubeService {
             localStorage.setItem(TOKEN_KEY, resp.access_token);
             localStorage.setItem(TOKEN_EXP_KEY, (Date.now() + expiresIn).toString());
             await this.fetchUserProfile(resp.access_token);
-            resolve(resp.access_token);
+            reussi(resp.access_token);
           } else {
-            reject(new Error("Aucun jeton d'accès n'a été retourné par Google."));
+            echoue(new Error("Google n'a pas renvoyé de jeton d'accès."));
           }
         },
       });
 
+      /* la fenêtre Google peut aussi être simplement fermée : dans ce
+         cas aucun retour n'arrive, et l'écran ne doit pas rester bloqué */
+      setTimeout(() => echoue(new Error("La connexion a été interrompue avant la fin. Réessaie.")), 90000);
+
       this.tokenClient.requestAccessToken({ prompt: 'consent' });
     });
+  }
+
+  /* ── le jeton, offert à qui en a besoin ──
+     La synchro du Drive passe par ici : elle réclame le jeton seulement
+     quand elle en a un usage, et seulement s'il existe. */
+  public async jeton(): Promise<string | null> {
+    return this.isAuthenticated() ? this.accessToken : null;
   }
 
   public logout(): void {
@@ -424,13 +457,20 @@ export class YouTubeService {
       };
     };
 
-    /* ── 1. l'API officielle, avec la clé ──
-       C'est la voie normale. On ne la tente que s'il y a une clé. */
-    if (apiKey) {
+    /* ── 1. l'API officielle, avec la clé ou avec le jeton du compte ──
+       Google l'écrit noir sur blanc : `key` est « required **unless**
+       you provide an OAuth 2.0 token ». Une personne connectée n'a donc
+       pas besoin de clé YouTube — c'est ce qui permet de ne plus la
+       demander. */
+    const jwt = this.isAuthenticated() ? this.accessToken : null;
+    if (apiKey || jwt) {
       for (const q of [`${artist} ${title} audio`, `${title} ${artist}`]) {
         try {
-          const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(q)}&maxResults=5&key=${apiKey}`;
-          const resp = await fetch(url, { headers: { Accept: 'application/json' } });
+          const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(q)}&maxResults=5`
+            + (apiKey ? `&key=${apiKey}` : '');
+          const resp = await fetch(url, jwt && !apiKey
+            ? { headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json' } }
+            : { headers: { Accept: 'application/json' } });
           if (!resp.ok) {
             console.warn(`Recherche YouTube (clé) : ${resp.status}`);
             break;
@@ -480,6 +520,8 @@ export class YouTubeService {
       }
     }
 
+    /* ── 2. la même API, avec le jeton du compte ──
+       Plus de clé à fournir : Google accepte le jeton à la place. */
     if (this.isAuthenticated()) {
       try {
         const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(`${artist} ${title} audio`)}&maxResults=5`;
@@ -699,7 +741,7 @@ export class YouTubeService {
         if (!lastError) lastError = `YouTube a répondu ${resp.status} pour cette recherche.`;
       }
       if (!apiKey && !this.isAuthenticated()) {
-        lastError = 'Recherche indisponible : ajoute une clé API YouTube dans Réglages → Clés & API.';
+        lastError = 'Recherche YouTube indisponible : connecte ton compte Google (Réglages → Compte YouTube).';
       }
     } catch (e) {
       console.warn('YouTube search failed:', e);
@@ -914,3 +956,4 @@ export class YouTubeService {
 }
 
 export const youtubeService = new YouTubeService();
+

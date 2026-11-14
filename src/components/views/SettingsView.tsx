@@ -1,26 +1,34 @@
 import React, { useState } from 'react';
 import {
   KeyRound, ShieldCheck, Check, ExternalLink, Palette, MonitorSmartphone,
-  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2,
+  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, RefreshCw, CloudOff,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
 import { Button, ModeSwitch } from '../ui';
 import { inspectModels } from '../../services/gemini';
 import { useInstall, InstallHint, installPossible } from '../../lib/pwa';
+import { clientIdGoogle, GEMINI_API_KEY } from '../../config/app';
 
 /* Réglages : apparence (clair / sombre), compte YouTube, clés & API.
    Le modèle Gemini n'est plus un choix : la cascade est automatique. */
 export const SettingsView: React.FC = () => {
-  const { settings, saveSettings, isAuthenticated, userProfile, login, logout } = useData();
+  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState, syncNow } = useData();
   const { mode, toggleMode, showToast, restartOnboarding } = useUI();
   const pwa = useInstall();
   /* aucune clé par défaut : si elles manquent, on le dit ici, en clair,
      au lieu de laisser l'app échouer au premier appel */
-  const missingKeys = [!settings.geminiApiKey && 'Gemini', !settings.youtubeApiKey && 'YouTube'].filter(Boolean);
+  /* une seule clé compte désormais : celle de Gemini. La clé YouTube
+     n'est plus demandée — le compte Google la remplace (l'API YouTube
+     l'accepte en jeton, c'est écrit dans sa documentation). On signale
+     seulement ce qui manque vraiment pour que l'app soit complète. */
+  /* la clé de l'application, si celui qui héberge l'app en a mis une,
+     rend la clé personnelle inutile */
+  const cleFournie = !!GEMINI_API_KEY;
+  const missingKeys = [
+    !settings.geminiApiKey && !cleFournie && 'ta clé Gemini (facultative)',
+  ].filter(Boolean);
 
-  const [clientId, setClientId] = useState(settings.googleClientId);
-  const [ytKey, setYtKey] = useState(settings.youtubeApiKey || '');
   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
 
   /* ── le diagnostic du moteur ──
@@ -38,8 +46,8 @@ export const SettingsView: React.FC = () => {
 
   const save = () => {
     saveSettings({
-      googleClientId: clientId.trim(),
-      youtubeApiKey: ytKey.trim(),
+      googleClientId: settings.googleClientId,
+      youtubeApiKey: settings.youtubeApiKey,
       geminiApiKey: geminiKey.trim(),
     });
     showToast('Réglages enregistrés.');
@@ -134,90 +142,114 @@ export const SettingsView: React.FC = () => {
           ) : (
             <Button onClick={login}>Connecter mon compte</Button>
           )}
-          <a className="btn btn-ghost" href="https://console.cloud.google.com/" target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-            Google Cloud <ExternalLink size={14} />
-          </a>
         </div>
+        {!clientIdGoogle(settings.googleClientId) && (
+          <p className="sb-field-note" style={{ marginTop: 10 }}>
+            Cette installation n’a pas d’identifiant Google : la connexion ne peut pas
+            s’ouvrir. Celui qui héberge l’app le renseigne une fois dans
+            <code> src/config/app.ts </code> — c’est public, et les personnes qui
+            utilisent l’app n’ont jamais à s’en occuper.
+          </p>
+        )}
         <p className="ink-3" style={{ margin: '10px 0 0', fontSize: 11.5 }}>
           Une playlist manque ? Vérifie que le compte choisi dans la fenêtre Google est bien celui où se trouvent tes playlists.
         </p>
       </Card>
 
+      {/* synchro */}
+      <SyncCard
+        connecte={isAuthenticated}
+        etat={syncState}
+        onConnecter={login}
+        onSync={() => void syncNow()}
+      />
+
       {/* clés */}
-      <Card icon={<KeyRound size={17} />} title="Clés & API" sub="Stockées uniquement dans ce navigateur (localStorage).">
+      <Card
+        icon={<KeyRound size={17} />}
+        title="Clés & API"
+        sub={
+          isAuthenticated
+            ? 'Ta clé reste dans l’app — et, avec la synchro, dans ton Drive privé.'
+            : 'Stockée uniquement dans ce navigateur.'
+        }
+      >
         {!!missingKeys.length && (
           <p className="sb-keys-missing">
-            <KeyRound size={14} /> Il manque {missingKeys.join(' et ')} — renseigne-les ci-dessous, elles resteront sur cet appareil.
+            <KeyRound size={14} /> Il manque {missingKeys.join(' et ')} — tout reste sur cet appareil.
           </p>
         )}
-        <Field label="Client ID OAuth Google" value={clientId} onChange={setClientId} placeholder="….apps.googleusercontent.com" />
-        <Field label="Clé API YouTube Data v3 (optionnelle)" value={ytKey} onChange={setYtKey} placeholder="AIza…" />
-        <Field label="Clé API Gemini" value={geminiKey} onChange={setGeminiKey} placeholder="AIza…" />
-        <p className="ink-3" style={{ margin: '2px 0 0', fontSize: 11.5 }}>
-          Une clé d’offre gratuite a un quota <b>par jour et par modèle</b>. Le moteur demande
-          à Google la liste de ce que cette clé peut utiliser et essaie <b>tous</b> les modèles
-          de texte, dans l’ordre : les Gemini d’abord (du plus récent au plus ancien), les
-          autres familles ensuite. Un quota journalier écarte le modèle jusqu’à demain, un
-          modèle qui ne répond pas en texte est écarté pour de bon. Si tout est à sec, il
-          compose quand même un blend — par voisinage sur YouTube — et il le dit sur le blend.
+        <Field label="Clé API Gemini" value={geminiKey} onChange={setGeminiKey} placeholder="Colle ta clé ici" />
+        <p className="sb-field-note">
+          La seule clé de toute l’application. Gratuite sur{' '}
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">aistudio.google.com/app/apikey</a>.
+          Facultative : sans clé, l’app compose par voisinage YouTube et l’écrit sur le blend.
         </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
-          <Button variant="ghost" onClick={probeModels}>
-            {probe.busy
-              ? <Loader2 size={15} className="sb-spin" />
-              : <Cpu size={15} />} Vérifier les modèles disponibles
-          </Button>
-        </div>
-
-        {probe.error && (
-          <p className="ink-3" style={{ margin: '10px 0 0', fontSize: 11.5 }}>{probe.error}</p>
-        )}
-
-        {!!probe.models?.length && (
-          <div className="sb-model-probe">
-            <p className="ink-3" style={{ margin: '10px 0 6px', fontSize: 11.5 }}>
-              {probe.models.length} modèle{probe.models.length > 1 ? 's' : ''} de texte pour cette clé,
-              dans l’ordre où ils seront essayés :
-            </p>
-            <ol>
-              {probe.models.slice(0, 8).map((m, i) => (
-                <li key={m} data-first={i === 0 ? '1' : undefined}>
-                  <span>{m}</span>
-                  {i === 0 && <em>utilisé en premier</em>}
-                </li>
-              ))}
-            </ol>
-            {probe.models.length > 8 && (
-              <p className="ink-3" style={{ margin: '6px 0 0', fontSize: 11 }}>
-                … et {probe.models.length - 8} autres en secours.
-              </p>
-            )}
-            {!!probe.ecartes?.length && (
-              <div className="sb-model-ecartes">
-                <p className="ink-3" style={{ margin: '10px 0 4px', fontSize: 11.5 }}>
-                  {probe.ecartes.length} modèle{probe.ecartes.length > 1 ? 's' : ''} annoncé
-                  {probe.ecartes.length > 1 ? 's' : ''} par la clé mais écarté
-                  {probe.ecartes.length > 1 ? 's' : ''} :
-                </p>
-                <ul>
-                  {probe.ecartes.slice(0, 6).map((e) => (
-                    <li key={e.nom}><span>{e.nom}</span><em>{e.raison}</em></li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
       </Card>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.17
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.22
         </span>
       </div>
     </div>
+  );
+};
+
+/* ── la synchro ──
+   Elle n'a qu'un bouton, et seulement quand il sert. Le reste du temps,
+   elle dit simplement où elle en est : c'est tout ce qu'on demande à un
+   réglage qui doit être invisible. */
+const SyncCard: React.FC<{
+  connecte: boolean;
+  etat: { phase: string; dernierEnvoi?: string; message?: string };
+  onConnecter: () => void;
+  onSync: () => void;
+}> = ({ connecte, etat, onConnecter, onSync }) => {
+  const heure = etat.dernierEnvoi
+    ? new Date(etat.dernierEnvoi).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+    : null;
+
+  const sous = !connecte
+    ? 'Connecte ton compte : tes goûts, tes avis et tes blends suivront sur tous tes appareils.'
+    : etat.phase === 'sans-portee'
+      ? 'La connexion actuelle ne couvre pas le Drive : reconnecte-toi une fois pour l’activer.'
+      : etat.phase === 'erreur'
+        ? 'La synchro n’a pas abouti — rien n’est perdu, tout reste sur cet appareil.'
+        : etat.phase === 'envoi'
+          ? 'Enregistrement en cours…'
+          : heure
+            ? `Activée · enregistré à ${heure}`
+            : 'Activée · en attente du premier envoi';
+
+  return (
+    <Card icon={<RefreshCw size={17} />} title="Synchro" sub={sous}>
+      <p className="ink-3" style={{ margin: '0 0 10px', fontSize: 11.5 }}>
+        Un fichier discret, rangé dans l’espace privé de ton Drive (invisible dans
+        ton dossier) : goûts, avis, blends récents, clair ou sombre, et ta clé Gemini
+        si tu en as une. Tes jetons de connexion n’y sont jamais.
+      </p>
+      {!connecte ? (
+        <Button onClick={onConnecter}>Connecter mon compte</Button>
+      ) : etat.phase === 'sans-portee' ? (
+        <Button onClick={onConnecter}>Réactiver la synchro</Button>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Button variant="outline" onClick={onSync} disabled={etat.phase === 'envoi'}>
+            {etat.phase === 'envoi'
+              ? <><Loader2 size={15} className="anim-spin" /> Synchronisation…</>
+              : <><RefreshCw size={15} /> Synchroniser maintenant</>}
+          </Button>
+          {etat.phase === 'erreur' && (
+            <span className="ink-3" style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <CloudOff size={13} /> {etat.message || 'Nouvel essai au prochain geste.'}
+            </span>
+          )}
+        </div>
+      )}
+    </Card>
   );
 };
 

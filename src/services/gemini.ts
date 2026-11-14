@@ -454,6 +454,30 @@ function usableCount(items: any): number {
     && typeof i.artist === 'string' && i.artist.length > 1).length;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   La clé du moteur.
+
+   Gemini ne prend **qu'une clé** (`AIza…` ou une « auth key » récente).
+   Le jeton OAuth du compte Google ne marche pas : il ne porte pas les
+   droits nécessaires, et Google répond 403 « insufficient authentication
+   scopes ». Vérifié le 9 novembre, avec un blend réel : la requête est
+   refusée et l'app retombe sur le voisinage. On ne fait donc plus semblant.
+
+   Trois sources, dans cet ordre :
+
+   1. la clé saisie par la personne (`Réglages`, ou l'introduction) ;
+   2. la clé de l'application (`config/app.ts`), si celui qui héberge l'app
+      en a mis une — c'est ce qui permet à tout le monde de ne rien saisir ;
+   3. rien : l'app compose par voisinage, et le dit sur le blend.
+
+   Le jeton du compte reste branché pour YouTube, où il fonctionne — c'est
+   lui qui remplace la clé YouTube Data v3.
+   ═══════════════════════════════════════════════════════════════ */
+import { GEMINI_API_KEY } from '../config/app';
+
+/** la clé à utiliser : la sienne, sinon celle de l'application */
+const cleGemini = (cleSaisie: string): string => cleSaisie || GEMINI_API_KEY || '';
+
 export class GeminiService {
   /**
    * Generate an intelligent blended playlist using Google Gemini with automatic model fallback
@@ -464,8 +488,7 @@ export class GeminiService {
     tasteMemory: TasteMemory,
     onProgress?: (message: string) => void
   ): Promise<Track[]> {
-    const settings = getStoredSettings();
-    const apiKey = settings.geminiApiKey;
+    const apiKey = cleGemini(getStoredSettings().geminiApiKey);
 
     /* la durée demandée, en morceaux de ~3,5 min */
     const targetCount = Math.max(4, Math.round(config.durationMinutes / 3.5));
@@ -1186,8 +1209,7 @@ export class GeminiService {
     this.lastEngineNote = '';
     const category = trackToReplace.category || 'fresh';
     step('taste');
-    const settings = getStoredSettings();
-    const apiKey = settings.geminiApiKey;
+    const apiKey = cleGemini(getStoredSettings().geminiApiKey);
 
     /* tout ce qui est déjà dans le blend ou déjà écarté est interdit */
     const key = (t: { title: string; artist: string }) => `${t.artist} ${t.title}`.toLowerCase().trim();

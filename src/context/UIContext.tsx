@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import type { Design, Mode } from './prefs';
-import { getDesign, getMode, applyTheme } from './prefs';
+import { getDesign, getMode, applyTheme, choisirMode } from './prefs';
 
 type ViewName = 'library' | 'blend' | 'history' | 'taste' | 'settings';
 type ModalName =
@@ -77,6 +77,17 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  /* une synchro vient d'apporter un mode (ou des goûts) : l'écran se
+     remet à l'heure sans qu'on ait à recharger */
+  useEffect(() => {
+    const onSync = () => {
+      setModeState(getMode());
+      setDesignState(getDesign());
+    };
+    window.addEventListener('sb:sync-applied', onSync);
+    return () => window.removeEventListener('sb:sync-applied', onSync);
+  }, []);
+
   // verrouille le scroll quand une modale est ouverte
   useEffect(() => {
     document.body.style.overflow = modal ? 'hidden' : '';
@@ -100,7 +111,13 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       design,
       mode,
       setMode: setModeState,
-      toggleMode: () => setModeState((m) => (m === 'light' ? 'dark' : 'light')),
+      /* l'interrupteur, c'est un choix : il est daté (voir prefs.ts) pour
+         que la synchro sache à qui obéir entre deux appareils */
+      toggleMode: () => setModeState((m) => {
+        const next = m === 'light' ? 'dark' : 'light';
+        choisirMode(next);
+        return next;
+      }),
       view,
       setView,
       modal,

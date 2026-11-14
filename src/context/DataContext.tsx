@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile } from '../types';
 import { sameTrack, trackKey, ratingKey, getStoredRatings, writeStoredRatings, type TrackRating } from '../lib/track';
+import { clientIdGoogle } from '../config/app';
 import { youtubeService } from '../services/youtube';
 import { geminiService } from '../services/gemini';
 import { uniqueTracks } from '../lib/dedupe';
@@ -16,6 +17,7 @@ import {
   writeStoredBlends,
 } from '../services/storage';
 import { MOCK_PLAYLISTS } from '../data/mockData';
+import { demarrerSync, oublierSync, planifierEnvoi, surEtatSync, type EtatSync } from '../services/drive';
 
 interface DataContextType {
   settings: AppSettings;
@@ -63,6 +65,11 @@ interface DataContextType {
   ratingsVersion: number;
   /* efface d'un coup tous les avis, partout (mémoire + blends enregistrés) */
   resetAllRatings: () => void;
+
+  /* ── la synchro (Drive du compte connecté) ──
+     Elle ne demande rien : connecté, elle existe ; déconnecté, elle dort. */
+  syncState: EtatSync;
+  syncNow: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -110,6 +117,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
        retire un avis : le morceau quitte alors « Tes goûts ». */
     applyRatingToTaste(t, rating);
     bumpTaste();
+    /* un avis est la donnée la plus précieuse : il part vers le compte */
+    planifierEnvoi();
+  }, [bumpTaste]);
+
+  /* ── la synchro ──
+     Trois moments comptent : à la connexion (on récupère), après chaque
+     geste qui change les goûts (on renvoie, avec quatre secondes de
+     calme), et à la déconnexion (on oublie le fichier — il reste sur le
+     compte, mais cet appareil n'y touche plus). */
+  const [syncState, setSyncState] = useState<EtatSync>({ phase: 'inactif' });
+
+  useEffect(() => surEtatSync(setSyncState), []);
+
+  const syncNow = useCallback(async () => {
+    const ok = await demarrerSync();
+    if (ok) {
+      /* ce qui vient d'arriver doit se voir tout de suite — y compris la
+         clé Gemini, si elle est arrivée avec le compte */
+      setRatings(getStoredRatings());
+      setRatingsVersion((v) => v + 1);
+      setRecentBlends(getStoredBlends());
+      setSettings(getStoredSettings());
+      bumpTaste();
+    }
   }, [bumpTaste]);
 
   const loadingRef = useRef(false);
@@ -128,7 +159,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       const userPlaylists = await youtubeService.fetchPlaylists();
-      const looksLikeDemo = userPlaylists.some((p) => p.id.startsWith('demo-pl-'));
+      /* une réponse YouTube tordue ne doit pas vider l'accueil : on
+         teste sur une chaîne, jamais sur un champ supposé */
+      const looksLikeDemo = userPlaylists.some((p) => String(p?.id || '').startsWith('demo-pl-'));
       if (looksLikeDemo) {
         // l'API n'a rien renvoyé : on garde la démo mais on le dit clairement
         setLibraryError(
@@ -160,9 +193,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
-    if (settings.googleClientId) {
-      youtubeService.initOAuth(settings.googleClientId);
-    }
+    /* l'ID vient du code (`config/app.ts`) ; celui d'une ancienne version
+       enregistrée dans le navigateur sert de secours */
+    const idClient = clientIdGoogle(settings.googleClientId);
+    if (idClient) youtubeService.initOAuth(idClient);
     // l'avatar du compte doit apparaître même si la bibliothèque ne répond pas
     if (youtubeService.isAuthenticated()) {
       setIsAuthenticated(true);
@@ -170,8 +204,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (p) setUserProfile(p);
     }
     loadLibrary();
+    /* un compte déjà connecté (jeton encore valide) : la synchro reprend
+       sans qu'on demande quoi que ce soit */
+    if (youtubeService.isAuthenticated()) void syncNow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.googleClientId]);
+
+  /* les réglages et les blends profitent aussi du même envoi différé :
+     on écoute les gestes qui les modifient, où qu'ils soient dans l'app */
+  useEffect(() => {
+    const onLocal = () => planifierEnvoi();
+    window.addEventListener('sb:settings-saved', onLocal);
+    window.addEventListener('sb:blend-saved', onLocal);
+    return () => {
+      window.removeEventListener('sb:settings-saved', onLocal);
+      window.removeEventListener('sb:blend-saved', onLocal);
+    };
+  }, []);
 
   const refreshLibrary = useCallback(async () => {
     await loadLibrary();
@@ -223,17 +272,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     saveStoredTasteMemory({ likedTracks: [], dislikedTracks: [], likedArtists: [], dislikedArtists: [] });
     bumpTaste();
     window.dispatchEvent(new CustomEvent('sb:ratings-reset'));
+    planifierEnvoi();
   }, [bumpTaste]);
 
   const login = useCallback(async () => {
-    await youtubeService.login(settings.googleClientId);
+    await youtubeService.login(clientIdGoogle(settings.googleClientId));
     setIsAuthenticated(true);
     setUserProfile(youtubeService.getUserProfile());
     await loadLibrary();
-  }, [settings.googleClientId, loadLibrary]);
+    /* le compte est connu : on va chercher ce que les autres appareils
+       ont laissé, puis on renvoie l'ensemble */
+    void syncNow();
+  }, [settings.googleClientId, loadLibrary, syncNow]);
 
   const logout = useCallback(() => {
     youtubeService.logout();
+    oublierSync();
     setIsAuthenticated(false);
     setUserProfile(null);
     setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p })));
@@ -243,6 +297,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const saveSettings = useCallback((s: AppSettings) => {
     saveStoredSettings(s);
     setSettings(s);
+    window.dispatchEvent(new CustomEvent('sb:settings-saved'));
+    planifierEnvoi();
   }, []);
 
   /* un morceau est identifié par son videoId, pas par son id : le même
@@ -274,6 +330,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentBlendState(b);
     saveBlendToStorage(b);
     setRecentBlends(getStoredBlends());
+    window.dispatchEvent(new CustomEvent('sb:blend-saved'));
+    planifierEnvoi();
   }, []);
 
   const refreshBlends = useCallback(() => setRecentBlends(getStoredBlends()), []);
@@ -379,12 +437,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       generate,
       tasteVersion,
       bumpTaste,
+      syncState,
+      syncNow,
     }),
     [
       settings, saveSettings, isAuthenticated, userProfile, login, logout, playlists, loadingLibrary,
       libraryError, loadLibrary, loadPlaylistTracks, refreshLibrary, selectedTracks, toggleTrack,
       removeTrack, clearSelection, isSelected, currentBlend, setCurrentBlend, updateBlend,
       recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generate, tasteVersion, bumpTaste, resetAllRatings,
+      syncState, syncNow,
     ],
   );
 

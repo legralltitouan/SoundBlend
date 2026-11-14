@@ -18,11 +18,22 @@ const THEMES = [
 
 export const WelcomeFlow: React.FC = () => {
   const { mode, setMode, finishOnboarding } = useUI();
-  const { isAuthenticated, login, userProfile } = useData();
+  const { isAuthenticated, login, userProfile, settings, saveSettings } = useData();
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
 
-  const next = () => setStep((s) => Math.min(2, s + 1));
+  /* quatre temps : le thème, la clé, le compte, c'est parti */
+  const next = () => setStep((s) => Math.min(3, s + 1));
+
+  /* la clé n'est enregistrée que si elle a changé : on ne réécrit pas
+     les réglages pour rien, et un champ laissé vide n'efface pas une clé
+     déjà saisie dans Réglages */
+  const saveKey = () => {
+    const k = geminiKey.trim();
+    if (!k || k === settings.geminiApiKey) return;
+    saveSettings({ ...settings, geminiApiKey: k });
+  };
 
   const connect = () => {
     setBusy(true);
@@ -96,8 +107,61 @@ export const WelcomeFlow: React.FC = () => {
             </motion.section>
           )}
 
-          {/* ─────────── 2. le compte ─────────── */}
+          {/* ─────────── 2. la clé Gemini ───────────
+              Une seule clé, et c'est celle qui fait le travail : c'est
+              elle qui analyse les goûts et compose le blend. On la
+              demande ici, au moment où la personne comprend à quoi elle
+              sert — pas dans un écran de réglages qu'on découvre trois
+              jours plus tard. Facultatif : sans clé, l'app compose par
+              voisinage et le dit. */}
           {step === 1 && (
+            <motion.section
+              key="keys"
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <h1 className="welcome-title">La clé qui compose.</h1>
+              <p className="welcome-sub">
+                SoundBlend utilise Gemini pour lire tes goûts et choisir les morceaux.
+                Ta clé reste dans ce navigateur — elle n’est envoyée qu’à Google.
+                Facultative : sans elle, l’app compose par voisinage et le dit.
+              </p>
+
+              <label className="welcome-field">
+                <span>Clé API Gemini</span>
+                <input
+                  type="password"
+                  inputMode="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={geminiKey}
+                  onChange={(e) => setGeminiKey(e.target.value)}
+                  placeholder="Colle ta clé ici"
+                  aria-label="Clé API Gemini"
+                />
+              </label>
+
+              <p className="welcome-note welcome-note--tight">
+                Gratuite, et deux minutes à obtenir :{' '}
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">
+                  aistudio.google.com/app/apikey
+                </a>
+                . Tu peux la mettre plus tard dans Réglages.
+              </p>
+
+              <div className="welcome-actions">
+                <button className="welcome-cta" onClick={() => { saveKey(); next(); }}>
+                  {geminiKey.trim() ? 'Continuer' : 'Plus tard'} <ArrowRight size={17} />
+                </button>
+                <button className="welcome-back" onClick={() => setStep((s) => s - 1)}>Retour</button>
+              </div>
+            </motion.section>
+          )}
+
+          {/* ─────────── 3. le compte ─────────── */}
+          {step === 2 && (
             <motion.section
               key="account"
               initial={{ opacity: 0, y: 14 }}
@@ -105,10 +169,20 @@ export const WelcomeFlow: React.FC = () => {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
-              <h1 className="welcome-title">Ton compte YouTube.</h1>
+              <h1 className="welcome-title">Ton compte Google.</h1>
               <p className="welcome-sub">
-                Il sert à lire tes playlists et à y exporter les blends. Rien n’est envoyé
-                ailleurs : tout reste dans ton navigateur.
+                Il sert à lire tes playlists, à y exporter les blends, et à retrouver tes
+                goûts sur ton autre téléphone ou ton ordinateur.
+              </p>
+              <p className="welcome-note welcome-note--tight">
+                La synchro ne touche à rien de ton Drive : elle range un seul petit fichier
+                dans un espace privé que Google réserve à SoundBlend. Tu ne le vois pas,
+                personne d’autre ne le voit.
+              </p>
+              <p className="welcome-note welcome-note--tight">
+                La connexion n’est possible que si l’application a un identifiant Google
+                (un « ID client OAuth ») — celui du propriétaire de l’app, pas le tien.
+                Sans lui, tu as une bibliothèque d’exemple et la recherche YouTube.
               </p>
 
               {isAuthenticated ? (
@@ -147,8 +221,8 @@ export const WelcomeFlow: React.FC = () => {
             </motion.section>
           )}
 
-          {/* ─────────── 3. prêt ─────────── */}
-          {step === 2 && (
+          {/* ─────────── 4. prêt ─────────── */}
+          {step === 3 && (
             <motion.section
               key="ready"
               initial={{ opacity: 0, y: 14 }}
@@ -176,7 +250,7 @@ export const WelcomeFlow: React.FC = () => {
         </AnimatePresence>
 
         <div className="welcome-dots" aria-hidden>
-          {[0, 1, 2].map((i) => <span key={i} data-on={i === step} />)}
+          {[0, 1, 2, 3].map((i) => <span key={i} data-on={i === step} />)}
         </div>
       </div>
     </div>

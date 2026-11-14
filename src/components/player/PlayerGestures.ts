@@ -111,6 +111,13 @@ export const usePlayerSheet = (opts: Opts) => {
     }));
   }, [H]);
 
+  /* ── fermer ──
+     On ne touche PAS à l'historique ici. La feuille qui se referme fait
+     baisser « ce qu'il y a à fermer », et c'est la synchronisation qui
+     retire alors l'entrée — une seule fois, qu'on ait fermé au doigt, par
+     la flèche ou par le retour du téléphone. Quand deux endroits
+     retiraient l'entrée, on en retirait deux : le lecteur se refermait…
+     puis l'app revenait à l'accueil. */
   const close = useCallback(() => {
     setSettling(true);
     setYBoth(H());
@@ -275,8 +282,7 @@ export const usePlayerSheet = (opts: Opts) => {
       const h = H();
       const closeIt = yRef.current > h * 0.26 || (fast && d.vy > 0 && yRef.current > 24);
       setSettling(true);
-      if (closeIt) setYBoth(h);
-      else setYBoth(0);
+      if (closeIt) setYBoth(h); else setYBoth(0);
       return;
     }
     /* un appui sans mouvement : rien à faire, le clic passe */

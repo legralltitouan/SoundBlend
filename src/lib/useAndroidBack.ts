@@ -1,100 +1,75 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+import { BACK_HOME_EVENT, enAttente, popInterne, poserEntree, profondeurPile, retirerEntree } from './backEvents';
 
 /* ═══════════════════════════════════════════════════════════════
    Le bouton « retour » du téléphone.
 
    Sur Android, c'est le geste ou la flèche du système : il doit faire
-   quelque chose d'attendu dans une application, et pas sortir de
-   l'app d'un coup. Notre règle, en trois marches :
+   quelque chose d'attendu, et pas sortir de l'app d'un coup. Notre
+   règle, en trois marches :
 
-   1. **une couche est ouverte** (plein écran du lecteur, fenêtre, clé
-      vidéo…) → on la referme ;
-   2. **on est ailleurs qu'à l'accueil** (blend, historique, goûts,
-      réglages) → on revient à l'accueil ;
-   3. **on est déjà à l'accueil** → on laisse le navigateur faire : il
-      réduit l'app (ou revient au lanceur), comme avant.
+   1. **une couche est ouverte** (plein écran du lecteur, fenêtre…) →
+      on la referme ;
+   2. **on est ailleurs qu'à l'accueil** → on revient à l'accueil ;
+   3. **on est déjà à l'accueil**, rien d'ouvert → on laisse le
+      navigateur faire : il réduit l'app, comme avant.
 
-   Sur iOS il n'y a pas de bouton retour, mais le geste « balayage depuis
-   le bord » produit le même événement : la marche 1 et 2 y fonctionnent
-   aussi, gratuitement.
-
-   Comment on s'y prend : chaque fois qu'on entre dans une couche ou
-   qu'on quitte l'accueil, on **empile une entrée** dans l'historique du
-   navigateur. Quand la personne appuie sur retour, l'entrée se dépile et
-   on reçoit `popstate` : on referme/revient. À l'accueil sans couche, il
-   n'y a rien d'empilé, donc le retour va au navigateur, qui réduit l'app.
+   Le nombre d'entrées d'historique suit ce qu'il y a à fermer :
+   une pour l'écran (si on n'est pas à l'accueil), une par couche.
+   Elles sont posées et retirées par `backEvents`, qui en tient le
+   compte exact — voir le commentaire de ce fichier.
    ═══════════════════════════════════════════════════════════════ */
-
-type Step = { depth: number; key: string };
 
 export type BackLayer = { key: string; close: () => void };
 
 /**
  * @param atHome    true quand l'écran affiché est l'accueil
- * @param layers    les couches ouvertes, de la plus profonde à la plus
- *                  haute (chacune sait se refermer)
+ * @param layers    les couches ouvertes, de la plus profonde à la
+ *                  plus haute (chacune sait se refermer)
  */
 export const useAndroidBack = (atHome: boolean, layers: BackLayer[]) => {
-  /* ce que l'on a empilé nous-mêmes, et qu'il faudra dépiler si l'écran
-     change sans que le retour soit passé par là */
-  const pushed = useRef<Step[]>([]);
   const layersRef = useRef<BackLayer[]>(layers);
   layersRef.current = layers;
   const atHomeRef = useRef(atHome);
   atHomeRef.current = atHome;
+  /* relance la synchronisation quand un `back()` en vol s'est posé */
+  const [tick, setTick] = useState(0);
 
-  /* la profondeur désirée : 1 si on n'est pas à l'accueil, plus une par
-     couche ouverte */
-  const desired = (atHome ? 0 : 1) + layers.length;
-
+  /* un retour du système : on referme la couche du dessus, sinon on
+     revient à l'accueil (le navigateur fait le reste à l'accueil) */
   useEffect(() => {
     const onPop = () => {
-      /* le navigateur a dépilé une de NOS entrées */
-      if (pushed.current.length === 0) return;
-      pushed.current.pop();
+      const inter = popInterne();
+      if (inter) return;
       const top = layersRef.current[layersRef.current.length - 1];
-      if (top) {
-        /* on referme la couche du dessus. Effet de bord : l'effet se
-           relance, `desired` baisse, et l'entrée correspondante est
-           retirée proprement plus bas. */
-        top.close();
-        return;
+      if (top) { top.close(); return; }        // 1. la couche du dessus
+      if (!atHomeRef.current) {                // 2. l'accueil
+        window.dispatchEvent(new CustomEvent(BACK_HOME_EVENT));
       }
-      if (!atHomeRef.current) {
-        window.dispatchEvent(new CustomEvent('sb:back-home'));
-        return;
-      }
-      /* plus rien à fermer ni à quitter : le navigateur gère */
     };
-
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  /* on tient la pile au niveau voulu */
+  /* ── la synchronisation des entrées ──
+     `profondeur` est mise à jour immédiatement par `backEvents` : cette
+     boucle ne peut donc pas retirer deux entrées pour une seule raison.
+     C'est précisément ce qui ramenait à l'accueil. */
+  const cible = layers.length + (atHome ? 0 : 1);
   useEffect(() => {
-    const sync = () => {
-      const want = desired;
-      const have = pushed.current.length;
-      if (have < want) {
-        for (let i = have; i < want; i++) {
-          const key = `sb-back-${Date.now()}-${i}`;
-          try {
-            window.history.pushState({ sbBack: key }, '');
-            pushed.current.push({ depth: i + 1, key });
-          } catch { /* historique indisponible : on n'insiste pas */ }
-        }
-      } else if (have > want) {
-        /* l'écran a changé tout seul (un clic, pas le bouton retour) : on
-           retire nos entrées en trop pour que le compte reste juste */
-        const drop = have - want;
-        pushed.current.splice(have - drop, drop);
-        try { window.history.go(-drop); } catch { /* ignore */ }
-      }
-    };
-    sync();
-  }, [desired]);
+    /* un `back()` encore en vol ne doit pas être doublé : on repasse
+       quand son `popstate` est arrivé. Sans cette attente, un clic trop
+       rapide posait une entrée que ce `back()` retirait aussitôt. */
+    if (enAttente() > 0) {
+      const t = window.setTimeout(() => setTick((n) => n + 1), 60);
+      return () => window.clearTimeout(t);
+    }
+    let garde = 8;
+    while (garde-- > 0) {
+      const d = profondeurPile();
+      if (d === cible) break;
+      if (d < cible) poserEntree(); else retirerEntree();
+    }
+  }, [cible, layers.length, atHome, tick]);
 };
-
-/** l'événement écouté par l'application pour revenir à l'accueil */
-export const BACK_HOME_EVENT = 'sb:back-home';

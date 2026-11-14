@@ -14,7 +14,7 @@
    depuis un cache périmé serait pire qu'une absence de réponse.
    ═══════════════════════════════════════════════════════════════ */
 
-const VERSION = 'sb-v6-9-17';
+const VERSION = 'sb-v6-9-22';
 const SHELL = `${VERSION}-shell`;
 
 /* l'interface : la page, le manifeste, les icônes. Les fichiers hachés

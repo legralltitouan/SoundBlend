@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useUI } from '../../context/UIContext';
 import { usePlayer } from '../../context/PlayerContext';
-import { useAndroidBack, BACK_HOME_EVENT, type BackLayer } from '../../lib/useAndroidBack';
+import { useAndroidBack, type BackLayer } from '../../lib/useAndroidBack';
+import { BACK_HOME_EVENT } from '../../lib/backEvents';
 
 /* ═══════════════════════════════════════════════════════════════
    Branchement du bouton retour du téléphone.
@@ -33,10 +34,14 @@ export const BackHandler: React.FC = () => {
     btn?.click();
   }, []);
 
+  /* de la plus profonde à la plus haute — l'ordre compte : le retour
+     ferme la dernière. Le plein écran du lecteur passe au-dessus de
+     tout (il est rendu après les fenêtres, et à un z-index plus haut) :
+     c'est donc lui la couche du dessus quand il est ouvert. */
   const layers: BackLayer[] = [];
-  if (sheetOpen) layers.push({ key: 'sheet', close: closeSheet });
-  if (isVideoOpen) layers.push({ key: 'video', close: toggleVideoModal });
   if (modal) layers.push({ key: 'modal', close: closeModal });
+  if (isVideoOpen) layers.push({ key: 'video', close: toggleVideoModal });
+  if (sheetOpen) layers.push({ key: 'sheet', close: closeSheet });
   /* l'accueil de bienvenue n'est pas une couche : c'est le premier écran,
      le retour n'a pas de sens avant d'être entré dans l'app */
 

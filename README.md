@@ -1,5 +1,3 @@
-https://legralltitouan.github.io/SoundBlend/
-
 # SoundBlend — site complet (YouTube Music)
 
 Application web de création de playlists par IA sur ta bibliothèque YouTube.

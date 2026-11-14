@@ -63,7 +63,7 @@ export const PickerModal: React.FC = () => {
   useEffect(() => {
     if (!open) return;
     if (activeId && playlists.some((p) => p.id === activeId)) return;
-    const first = playlists.find((p) => !p.id.startsWith('demo-pl-likes')) || playlists[0];
+    const first = playlists.find((p) => !String(p?.id || '').startsWith('demo-pl-likes')) || playlists[0];
     if (first) setActiveId(first.id);
   }, [open, playlists, activeId]);
 
