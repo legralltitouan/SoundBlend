@@ -94,8 +94,8 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
     const vw = () => window.innerWidth;
     const vh = () => window.innerHeight;
 
-    nodes[0].x = nodes[1].x = vw() * 0.62;
-    nodes[0].y = nodes[1].y = vh() * 0.42;
+    nodes[0].x = nodes[1].x = vw() * 0.5;
+    nodes[0].y = nodes[1].y = vh() * 0.40;
 
     let heading = -Math.PI / 2;
     let swim = 0;
@@ -118,14 +118,31 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
       return v * ((((idx % 4) + 4) % 4) === 3 ? 0.09 : 0.055) * 1.5;
     };
 
-    /* la taille des nappes suit le plus petit côté : sur un téléphone,
-       une sphère de 300 px de large nage sur l'écran sans le remplir */
+    /* ═══ la taille de la sphère ═══
+       Le cœur fait ~290 px de diamètre au repos. On veut qu'il occupe
+       environ **la moitié de la largeur** d'un téléphone (l'ordre de
+       grandeur demandé), et un peu plus que la moitié sur un écran très
+       étroit. On calcule donc l'échelle à partir de la largeur, et non
+       du plus petit côté : avant, un téléphone de 390 px tombait sur le
+       plancher (0.52), d'où une boule de 150 px — une bille au milieu
+       du vide. La marge de nage suit la taille réelle, sinon elle sort
+       de l'écran. */
     let scale = 1;
+    let margy = 120;
     const rescale = () => {
-      scale = Math.max(0.52, Math.min(0.98, Math.min(vw(), vh()) / 900));
+      const w = vw();
+      const h = vh();
+      /* largeur visée du cœur : 58 % de la largeur, borné pour ne pas
+         devenir énorme sur un grand écran */
+      const voulu = Math.max(210, Math.min(620, w * 0.66));
+      scale = Math.max(0.7, Math.min(1.75, voulu / 290));
+      /* la marge : de quoi laisser la boule entière dans l'écran, sans
+         qu'elle se colle aux bords */
+      const reach = 150 * scale;
+      margy = Math.max(reach, Math.min(w, h) * 0.18);
       target = {
-        x: 120 + Math.random() * Math.max(1, vw() - 240),
-        y: 120 + Math.random() * Math.max(1, vh() - 240),
+        x: margy + Math.random() * Math.max(1, w - margy * 2),
+        y: margy * 1.4 + Math.random() * Math.max(1, h - margy * 2.8),
       };
     };
     rescale();
@@ -152,8 +169,8 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
       /* arrivée : on choisit un autre point, jamais hors de l'écran */
       if (Math.hypot(target.x - head.x, target.y - head.y) < 85 * scale) {
         target = {
-          x: 120 + Math.random() * Math.max(1, vw() - 240),
-          y: 120 + Math.random() * Math.max(1, vh() - 240),
+          x: margy + Math.random() * Math.max(1, vw() - margy * 2),
+          y: margy * 1.4 + Math.random() * Math.max(1, vh() - margy * 2.8),
         };
       }
 

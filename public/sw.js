@@ -24,7 +24,7 @@ const SHELL = `${VERSION}-shell`;
    jamais écrit en dur. */
 const BASE = new URL(self.registration.scope).pathname;
 const url = (path) => `${BASE}${path}`.replace(/\/{2,}/g, '/');
-const PRECACHE = [url('index.html'), url('manifest.webmanifest'), url('icon-192.png'), url('icon-512.png'), url('apple-touch-icon.png')];
+const PRECACHE = [url('index.html'), url('manifest.webmanifest'), url('icon-192.png'), url('icon-512.png'), url('apple-touch-icon.png'), url('logo.png')];
 
 const isApi = (url) =>
   /(^|\.)googleapis\.com$/.test(url.hostname) ||

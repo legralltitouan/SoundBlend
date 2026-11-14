@@ -62,7 +62,6 @@ export const PlayerBar: React.FC = () => {
   /* où en est le doigt dans le glissement latéral, de -1 à 1 : c'est ce
      qui règle l'opacité de l'ambiance (l'ambiance change *pendant* le
      geste, et non d'un coup au changement de morceau) */
-  const [coverMix, setCoverMix] = useState(0);
 
   /* les deux voisins, pour les faces latérales du carrousel */
   const peekTrack = (step: 1 | -1) => {
@@ -97,10 +96,14 @@ export const PlayerBar: React.FC = () => {
     },
     onNext: () => stepTrack(1),
     onPrev: () => stepTrack(-1),
-    onCoverProgress: setCoverMix,
   });
 
   const pct = useMemo(() => (duration ? Math.min(100, (progress / duration) * 100) : 0), [progress, duration]);
+
+  /* la teinte du fond : c'est le contrôleur qui la tient, pour qu'elle
+     continue de tourner pendant la fin du geste (et ne retombe pas d'un
+     coup pendant que l'image glisse encore) */
+  const coverMix = sheet.mix;
 
   if (!currentTrack) return null;
 
@@ -298,6 +301,9 @@ export const PlayerBar: React.FC = () => {
                   </div>
                 </div>
 
+                {/* la zone des commandes est aussi une zone de glissement :
+                    c'est le gestionnaire qui décide, à l'appui, si le doigt
+                    part sur un bouton (clic) ou sur le vide (geste). */}
                 <div className="nowplaying-controls">
                   <button className="icon-btn nowplaying-vote" data-on={ownRating === 'disliked' ? 'true' : 'false'}
                     onClick={() => vote('disliked')} aria-label="Je n’aime pas" aria-pressed={ownRating === 'disliked'}>
@@ -354,6 +360,7 @@ const QueueStrip: React.FC = () => {
         <button
           key={t.id}
           className="queue-item"
+          data-active={t.id === currentTrack?.id ? 'true' : 'false'}
           data-now={t.id === currentTrack?.id ? '1' : '0'}
           onClick={() => playTrack(t, queue)}
           title={`${t.title} — ${t.artist}`}

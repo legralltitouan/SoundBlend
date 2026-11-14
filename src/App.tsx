@@ -19,6 +19,7 @@ import { Check } from 'lucide-react';
 import { WelcomeFlow } from './components/shell/WelcomeFlow';
 import { Ambience } from './components/shell/Ambience';
 import { InstallBanner } from './components/shell/InstallBanner';
+import { BackHandler } from './components/shell/BackHandler';
 
 const Router: React.FC = () => {
   const { view } = useUI();
@@ -92,6 +93,7 @@ export const AppContent: React.FC = () => {
     <TaskTicker />
     {/* l'invitation à installer : téléphone seulement, une seule fois */}
     <InstallBanner />
+    <BackHandler />
   </>
   );
 };

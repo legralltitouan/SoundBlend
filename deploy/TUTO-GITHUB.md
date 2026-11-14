@@ -262,10 +262,10 @@ la structure, on remplace seulement les fichiers.
 
 1. Sur GitHub, ouvre le dépôt `legralltitouan/SoundBlend`.
 2. **Add file** → **Upload files**.
-3. Ouvre le dossier `site-v6.9.8/` livré dans l'archive, sélectionne
+3. Ouvre le dossier `site-v6.9.9/` livré dans l'archive, sélectionne
    **tout ce qu'il contient** (`src`, `public`, `deploy`, les fichiers de
    la racine…) et dépose-le dans la page.
-4. En bas, écris le message (`v6.9.8 — player au doigt, timeline réparée,
+4. En bas, écris le message (`v6.9.9 — gestes continus, retour natif, vrai logo, timeline réparée,
    doublons verrouillés`), puis **Commit changes**.
 5. ⚠️ **Ne dépose jamais** `.github/workflows/pages.yml` : ton fichier
    actuel fonctionne. GitHub le remplacerait par une variante prévue
@@ -278,19 +278,19 @@ pastille passe au vert en une à deux minutes, et l'adresse est à jour.
 ### Méthode B — en ligne de commande (si tu as Git sur ton PC)
 
 ```bash
-# dans le dossier qui contient le contenu de site-v6.9.8/
+# dans le dossier qui contient le contenu de site-v6.9.9/
 git clone https://github.com/legralltitouan/SoundBlend.git
 cd SoundBlend
 
 # on remplace le contenu de l'app, sans toucher au workflow
-cp -r /chemin/vers/site-v6.9.8/src            .
-cp -r /chemin/vers/site-v6.9.8/public         .
-cp -r /chemin/vers/site-v6.9.8/deploy         .
-cp    /chemin/vers/site-v6.9.8/index.html     .
-cp    /chemin/vers/site-v6.9.8/package.json   .
-cp    /chemin/vers/site-v6.9.8/package-lock.json .
-cp    /chemin/vers/site-v6.9.8/*.js  .        # vite, tailwind, postcss
-cp    /chemin/vers/site-v6.9.8/tsconfig*.json .
+cp -r /chemin/vers/site-v6.9.9/src            .
+cp -r /chemin/vers/site-v6.9.9/public         .
+cp -r /chemin/vers/site-v6.9.9/deploy         .
+cp    /chemin/vers/site-v6.9.9/index.html     .
+cp    /chemin/vers/site-v6.9.9/package.json   .
+cp    /chemin/vers/site-v6.9.9/package-lock.json .
+cp    /chemin/vers/site-v6.9.9/*.js  .        # vite, tailwind, postcss
+cp    /chemin/vers/site-v6.9.9/tsconfig*.json .
 
 git add -A && git commit -m "v6.9.8" && git push
 ```

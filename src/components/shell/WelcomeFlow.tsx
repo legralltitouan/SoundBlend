@@ -39,9 +39,12 @@ export const WelcomeFlow: React.FC = () => {
 
       <div className="welcome-card">
         <div className="welcome-brand">
-          <span className="welcome-mark" aria-hidden>
-            <i /><i /><i />
-          </span>
+          {/* Le vrai logo, dans sa pastille sombre : le triangle de lecture
+              est blanc, il disparaîtrait sur le fond crème. Posé sur le
+              noir de l'icône, il se lit sur les deux thèmes — et c'est
+              exactement l'image que la personne aura sur son écran
+              d'accueil une fois l'app installée. */}
+          <img className="welcome-mark" src={`${import.meta.env.BASE_URL}icon-192.png`} alt="" aria-hidden />
           <span>SoundBlend</span>
         </div>
 

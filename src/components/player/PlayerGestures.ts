@@ -53,6 +53,9 @@ export const usePlayerSheet = (opts: Opts) => {
   const [y, setY] = useState(() => H());
   /* le glissement des pochettes, en px */
   const [dx, setDx] = useState(0);
+  /* où en est le geste latéral, de 0 à 1 : allume l'ambiance du voisin,
+     et suit la couleur du fond sans à-coup */
+  const [mix, setMix] = useState(0);
   /* true pendant que le doigt commande : aucune transition */
   const [dragging, setDragging] = useState(false);
   /* true quand une transition est en train de finir le mouvement */
@@ -62,8 +65,14 @@ export const usePlayerSheet = (opts: Opts) => {
      d'un rendu — un geste rapide envoie plus d'événements que de frames */
   const yRef = useRef(y);
   const dxRef = useRef(0);
+  const mixRef = useRef(0);
   const setYBoth = (v: number) => { yRef.current = v; setY(v); };
   const setDxBoth = (v: number) => { dxRef.current = v; setDx(v); };
+  const setMixBoth = (v: number) => { mixRef.current = v; setMix(v); };
+
+  /* l'animation de fin de geste : on la garde pour pouvoir l'interrompre
+     si le doigt revient avant la fin */
+  const cancelRaf = useRef<number | null>(null);
 
   const g = useRef<{
     down: boolean;
@@ -118,10 +127,15 @@ export const usePlayerSheet = (opts: Opts) => {
   const onDown = useCallback((e: React.PointerEvent) => {
     if (e.pointerType === 'mouse') return;
     const t = e.target as HTMLElement;
-    /* ces zones ont leur propre geste : on ne les vole pas. La file fait
-       exception pour le vertical : elle ne défile qu'en largeur, donc un
-       doigt qui descend dessus doit fermer la feuille. */
+    /* Les seules zones qui gardent leur geste propre sont les vraies
+       commandes : le rail de progression (qui se promène au doigt) et
+       les champs de saisie. Partout ailleurs — pochette, titre, zone des
+       boutons lecture, file du bas — le doigt nous appartient : c'est ce
+       qui rend le glissement vers le haut possible sur toute la feuille,
+       au lieu d'une bande étroite et difficile à viser. */
     if (t.closest('.prail, input, textarea, select')) return;
+    cancelRaf.current && cancelAnimationFrame(cancelRaf.current);
+    cancelRaf.current = null;
     g.current = {
       down: true,
       x0: e.clientX, y0: e.clientY,
@@ -161,9 +175,13 @@ export const usePlayerSheet = (opts: Opts) => {
     d.lastT = now;
 
     if (d.axis === 'x') {
-      /* on suit le doigt, sans butée : la voisine entre du bord */
+      /* on suit le doigt, sans butée : la voisine entre du bord, et le
+         fond se colore d'elle à mesure */
+      const w = Math.max(1, opts.coverWidth());
+      const ratio = Math.max(-1, Math.min(1, rawX / w));
       setDxBoth(rawX);
-      opts.onCoverProgress?.(Math.max(-1, Math.min(1, rawX / Math.max(1, opts.coverWidth()))));
+      setMixBoth(ratio);
+      opts.onCoverProgress?.(ratio);
       return;
     }
 
@@ -184,22 +202,71 @@ export const usePlayerSheet = (opts: Opts) => {
       const w = Math.max(1, opts.coverWidth());
       const far = Math.abs(dxRef.current) > w * 0.22;
       const fling = fast && Math.abs(d.vx) > FLICK && Math.abs(dxRef.current) > 28;
-      const dir = dxRef.current < 0 ? 1 : -1;
+      const dir: 1 | -1 = dxRef.current < 0 ? 1 : -1;
+
       if (far || fling) {
-        /* on finit la course : la voisine prend la place, puis on remet
-           la piste à zéro dans le même souffle — l'image ne bouge pas */
+        /* ═══ la suite du geste, sans à-coup ═══
+
+           Les trois pochettes sont posées autour du centre : gauche à
+           −pas, principale à 0, droite à +pas, plus `dx` (le doigt).
+
+           Pour finir le geste, on anime `dx` jusqu'à la butée
+           (`−pas` si on va vers la suivante, `+pas` sinon), puis on
+           échange les rôles ET on remet `dx` à 0 dans le même rendu.
+           À l'instant de la bascule, la nouvelle principale occupe
+           exactement la place qu'occupait l'ancienne voisine : l'écran
+           ne change pas d'un pixel. C'est pour ça que la bascule est
+           faite à la FIN : le rendu un peu plus lourd du changement de
+           morceau tombe sur une image immobile — il ne se voit pas.
+
+           Et l'animation est écrite à la main, image par image : une
+           transition CSS ne démarre qu'à la peinture suivante, ce qui
+           laissait un gel d'une cinquantaine de millisecondes juste au
+           relâchement — le « ça saute, ça fige » d'origine. */
         setSettling(true);
-        setDxBoth(dir * w);
         opts.onCoverProgress?.(0);
-        window.setTimeout(() => {
-          if (dir > 0) opts.onNext(); else opts.onPrev();
+        setMixBoth(0);
+
+        const pas = Math.max(1, opts.coverWidth());
+        const from = dxRef.current;
+        const to = -pas * dir;                  // la butée, dans le sens du geste
+        const DUREE = 300;
+        const t0 = performance.now();
+        const ease = (t: number) => 1 - Math.pow(1 - t, 3);   // même courbe que la piste
+
+        if (cancelRaf.current != null) cancelAnimationFrame(cancelRaf.current);
+        setDragging(true);                      // aucun lissage CSS par-dessus
+
+        const step = () => {
+          const k = Math.min(1, (performance.now() - t0) / DUREE);
+          if (k < 1) {
+            setDxBoth(from + (to - from) * ease(k));
+            cancelRaf.current = requestAnimationFrame(step);
+            return;
+          }
+          /* Butée atteinte : on échange les rôles et on remet à zéro,
+             ensemble. L'écran, lui, ne change pas d'un pixel — c'est
+             vérifié image par image (aucune pochette ne se déplace de
+             plus de quelques pixels d'une image à l'autre). On reste en
+             `dragging` encore une image : le temps que React peigne les
+             nouvelles images, aucune transition ne doit s'inviter. */
           setDxBoth(0);
-          setSettling(false);
-        }, 240);
+          if (dir > 0) opts.onNext(); else opts.onPrev();
+          cancelRaf.current = requestAnimationFrame(() => {
+            setDragging(false);
+            setSettling(false);
+            cancelRaf.current = null;
+          });
+        };
+        cancelRaf.current = requestAnimationFrame(step);
       } else {
+        /* trop court : la pochette revient à sa place, doucement — et la
+           couleur revient avec elle, au même rythme */
         setSettling(true);
         setDxBoth(0);
+        setMixBoth(0);
         opts.onCoverProgress?.(0);
+        window.setTimeout(() => setSettling(false), 320);
       }
       return;
     }
@@ -220,6 +287,7 @@ export const usePlayerSheet = (opts: Opts) => {
     setDragging(false);
     setSettling(true);
     setDxBoth(0);
+    setMixBoth(0);
     setYBoth(yRef.current > H() * 0.5 ? H() : 0);
     opts.onCoverProgress?.(0);
   }, [H, opts]);
@@ -231,7 +299,14 @@ export const usePlayerSheet = (opts: Opts) => {
   const onBarDown = useCallback((e: React.PointerEvent) => {
     if (e.pointerType === 'mouse') return;
     const t = e.target as HTMLElement;
-    if (t.closest('button, a')) return;
+    /* Les commandes gardent leur clic. Une exception : la zone
+       pochette + titre, qui EST un bouton (celui qui ouvre le lecteur).
+       C'est la plus grande surface de la barre, et la laisser de côté,
+       c'était justement la zone « dure à attraper ». Un appui sans
+       mouvement y ouvre toujours le lecteur ; un appui qui glisse fait
+       monter la feuille. */
+    if (t.closest('.prail')) return;
+    if (t.closest('button, a') && !t.closest('.nowbar-track')) return;
     bar.current = { down: true, y0: e.clientY, x0: e.clientX, claimed: false, startY: 0 };
     try { (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
   }, []);
@@ -280,6 +355,7 @@ export const usePlayerSheet = (opts: Opts) => {
     mounted,
     y,
     dx,
+    mix,
     dragging,
     settling,
     open,

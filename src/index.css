@@ -711,10 +711,18 @@ input[type='range']::-moz-range-thumb {
 }
 .nowbar-play:active { transform: scale(.94); }
 
+/* Le temps et le volume sont en `pointer-events: none` : ils restent
+   lisibles, mais le doigt posé dessus ne s'arrête plus sur un élément
+   inerte — il fait glisser la barre vers le haut. C'est ce qui donnait
+   l'impression d'une zone « dure à attraper » : elle était pleine de
+   petits trous. */
 .nowbar-times {
   display: none; font-size: 11px; color: var(--ink-2);
   font-variant-numeric: tabular-nums; white-space: nowrap; gap: 3px;
+  pointer-events: none;
 }
+.nowbar-volume, .nowbar-volume input { pointer-events: none; }
+.nowbar-volume .icon-btn, .nowbar-volume .prail { pointer-events: auto; }
 
 .nowbar-volume { display: none; align-items: center; gap: 4px; flex: 0 0 132px; }
 .nowbar-actions { display: flex; align-items: center; gap: 0; flex: 0 0 auto; margin-left: auto; }
@@ -908,17 +916,55 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   /* la file défile horizontalement au doigt ; un glissement vertical
      dessus n'est pas à elle — il remonte à la feuille, qui se ferme */
   touch-action: pan-x;
-  padding: 10px 20px calc(14px + var(--safe-b));
+  /* de la place au-dessus : le morceau en cours se soulève de 3 px et
+     son liseré déborde de 4 px — sans ça, il serait rogné par le
+     conteneur qui défile */
+  padding: 16px 20px calc(14px + var(--safe-b));
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
 .nowplaying-queue::-webkit-scrollbar { display: none; }
+/* ═══ la file au bas du plein écran ═══
+   Le morceau en cours doit se distinguer sans ambiguïté : les autres
+   s'effacent (image et titre), le sien reste net, légèrement plus grand,
+   cerclé de la couleur de l'ambiance et surmonté d'une barre. On ne
+   compte pas sur l'opacité seule — sur un fond clair elle ne se voit
+   presque pas. */
 .queue-item {
   flex: 0 0 auto; width: 96px; background: none; border: 0; padding: 0;
-  cursor: pointer; text-align: left; opacity: .55; transition: opacity .2s;
+  cursor: pointer; text-align: left;
+  opacity: .5;
+  transition: opacity .24s var(--ease), transform .24s var(--ease);
 }
-.queue-item[data-active='true'] { opacity: 1; }
-.queue-item img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; }
+.queue-item img {
+  width: 96px; height: 96px; object-fit: cover; border-radius: 10px;
+  transition: box-shadow .24s var(--ease), filter .24s var(--ease);
+  filter: saturate(.75) brightness(.92);
+}
+.queue-item .queue-title { transition: color .24s var(--ease), font-weight .2s; }
+
+.queue-item[data-active='true'] {
+  opacity: 1;
+  transform: translateY(-3px);
+}
+.queue-item[data-active='true'] img { filter: none; }
+.queue-item[data-active='true'] .queue-title {
+  color: var(--ink);
+  font-weight: 600;
+}
+/* La marque de lecture : un anneau net de 2,5 px, à 4 px de l'image.
+   Il est posé DERRIÈRE la pochette (z-index -1) : l'image le recouvre
+   en son centre et il ne reste que le liseré. Un `box-shadow` sur
+   l'image, lui, restait caché sous les images voisines — la file les
+   fait se chevaucher de 2 px. */
+.queue-item { position: relative; }
+.queue-item[data-active='true']::before {
+  content: '';
+  position: absolute; z-index: -1;
+  left: -4px; right: -4px; top: -4px; bottom: -4px;
+  border-radius: 14px;
+  box-shadow: 0 0 0 2.5px hsl(var(--p-h, 352) var(--p-s, 62%) 52%);
+}
 .queue-title {
   display: block; font-size: 11.5px; margin-top: 6px; color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1230,13 +1276,16 @@ html[data-mode='light'] .welcome-glow i { opacity: .22; }
   font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
   color: var(--ink); margin-bottom: 38px;
 }
+/* le logo : la pastille de l'icône (le vrai fichier fourni), arrondie
+   comme sur un écran d'accueil de téléphone. Elle a son propre fond
+   sombre, donc elle se lit identiquement sur crème et sur noir. */
 .welcome-mark {
-  width: 30px; height: 30px; border-radius: 999px; background: var(--ink);
-  display: flex; align-items: flex-end; justify-content: center; gap: 2.5px; padding-bottom: 9px;
+  width: 36px; height: 36px;
+  display: block; border-radius: 11px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, #fff 12%, transparent),
+    0 6px 18px -6px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.welcome-mark i { width: 2.5px; border-radius: 2px; background: var(--bg); height: 11px; }
-.welcome-mark i:nth-child(2) { height: 7px; }
-.welcome-mark i:nth-child(3) { height: 9px; background: var(--accent); }
 
 .welcome-title {
   margin: 0; font-size: clamp(30px, 7vw, 38px); font-weight: 400;
@@ -2223,7 +2272,7 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
 }
 
 .sb-gen-title {
-  margin: 24px 0 12px;
+  margin: 20px 0 12px;
   font-size: clamp(30px, 6vw, 54px);
   font-weight: 300; letter-spacing: -.04em; line-height: 1;
 }
@@ -2276,19 +2325,25 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
   position: absolute; inset: 0;
   pointer-events: none;
 }
+/* Le voile : une nappe douce au centre de l'écran, là où se posent le
+   titre et la ligne d'étape. Transparent à 34 % pour laisser le cœur
+   de la boule vivant, dense à 74 % pour que le texte reste parfaitement
+   lisible — même sur un cœur magenta très saturé. */
 .sb-gen[data-mode='light'] .sb-gen-veil {
-  background: radial-gradient(ellipse 34% 22% at 50% 49%,
-    rgba(253,247,240,.46) 0%,
-    rgba(253,247,240,.30) 46%,
-    rgba(253,247,240,.10) 72%,
-    rgba(253,247,240,0) 88%);
+  background: radial-gradient(ellipse 62% 15% at 50% 50%,
+    rgba(253,247,240,.30) 0%,
+    rgba(253,247,240,.42) 32%,
+    rgba(253,247,240,.52) 56%,
+    rgba(253,247,240,.34) 78%,
+    rgba(253,247,240,0) 100%);
 }
 .sb-gen[data-mode='dark'] .sb-gen-veil {
-  background: radial-gradient(ellipse 34% 22% at 50% 49%,
-    rgba(8,6,10,.52) 0%,
-    rgba(8,6,10,.34) 46%,
-    rgba(8,6,10,.12) 72%,
-    rgba(8,6,10,0) 88%);
+  background: radial-gradient(ellipse 62% 15% at 50% 50%,
+    rgba(8,6,10,.32) 0%,
+    rgba(8,6,10,.48) 32%,
+    rgba(8,6,10,.60) 56%,
+    rgba(8,6,10,.38) 78%,
+    rgba(8,6,10,0) 100%);
 }
 
 /* ── le diagnostic des modèles (Réglages) ────────────────────────
