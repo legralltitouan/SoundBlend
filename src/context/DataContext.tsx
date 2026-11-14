@@ -325,7 +325,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
              seulement à l'écran qui l'a vu naître */
           methode: {
             kind: geminiService.derniereMethode,
-            model: /Composé par (gemini[^\s.]+)/.exec(geminiService.derniereNote)?.[1],
+            model: geminiService.dernierModele || undefined,
             detail: geminiService.derniereNote,
           },
         };

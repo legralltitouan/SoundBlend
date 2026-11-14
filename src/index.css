@@ -518,6 +518,11 @@ html[data-mode='light'] .ytm-search { background: color-mix(in srgb, #000 5%, tr
   max-width: 520px;
 }
 .sb-blend-origin b { color: var(--ink); font-weight: 600; }
+/* le nom exact du modèle, en retrait : utile le jour où un modèle est à sec */
+.sb-blend-origin-model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--ink-3); letter-spacing: -.01em;
+}
 .sb-blend-origin svg { flex: none; margin-top: 1.5px; }
 .sb-blend-origin[data-kind='gemini'] svg { color: var(--accent); }
 .sb-blend-origin[data-kind='voisinage'] {

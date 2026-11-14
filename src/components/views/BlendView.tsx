@@ -295,6 +295,9 @@ export const BlendView: React.FC = () => {
                 : <Compass size={13} strokeWidth={1.9} />}
               <span>
                 <b>{blend.methode.kind === 'gemini' ? 'Composé par Gemini' : 'Composé par voisinage YouTube'}</b>
+                {blend.methode.kind === 'gemini' && blend.methode.model && (
+                  <span className="sb-blend-origin-model"> {blend.methode.model}</span>
+                )}
                 {' — '}
                 {blend.methode.kind === 'gemini'
                   ? 'le modèle a choisi et justifié chaque morceau.'

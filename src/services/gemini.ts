@@ -97,7 +97,11 @@ function rankOf(m: ApiModel): number {
   const n = m.name.replace(/^models\//, '').toLowerCase();
   /* la génération arrive en tête : les versions numériques récentes
      d'abord, les variantes génériques (`latest`) ensuite, le reste après */
-  const gen = (n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1];
+  /* La version est le premier nombre du nom, quel que soit le préfixe.
+     Avant, seule la forme `gemini-<n>` était reconnue : un modèle comme
+     `gemma-4-27b` tombait à la version 0 et se retrouvait **dernier** de
+     la file, derrière des modèles plus anciens — sans aucune raison. */
+  const gen = (n.match(/(\d+(?:\.\d+)?)/) || [])[1];
   const version = parseFloat(gen || '0');
   /* pro = 0, flash = 1 : plus le chiffre est petit, plus le modèle est
      capable — et `rankOf` trie du plus petit au plus grand. Le signe
@@ -125,13 +129,22 @@ const ENGINE_TTL = 30 * 60 * 1000;
    C'est en mémoire seulement : un rechargement de page redonne sa chance
    au modèle (le quota a pu se rouvrir entre-temps). */
 const quotaOut = new Map<string, number>();
-const QUOTA_TTL = 10 * 60 * 1000;
+/* Un quota **journalier** ne se rouvre pas en dix minutes : on écarte le
+   modèle pour la journée (minuit, heure locale de l'auditeur). Un blocage
+   de débit, lui, retombe en une minute — la distinction se fait sur le
+   message de Google, voir `noteQuota`. */
+const QUOTA_DAY = () => {
+  const minuit = new Date();
+  minuit.setHours(24, 0, 1, 0);
+  return minuit.getTime();
+};
 const outOfQuota = (model: string) => {
   const until = quotaOut.get(model) || 0;
   if (until && Date.now() > until) { quotaOut.delete(model); return false; }
   return !!until;
 };
-const noteQuota = (model: string) => quotaOut.set(model, Date.now() + QUOTA_TTL);
+const noteQuota = (model: string, journalier: boolean) =>
+  quotaOut.set(model, journalier ? Math.min(QUOTA_DAY(), Date.now() + 24 * 3600 * 1000) : Date.now() + 60 * 1000);
 
 /**
  * Les modèles de texte que cette clé peut appeler, du plus puissant au
@@ -422,12 +435,19 @@ export class GeminiService {
        pas trois. Trois tentatives qui échouent sur le même mur, c'est
        ce qui remplissait la console de cinq 429 et donnait un blend
        réduit aux piliers sans qu'on sache pourquoi. */
-    /* le modèle du moment, et UNE réserve — pas trois candidats qui
-       échoueront sur le même mur */
+    /* ── toute la file, pas seulement deux ──
+       L'offre gratuite compte son quota **par modèle**. Quand le modèle
+       phare est à sec, un modèle plus léger a souvent encore son quota
+       entier (mesuré chez l'auditeur : Hydrogen 23/20, 3.8 Flash 33/20,
+       3.6 Flash 22/20 — mais 3.5 Flash Lite 78/500, intact). S'arrêter
+       après deux candidats, c'était renoncer au blend alors qu'il en
+       restait six capables de le composer. On les essaie dans l'ordre,
+       et on s'arrête au premier qui répond : en pratique un ou deux
+       appels, pas huit. */
     const chain: { model: string; key: string }[] = [];
     try {
       const models = await engineQueue(apiKey);
-      chain.push(...models.slice(0, 2).map((m) => ({ model: m, key: apiKey })));
+      chain.push(...models.map((m) => ({ model: m, key: apiKey })));
     } catch { /* la liste n'a pas répondu : on le dira plus bas */ }
     if (!chain.length) {
       onProgress?.('Aucun modèle de texte disponible — on compose par voisinage sur YouTube.');
@@ -445,6 +465,7 @@ export class GeminiService {
 
     const call: CallModel = async (prompt, temperature, budgetMs) => {
       let last: any = null;
+      let journalier = false;
       for (const step of chain) {
         /* un modèle déjà à sec n'est pas rappelé : sinon chaque appel du
            blend repayait un 429 sur le même modèle, cinq fois de suite */
@@ -463,15 +484,33 @@ export class GeminiService {
              réserve. La clé refusée ou invalide, elle, condamne le
              couple clé+modèle : c'est la clé qu'on abandonne. */
           if (st === 429) {
-            noteQuota(step.model);
+            /* « par jour » ou « par minute » : le message de Google le dit */
+            journalier = /per.?day|PerDay|daily/i.test(String(e?.detail || ''));
+            noteQuota(step.model, journalier);
             dernierMur = explain(e);
             continue;
           }
           if (st === 403 || st === 401) {
+            /* la clé est morte : aucun autre modèle ne la ressuscitera */
             epuisees.add(step.key);
             dernierMur = explain(e);
-            continue;
+            break;
           }
+        }
+      }
+      /* Tout a échoué, mais pour du **débit** et non du quota du jour :
+         le blocage retombe en une minute. Une seule attente, un seul
+         nouvel essai — au-delà, insister serait la bagarre qu'on s'est
+         interdite. */
+      if (last && !journalier && epuisees.size === 0) {
+        onProgress?.('Le débit de Gemini est saturé — un instant, on réessaie.');
+        quotaOut.clear();
+        await new Promise((r) => setTimeout(r, 12000));
+        for (const step of chain) {
+          try {
+            const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
+            if (raw) { rememberEngine(step.key, step.model); modeleQuiRepond = step.model; return raw; }
+          } catch (e: any) { last = e; if (e?.status === 429) continue; break; }
         }
       }
       if (last) throw last;
@@ -734,6 +773,7 @@ export class GeminiService {
     const parIA = this.derniereMethode === 'gemini'
       && !!(modeleQuiRepond && (dives.length || fresh.length));
     this.derniereMethode = parIA ? 'gemini' : 'voisinage';
+    this.dernierModele = parIA ? modeleQuiRepond : '';
     this.derniereNote = parIA
       ? `Composé par ${modeleQuiRepond}.`
       : (dernierMur
@@ -900,6 +940,8 @@ export class GeminiService {
      gardée : `methode` est posée par le chemin qui a réellement servi,
      `note` est la phrase à montrer. `DataContext` les attache au blend. */
   public derniereMethode: 'gemini' | 'voisinage' = 'gemini';
+  /** le modèle qui a réellement répondu — `gemini-3.5-flash-lite`, pas « gemini » */
+  public dernierModele = '';
   public derniereNote = '';
 
   /** Sans modèle : on ne fabrique rien, on rend au moins les amorces. */
