@@ -41,6 +41,10 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
 
   const playerRef = useRef<any>(null);
+  /* l'intention de lecture : « je veux que ça joue », décidée par la
+     personne, jamais par un événement du lecteur (voir plus bas) */
+  const wantedPlay = useRef(false);
+  const markWanted = (v: boolean) => { wantedPlay.current = v; };
   const playerReady = useRef<boolean>(false);
   const pendingVideo = useRef<string | null>(null);
   const intervalRef = useRef<any>(null);
@@ -114,6 +118,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               const d = playerRef.current?.getDuration?.() || 0;
               if (d > 0) setDuration(d);
             } else if (event.data === 2) {
+              /* une pause vient du lecteur. Si l'onglet est caché, c'est le
+                 navigateur qui a suspendu la page — pas la personne : on
+                 garde l'intention et le guetteur relancera. */
               setIsPlaying(false);
             } else if (event.data === 0) {
               advance.current();
@@ -150,6 +157,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCurrentIndex(nextIdx);
     setCurrentTrack(next);
     setProgress(0);
+    markWanted(true);
     setIsPlaying(true);
     if (next.videoId) ensurePlayer(next.videoId);
   };
@@ -170,8 +178,18 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      retour au premier plan, si elle voulait écouter, on relance — après
      un court délai, parce qu'iOS refuse la reprise dans la même image
      que le retour de l'onglet. */
-  const wantedPlay = useRef(false);
-  wantedPlay.current = isPlaying;
+  /* L'intention, pas l'état affiché.
+     `isPlaying` suit le lecteur : quand le navigateur met l'onglet en
+     veille, YouTube se met en pause et `onStateChange` nous prévient —
+     `isPlaying` passe donc à false **dans l'onglet qu'on vient de
+     quitter**. Au retour, `wantedPlay` était devenu faux, et la reprise
+     ne faisait rien. C'était la cause du « la musique s'arrête quand je
+     réduis l'app ».
+
+     L'intention est maintenant explicite : elle ne change que sur une
+     action de la personne (lecture, pause) ou en fin de file — jamais
+     sur un événement du lecteur. */
+  const lastResume = useRef(0);
 
   useEffect(() => {
     const resume = () => {
@@ -180,26 +198,53 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!p) return;
       try {
         const state = p.getPlayerState?.();
-        /* 1 = en lecture, 3 = mise en tampon ; dans ces deux cas, la
-           musique tourne déjà — ne rien faire, sinon on la fait sauter */
+        /* 1 = en lecture, 3 = en tampon, 5 = en file d'attente juste
+           après un `playVideo` : on laisse faire, sinon on la fait sauter */
         if (state === 1 || state === 3) return;
         p.playVideo?.();
       } catch { /* lecteur pas encore prêt : rien à faire */ }
     };
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
-      /* deux essais : le premier tout de suite (Android), le second une
-         seconde plus tard (iOS a besoin que l'onglet soit vraiment actif) */
+      /* Le navigateur mobile peut mettre plusieurs secondes à rendre la
+         main au lecteur — et il le remet parfois en pause une seconde
+         après la reprise. On insiste donc à quatre moments, pendant les
+         six premières secondes. Chaque essai vérifie l'état réel : dès
+         que la musique tourne, les suivants ne font rien. */
+      lastResume.current = Date.now();
       resume();
-      window.setTimeout(resume, 900);
+      [400, 1200, 2600, 5000].forEach((ms) => window.setTimeout(resume, ms));
     };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
     window.addEventListener('pageshow', onVisible);
+
+    /* ── le guetteur ──
+       Certains navigateurs mobiles ne se contentent pas de mettre en
+       pause au passage en arrière-plan : ils remettent en pause à chaque
+       fois qu'ils reprennent la main. Un minuteur discret surveille
+       l'état réel quand l'onglet est caché et qu'une lecture était
+       voulue, et relance s'il le faut. Il ne tourne que tant que la
+       personne veut écouter. */
+    const veille = window.setInterval(() => {
+      if (!wantedPlay.current) return;
+      if (document.visibilityState === 'visible') return;
+      const p = playerRef.current;
+      if (!p) return;
+      /* pas de limite de temps : la personne a demandé de la musique.
+         Seul le retour au premier plan arrête ce minuteur. */
+      try {
+        const state = p.getPlayerState?.();
+        if (state === 1 || state === 3) return;
+        p.playVideo?.();
+      } catch { /* ignore */ }
+    }, 1500);
+
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
       window.removeEventListener('pageshow', onVisible);
+      window.clearInterval(veille);
     };
   }, []);
 
@@ -276,6 +321,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCurrentTrack(track);
     setProgress(0);
 
+    markWanted(true);
     setIsPlaying(true);
     if (!track.videoId) return; // fiche sans vidéo : rien à charger
     ensurePlayer(track.videoId);
@@ -285,9 +331,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!currentTrack) return;
 
     if (isPlaying) {
+      /* la personne appuie sur pause : c'est elle qui décide, on ne
+         relancera pas en arrière-plan */
+      markWanted(false);
       playerRef.current?.pauseVideo?.();
       setIsPlaying(false);
     } else {
+      markWanted(true);
       playerRef.current?.playVideo?.();
       setIsPlaying(true);
     }

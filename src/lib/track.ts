@@ -132,3 +132,38 @@ export const cleanTitle = (raw: string): { title: string; artist?: string } => {
 
   return { title: s || raw.trim(), artist };
 };
+
+/* ═══════════════════════════════════════════════════════════════
+   Le résultat de recherche correspond-il au morceau demandé ?
+
+   Le modèle écrit « So », YouTube rend « So Why? » ; le modèle écrit
+   « Territory », YouTube rend « TERRITORY (Official Video) ». Ce sont les
+   bons morceaux. En revanche « Genesis » demandé et « D.A.N.C.E. » rendu,
+   ce n'est pas le même titre — et ce faux positif coûtait une place dans
+   le blend, sans que personne ne comprenne pourquoi.
+
+   La comparaison est donc tolérante : elle refuse seulement ce qui n'a
+   manifestement rien à voir.
+   ═══════════════════════════════════════════════════════════════ */
+export const matchesAsked = (asked: string, askedArtist: string, got: string, gotArtist: string): boolean => {
+  const a = norm(asked);
+  const g = norm(got);
+  if (!a || !g) return true;                        // rien à comparer : on fait confiance
+  if (g.includes(a) || a.includes(g)) return true;
+
+  const mots = (s: string) => s.split(' ').filter((w) => w.length > 2);
+  const ma = mots(a);
+  const mg = new Set(mots(g));
+  if (ma.length && ma.every((w) => mg.has(w))) return true;
+  /* au moins la moitié des mots significatifs du titre demandé */
+  if (ma.length && ma.filter((w) => mg.has(w)).length / ma.length >= 0.5) return true;
+
+  /* l'artiste est le bon : un sous-titre sur le même artiste est plausible */
+  const artA = norm(askedArtist);
+  const artG = norm(gotArtist);
+  if (artA && artG && (artG.includes(artA) || artA.includes(artG))) {
+    const premier = ma[0];
+    if (premier && g.startsWith(premier)) return true;
+  }
+  return false;
+};

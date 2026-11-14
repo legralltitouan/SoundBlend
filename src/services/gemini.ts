@@ -1,7 +1,8 @@
 import { BlendConfig, TasteMemory, Track, TrackCategory } from '../types';
 import { getStoredSettings, getSeenTracks, rememberSeenTrack, getStoredPortrait } from './storage';
 import { youtubeService, withTimeout } from './youtube';
-import { dedupeTracks, uniqueByVideo, norm } from '../lib/dedupe';
+import { dedupeTracks, uniqueByVideo } from '../lib/dedupe';
+import { matchesAsked, norm } from '../lib/track';
 import {
   analysisPrompt, parseAnalysis, toPortrait, rememberPortrait, portraitFor,
   listPrompt, parsePicks, splitCounts, replacePrompt,
@@ -411,7 +412,11 @@ export class GeminiService {
       if (count <= 0) return [] as Pick[];
       const label = role === 'anchor' ? 'piliers' : role === 'deep_dive' ? 'faces cachées' : 'découvertes';
       onProgress?.(`Sélection des ${count} ${label}…`);
-      const raw = await call(listPrompt(role, count, seedTracks, analysis!, tasteMemory, forbiddenList()), role === 'fresh' ? 0.85 : 0.7, 26000)
+      /* On demande de la marge : le modèle propose plus que nécessaire,
+         parce que la vérification YouTube en écartera une partie. Sans
+         cette marge, deux titres introuvables laissaient deux trous. */
+      const marge = Math.min(12, count + Math.max(2, Math.round(count * 0.6)));
+      const raw = await call(listPrompt(role, marge, seedTracks, analysis!, tasteMemory, forbiddenList()), role === 'fresh' ? 0.85 : 0.7, 26000)
         .catch(() => null);
       const { analyse, titres } = parsePicks(raw);
       if (analyse) onProgress?.(analyse);
@@ -436,6 +441,31 @@ export class GeminiService {
       }
       console.debug(`[curateur] ${role} : ${titres.length} proposés, ${clean.length} retenus (demandé ${count})`,
         titres.map((t) => `${t.title}/${t.artist}`));
+      /* pas assez ? une seconde passe, une seule fois, avec les titres
+         déjà retenus ajoutés aux interdits — le modèle ne peut donc pas
+         répéter ce qu'il vient de proposer. C'est ce qui évite un blend
+         à moitié vide alors que la clé et le modèle fonctionnent. */
+      if (clean.length < count) {
+        const reste = count - clean.length;
+        const raw2 = await call(listPrompt(role, reste + 2, seedTracks, analysis!, tasteMemory, forbiddenList()), 0.9, 24000)
+          .catch(() => null);
+        const suite = parsePicks(raw2).titres;
+        for (const p of suite) {
+          const keyA = `${p.artist} — ${p.title}`.toLowerCase().trim();
+          const keyB = p.title.toLowerCase().trim();
+          if (forbidden.has(keyA) || forbidden.has(keyB)) continue;
+          if (bannedArtists.has(p.artist.toLowerCase().trim())) continue;
+          if (role === 'anchor' && !seedTracks.some((s2) => s2.title.toLowerCase().trim() === keyB)) continue;
+          if (role === 'fresh' && seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
+          if (role === 'deep_dive' && !seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
+          if (clean.some((c) => `${c.artist} — ${c.title}`.toLowerCase() === keyA)) continue;
+          clean.push(p);
+          forbidden.add(keyA); forbidden.add(keyB);
+          rememberSeenTrack(p.title, p.artist);
+          if (clean.length >= count) break;
+        }
+        if (suite.length) console.debug(`[curateur] ${role} : 2e passe, ${suite.length} de plus, total ${clean.length}/${count}`);
+      }
       if (!clean.length) {
         onProgress?.(
           role === 'deep_dive'
@@ -467,6 +497,10 @@ export class GeminiService {
 
     /* ═══ 4. vérifier sur YouTube, puis rassembler ═══ */
     onProgress?.('Vérification des titres sur YouTube…');
+    /* Les pertes sont comptées : si des places restent vides, c'est
+       presque toujours l'un de ces trois murs — et le dire à l'écran
+       évite le « pourquoi seulement les piliers ? ». */
+    const pertes = { introuvable: 0, titreDouteux: 0, doublon: 0 };
     const toTrack = async (p: Pick, cat: TrackCategory): Promise<Track | null> => {
       const seed = seedTracks.find(
         (s) => s.title.toLowerCase().trim() === p.title.toLowerCase().trim()
@@ -475,20 +509,29 @@ export class GeminiService {
       if (seed) return { ...seed, category: cat, rationale: p.rationale || seed.rationale };
       const found = await youtubeService.findPlayable(p.title, p.artist).catch(() => null);
       if (!found?.videoId) {
+        pertes.introuvable += 1;
         console.debug(`[curateur] ${p.title} / ${p.artist} : introuvable sur YouTube`);
         return null;
       }
-      /* Le titre rendu par YouTube doit être CELUI demandé : sans ce
-         contrôle, la recherche renvoyait le tube de l'artiste (« Genesis »
-         demandé, « D.A.N.C.E. » rendu) — donc un morceau déjà dans le
-         blend, écarté comme doublon, et une place perdue. */
-      const demande = norm(p.title);
-      const rendu = norm(found.title || '');
-      if (demande && rendu && !rendu.includes(demande) && !demande.includes(rendu)) {
-        console.debug(`[curateur] ${p.title} : YouTube a rendu « ${found.title} », écarté`);
+      /* Le titre rendu doit correspondre à celui demandé — sinon la
+         recherche renvoie le tube de l'artiste (« Genesis » demandé,
+         « D.A.N.C.E. » rendu), qui sera ensuite éliminé comme doublon :
+         une place perdue, sans explication.
+
+         Mais la comparaison doit être TOLÉRANTE : « So » demandé face à
+         « So Why? » rendu, « Territory » face à « TERRITORY (Official
+         Video) » ou « Waters of Nazareth » face à sa version « WWW » ne
+         sont pas des erreurs. On refuse donc seulement un résultat qui
+         n'a manifestement rien à voir : ni le titre, ni l'artiste. */
+      if (!matchesAsked(p.title, p.artist, found.title || '', found.artist || '')) {
+        pertes.titreDouteux += 1;
+        console.debug(`[curateur] ${p.title} / ${p.artist} : YouTube a rendu « ${found.title} » — écarté`);
         return null;
       }
-      if (seedTracks.some((s2) => s2.videoId && s2.videoId === found.videoId)) return null;
+      if (seedTracks.some((s2) => s2.videoId && s2.videoId === found.videoId)) {
+        pertes.doublon += 1;
+        return null;
+      }
       return {
         id: `gen-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         videoId: found.videoId,
@@ -528,9 +571,7 @@ export class GeminiService {
       + `${plur(n('anchor'), 'pilier', 'piliers')}, `
       + `${plur(n('deep_dive'), 'face cachée', 'faces cachées')}, `
       + `${plur(n('fresh'), 'découverte', 'découvertes')}.`
-      + (manque > 0
-        ? ` ${plur(manque, 'place reste vide', 'places restent vides')}, faute de titres crédibles.`
-        : ''),
+      + (manque > 0 ? ` ${plur(manque, 'place reste vide', 'places restent vides')} — ${raisonDesVides(pertes)}.` : ''),
     );
     return unique;
   }
@@ -835,6 +876,25 @@ export class GeminiService {
 
     return null;
   }
+}
+
+
+
+/**
+ * Pourquoi des places sont restées vides ?
+ *
+ * Presque toujours l'un de ces trois murs : YouTube ne trouve pas le
+ * titre, il rend un autre morceau, ou c'est déjà un doublon. Le dire
+ * franchement vaut mieux qu'un « faute de titres crédibles » qui laisse
+ * penser que le moteur n'a rien tenté.
+ */
+function raisonDesVides(p: { introuvable: number; titreDouteux: number; doublon: number }): string {
+  const murs: string[] = [];
+  if (p.introuvable) murs.push(`${p.introuvable} introuvable${p.introuvable > 1 ? 's' : ''} sur YouTube`);
+  if (p.titreDouteux) murs.push(`${p.titreDouteux} résultat${p.titreDouteux > 1 ? 's' : ''} qui ne correspondai${p.titreDouteux > 1 ? 'ent' : 't'} pas au titre`);
+  if (p.doublon) murs.push(`${p.doublon} déjà présent${p.doublon > 1 ? 's' : ''}`);
+  if (!murs.length) return 'aucun titre proposé n’a passé les vérifications';
+  return murs.join(', ');
 }
 
 /**

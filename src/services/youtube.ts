@@ -1,7 +1,8 @@
 import { Playlist, Track, UserProfile } from '../types';
 import { MOCK_PLAYLISTS } from '../data/mockData';
 import { getStoredSettings } from './storage';
-import { cleanTitle } from '../lib/track';
+import { cleanTitle, matchesAsked } from '../lib/track';
+import { searchWithoutKey } from './ytFallback';
 
 /* Aucun appel réseau ne doit pouvoir pendre indéfiniment : au-delà de
    dix secondes, on considère que c'est perdu et on passe à la suite. */
@@ -366,22 +367,34 @@ export class YouTubeService {
     const settings = getStoredSettings();
     const apiKey = settings.youtubeApiKey;
 
+    /* ── choisir le BON résultat parmi les trois ──
+       `maxResults=3`, mais on ne prenait que le premier. Un titre court
+       (« So », « Genesis ») ramène souvent un repiquage en tête de liste
+       avant l'original : on parcourt donc les trois et on garde celui qui
+       correspond au titre demandé. Si aucun ne correspond, on rend `null`
+       et l'appelant passe au titre suivant ou à une autre formulation —
+       c'est préférable à un morceau qui n'a rien à voir. */
     const read = (data: any) => {
-      const item = (data.items || []).find((i: any) => i?.id?.videoId);
-      if (!item) return null;
-      const videoId = item.id.videoId as string;
-      const rawTitle = decodeEntities(item.snippet?.title || title);
-      const cleaned = cleanTitle(rawTitle);
-      return {
-        videoId,
-        title: cleaned.title || title,
-        artist: cleaned.artist
-          || decodeEntities(item.snippet?.videoOwnerChannelTitle?.replace(' - Topic', '')
-            || item.snippet?.channelTitle?.replace(' - Topic', '')
-            || artist),
+      const items: any[] = (data.items || []).filter((i: any) => i?.id?.videoId);
+      if (!items.length) return null;
+      const pickOne = (item: any) => {
+        const videoId = item.id.videoId as string;
+        const rawTitle = decodeEntities(item.snippet?.title || title);
+        const cleaned = cleanTitle(rawTitle);
+        return {
+          videoId,
+          title: cleaned.title || title,
+          artist: cleaned.artist
+            || decodeEntities(item.snippet?.videoOwnerChannelTitle?.replace(' - Topic', '')
+              || item.snippet?.channelTitle?.replace(' - Topic', '')
+              || artist),
+        };
       };
+      const scored = items.map(pickOne);
+      const best = scored.find((c) => matchesAsked(title, artist, c.title, c.artist));
+      if (!best) return null;
+      return best;
     };
-
     if (apiKey) {
       try {
         const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&q=${encodeURIComponent(q)}&maxResults=3&key=${apiKey}`;
@@ -410,8 +423,29 @@ export class YouTubeService {
       }
     }
 
-    /* rien de trouvé : on retient le fait, pour ne pas redépenser de quota
-       sur la même requête dans la minute qui suit */
+    /* ── la deuxième voie, sans clé ──
+       Sans clé API (ou avec un quota épuisé), les deux tentatives
+       ci-dessus échouent et l'appelant recevait `null` pour CHAQUE titre
+       proposé par le modèle : le blend ne gardait alors que les piliers.
+       Une instance Piped rend le même service, sans clé. */
+    const fallback = await searchWithoutKey(`${artist} ${title}`).catch(() => null);
+    if (fallback?.videoId) {
+      const cleaned = cleanTitle(fallback.title || title);
+      const hit = {
+        videoId: fallback.videoId,
+        title: cleaned.title || title,
+        artist: cleaned.artist || fallback.artist || artist,
+        durationSeconds: fallback.durationSeconds,
+        durationFormatted: fallback.durationSeconds
+          ? `${Math.floor(fallback.durationSeconds / 60)}:${String(fallback.durationSeconds % 60).padStart(2, '0')}`
+          : undefined,
+      };
+      searchCache.set(cacheKey, hit.videoId);
+      return hit;
+    }
+
+    /* rien de trouvé nulle part : on retient le fait, pour ne pas
+       redépenser de quota sur la même requête dans la minute qui suit */
     searchCache.set(cacheKey, '');
     return null;
   }
