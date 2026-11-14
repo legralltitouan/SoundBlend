@@ -1,9 +1,9 @@
 import { Playlist, Track, UserProfile } from '../types';
 import { MOCK_PLAYLISTS } from '../data/mockData';
 import { getStoredSettings } from './storage';
-import { cleanTitle, matchesAsked } from '../lib/track';
+import { cleanTitle, matchesAsked, norm } from '../lib/track';
 import type { Video } from './search';
-import { pipedSearch } from './search';
+import { pipedSearch, verifyVideo } from './search';
 
 /* Aucun appel réseau ne doit pouvoir pendre indéfiniment : au-delà de
    dix secondes, on considère que c'est perdu et on passe à la suite. */
@@ -23,6 +23,10 @@ const decodeEntities = (s: string) =>
   (s || '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&gt;/g, '>').replace(/&lt;/g, '<');
 
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
+/* une vidéo vérifiée l'est pour une heure : ni quota, ni clé, mais pas
+   besoin de la redemander à chaque morceau du blend non plus */
+const jouableCache = new Map<string, { at: number; val: { ok: boolean | null; raison: string; duree?: number; titre?: string; artiste?: string } }>();
+const JOUABLE_TTL = 60 * 60 * 1000;
 const TOKEN_KEY = 'soundblend_yt_token';
 const TOKEN_EXP_KEY = 'soundblend_yt_token_exp';
 const USER_KEY = 'soundblend_yt_user';
@@ -349,6 +353,23 @@ export class YouTubeService {
   }
 
   /**
+   * ─────────── réparer un identifiant mort ───────────
+   *
+   * Le cas de l'auditeur : un blend composé il y a quelques jours, dont
+   * une partie des vidéos ne se lit plus — retirées, bloquées, ou
+   * réservées. Le lecteur les traversait une par une, en silence.
+   *
+   * On redemande donc à YouTube le morceau, par son titre et son
+   * artiste, et on garde le premier résultat **réellement jouable**.
+   * `null` = rien à faire : ce morceau-là ne s'écoute pas ici. On ne
+   * remplace jamais par autre chose que le même morceau.
+   */
+  public async reparerVideoId(title: string, artist: string): Promise<string | null> {
+    const found = await this.findPlayable(title, artist).catch(() => null);
+    return found?.videoId ?? null;
+  }
+
+  /**
    * Cherche un morceau jouable et rend ce qu'on a réellement trouvé :
    * identifiant, titre propre, artiste, durée. Sert au remplacement, qui a
    * besoin de vérifier qu'une proposition existe avant de l'afficher.
@@ -356,12 +377,12 @@ export class YouTubeService {
   public async findPlayable(
     title: string,
     artist: string,
-  ): Promise<{ videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string } | null> {
+  ): Promise<{ videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string; verifie?: boolean } | null> {
     const cacheKey = `find::${artist} - ${title}`.toLowerCase().trim();
     const cached = searchCache.get(cacheKey);
     if (cached !== undefined) {
       if (!cached) return null;
-      return { videoId: cached, title, artist };
+      return { videoId: cached, title, artist, verifie: true };
     }
 
     const settings = getStoredSettings();
@@ -377,6 +398,32 @@ export class YouTubeService {
         : undefined,
     });
 
+    /* ── le dernier verrou : le morceau se lit-il vraiment ? ──
+       Un identifiant trouvé n'est pas un morceau écoutable. Avant de le
+       rendre, on demande au lecteur — sans clé, sans quota — s'il peut
+       jouer cette vidéo depuis ce pays. Une réponse claire « non » (vidéo
+       réservée, bloquée, retirée, direct) écarte le candidat et on
+       cherche le suivant. C'est ce qui remplit la file du lecteur de
+       morceaux qui sonnent au lieu de morceaux qu'on saute. */
+    const jouable = async (v: { videoId: string; title?: string; artist?: string; durationSeconds?: number }) => {
+      const test = await this.estJouable(v.videoId).catch(() => null);
+      if (test && test.ok === false) {
+        console.debug(`[YouTube] ${title} / ${artist} : « ${test.raison} » — écarté`);
+        return null;
+      }
+      /* la durée réelle, quand on l'apprend là : le blend compte juste */
+      return {
+        videoId: v.videoId,
+        title: v.title || title,
+        artist: v.artist || artist,
+        durationSeconds: v.durationSeconds || test?.duree,
+        durationFormatted: (v.durationSeconds || test?.duree)
+          ? `${Math.floor((v.durationSeconds || test!.duree!) / 60)}:${String((v.durationSeconds || test!.duree!) % 60).padStart(2, '0')}`
+          : undefined,
+        verifie: true,
+      };
+    };
+
     /* ── 1. l'API officielle, avec la clé ──
        C'est la voie normale. On ne la tente que s'il y a une clé. */
     if (apiKey) {
@@ -389,7 +436,17 @@ export class YouTubeService {
             break;
           }
           const data = await resp.json();
-          const items: any[] = (data.items || []).filter((i: any) => i?.id?.videoId);
+          /* ── les chaînes « Artiste - Topic » d'abord ──
+             C'est le catalogue officiel de YouTube Music : pochette
+             propre, durée, et surtout des vidéos **qui s'intègrent
+             toujours**. Un clip déposé par un label peut, lui, refuser
+             l'iframe. On trie donc avant de choisir, sans changer le
+             nombre de requêtes. */
+          const items: any[] = (data.items || [])
+            .filter((i: any) => i?.id?.videoId)
+            .sort((a: any, b: any) =>
+              Number(/-\s*Topic$/.test(String(b?.snippet?.videoOwnerChannelTitle || b?.snippet?.channelTitle || '')))
+              - Number(/-\s*Topic$/.test(String(a?.snippet?.videoOwnerChannelTitle || a?.snippet?.channelTitle || ''))));
           /* plusieurs résultats : on garde celui qui correspond au titre
              demandé, pas forcément le premier de la liste */
           for (const item of items) {
@@ -397,15 +454,23 @@ export class YouTubeService {
             const cleaned = cleanTitle(rawTitle);
             const cand = {
               videoId: item.id.videoId as string,
-              title: cleaned.title || title,
+              /* le titre demandé reste le titre : YouTube rend souvent
+                 « M83 - Quatrieme (Official Audio) », et c'est ce texte-là
+                 qui finissait dans le blend au lieu du nom du morceau.
+                 On nettoie, mais on préfère le titre demandé quand la
+                 vidéo le confirme (matchesAsked ci-dessous le vérifie). */
+              title: (cleaned.title && norm(cleaned.title) !== norm(title) ? cleaned.title : title),
               artist: cleaned.artist
                 || decodeEntities(item.snippet?.videoOwnerChannelTitle?.replace(' - Topic', '')
                   || item.snippet?.channelTitle?.replace(' - Topic', '')
                   || artist),
             };
             if (matchesAsked(title, artist, cand.title, cand.artist)) {
-              searchCache.set(cacheKey, cand.videoId);
-              return cand;
+              const ok = await jouable(cand);
+              if (ok) {
+                searchCache.set(cacheKey, ok.videoId);
+                return ok;
+              }
             }
           }
         } catch (err) {
@@ -431,8 +496,11 @@ export class YouTubeService {
               artist: cleaned.artist || artist,
             };
             if (matchesAsked(title, artist, cand.title, cand.artist)) {
-              searchCache.set(cacheKey, cand.videoId);
-              return cand;
+              const ok = await jouable(cand);
+              if (ok) {
+                searchCache.set(cacheKey, ok.videoId);
+                return ok;
+              }
             }
           }
         }
@@ -448,21 +516,24 @@ export class YouTubeService {
        On essaie trois formulations, du plus précis au plus large. */
     for (const q of [`${artist} ${title}`, `${title} ${artist}`, title]) {
       const vids = await pipedSearch(q, 'music_songs');
-      const hit = vids.find((v) => matchesAsked(title, artist, v.title, v.artist))
-        || (q === title ? vids[0] : undefined);
-      if (hit) {
+      /* on essaie les candidats dans l'ordre : le premier n'est pas
+         toujours le bon, et le bon n'est pas toujours lisible ici */
+      const hits = [
+        ...vids.filter((v) => matchesAsked(title, artist, v.title, v.artist)),
+        ...(q === title && vids[0] ? [vids[0]] : []),
+      ];
+      for (const hit of hits.slice(0, 4)) {
         const cleaned = cleanTitle(hit.title || title);
-        const out = {
+        const ok = await jouable({
           videoId: hit.videoId,
           title: cleaned.title || hit.title || title,
           artist: cleaned.artist || hit.artist || artist,
           durationSeconds: hit.durationSeconds,
-          durationFormatted: hit.durationSeconds
-            ? `${Math.floor(hit.durationSeconds / 60)}:${String(hit.durationSeconds % 60).padStart(2, '0')}`
-            : undefined,
-        };
-        searchCache.set(cacheKey, out.videoId);
-        return out;
+        });
+        if (ok) {
+          searchCache.set(cacheKey, ok.videoId);
+          return ok;
+        }
       }
     }
 
@@ -472,8 +543,11 @@ export class YouTubeService {
        que les recherches ne trouvent pas. */
     const fromLists = this.searchLoadedLists(title, artist);
     if (fromLists) {
-      searchCache.set(cacheKey, fromLists.videoId);
-      return fromLists;
+      const ok = await jouable(fromLists);
+      if (ok) {
+        searchCache.set(cacheKey, ok.videoId);
+        return ok;
+      }
     }
 
     searchCache.set(cacheKey, '');
@@ -481,11 +555,62 @@ export class YouTubeService {
   }
 
   /**
+   * ─────────── le morceau est-il vraiment **jouable** ? ───────────
+   *
+   * C'est la différence entre « trouvé » et « écoutable ». Une recherche
+   * peut rendre un identifiant dont la vidéo est protégée, bloquée dans
+   * le pays, retirée, ou réservée à un abonnement : le lecteur intégré
+   * n'affichera alors rien du tout, et le morceau sera sauté — c'est
+   * exactement ce que montrait la console de l'auditeur, une liste
+   * entière traversée sans qu'une seule note ne sorte.
+   *
+   * Deux contrôles, sans clé et sans quota :
+   *   1. `oembed` dit que la vidéo existe et *peut être intégrée* ;
+   *   2. `player` (la page publique de YouTube) dit si elle est lisible
+   *      depuis ce pays : `playabilityStatus.status !== 'OK'` → le
+   *      lecteur affichera un message, pas de la musique.
+   *
+   * `null` = on ne sait pas (réseau muet, page illisible). On ne jette
+   * jamais un morceau sur un doute : seule une réponse claire « non »
+   * l'écarte. Les deux réponses sont mises en cache une heure : une
+   * vidéo qui bloque aujourd'hui ne bloquera pas forcément demain, mais
+   * pas besoin de la redemander vingt fois pendant un blend.
+   */
+  public async estJouable(videoId: string): Promise<{
+    ok: boolean | null; raison: string; duree?: number; titre?: string; artiste?: string;
+  }> {
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId || '')) return { ok: false, raison: 'identifiant invalide' };
+    const memo = jouableCache.get(videoId);
+    if (memo && Date.now() < memo.at) return memo.val;
+
+    /* ── le seul juge utilisable depuis un navigateur : oembed ──
+       `youtubei/v1/player` (la page publique du lecteur) dirait tout —
+       statut de lecture, blocage pays, refus d'intégration — mais il
+       répond 403 à un navigateur et n'envoie aucun en-tête CORS : c'est
+       une voie morte, on ne la prend pas. `oembed`, lui, répond avec
+       CORS, sans clé et sans quota, et rend exactement ce qui nous
+       intéresse : 200 = la vidéo existe **et** accepte l'intégration
+       (c'est sa raison d'être) ; 400/401/404 = elle a disparu, elle est
+       privée, ou son propriétaire refuse l'iframe — dans les trois cas
+       notre lecteur affichera un cadre vide.
+       403/5xx/réseau muet = on ne sait pas : on ne condamne pas. */
+    const meta = await verifyVideo(videoId).catch(() => null);
+    const val: { ok: boolean | null; raison: string; duree?: number; titre?: string; artiste?: string } = meta
+      ? (meta.jouable === false
+        ? { ok: false, raison: 'vidéo retirée, privée, ou intégration refusée' }
+        : { ok: true, raison: '', titre: meta.title, artiste: meta.author })
+      : { ok: null, raison: 'vérification impossible' };
+
+    jouableCache.set(videoId, { at: Date.now() + JOUABLE_TTL, val });
+    return val;
+  }
+
+  /**
    * Cherche un morceau dans les listes de lecture **déjà en mémoire**
    * (aucun appel réseau, aucun quota). Sert de dernier recours, et de
    * premier recours quand la clé YouTube manque.
    */
-  public searchLoadedLists(title: string, artist: string): { videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string } | null {
+  public searchLoadedLists(title: string, artist: string): { videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string; verifie?: boolean } | null {
     for (const tracks of playlistTracksCache.values()) {
       for (const t of tracks) {
         if (!t.videoId) continue;
@@ -496,6 +621,7 @@ export class YouTubeService {
             artist: t.artist,
             durationSeconds: t.durationSeconds,
             durationFormatted: t.durationFormatted,
+            verifie: true,
           };
         }
       }

@@ -27,13 +27,13 @@ export const SettingsView: React.FC = () => {
      On demande à l'API, avec la clé saisie, ce qu'elle sait faire. Ce
      n'est pas une liste écrite dans l'app : c'est la réponse de Google,
      triée par la même fonction que celle qui choisit le modèle. */
-  const [probe, setProbe] = useState<{ busy: boolean; models?: string[]; error?: string }>({ busy: false });
+  const [probe, setProbe] = useState<{ busy: boolean; models?: string[]; ecartes?: { nom: string; raison: string }[]; error?: string }>({ busy: false });
   const probeModels = async () => {
     const key = geminiKey.trim();
     if (!key) { setProbe({ busy: false, error: 'Saisis une clé Gemini d’abord.' }); return; }
     setProbe({ busy: true });
     const r = await inspectModels(key);
-    setProbe({ busy: false, models: r.models, error: r.error });
+    setProbe({ busy: false, models: r.models, ecartes: r.ecartes, error: r.error });
   };
 
   const save = () => {
@@ -155,9 +155,11 @@ export const SettingsView: React.FC = () => {
         <Field label="Clé API Gemini" value={geminiKey} onChange={setGeminiKey} placeholder="AIza…" />
         <p className="ink-3" style={{ margin: '2px 0 0', fontSize: 11.5 }}>
           Une clé d’offre gratuite a un quota <b>par jour et par modèle</b>. Le moteur demande
-          à Google la liste de ce que cette clé peut utiliser, écarte seul les modèles déjà à
-          court (10 minutes) et garde une réserve. Si tout est à sec, il compose quand même
-          un blend — par voisinage sur YouTube — et il le dit sur le blend.
+          à Google la liste de ce que cette clé peut utiliser et essaie <b>tous</b> les modèles
+          de texte, dans l’ordre : les Gemini d’abord (du plus récent au plus ancien), les
+          autres familles ensuite. Un quota journalier écarte le modèle jusqu’à demain, un
+          modèle qui ne répond pas en texte est écarté pour de bon. Si tout est à sec, il
+          compose quand même un blend — par voisinage sur YouTube — et il le dit sur le blend.
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
           <Button variant="ghost" onClick={probeModels}>
@@ -190,6 +192,20 @@ export const SettingsView: React.FC = () => {
                 … et {probe.models.length - 8} autres en secours.
               </p>
             )}
+            {!!probe.ecartes?.length && (
+              <div className="sb-model-ecartes">
+                <p className="ink-3" style={{ margin: '10px 0 4px', fontSize: 11.5 }}>
+                  {probe.ecartes.length} modèle{probe.ecartes.length > 1 ? 's' : ''} annoncé
+                  {probe.ecartes.length > 1 ? 's' : ''} par la clé mais écarté
+                  {probe.ecartes.length > 1 ? 's' : ''} :
+                </p>
+                <ul>
+                  {probe.ecartes.slice(0, 6).map((e) => (
+                    <li key={e.nom}><span>{e.nom}</span><em>{e.raison}</em></li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </Card>
@@ -198,7 +214,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.16
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.17
         </span>
       </div>
     </div>

@@ -80,12 +80,33 @@ function canWriteText(m: ApiModel): boolean {
   const n = m.name.replace(/^models\//, '').toLowerCase();
   /* les familles qui génèrent du contenu mais pas du texte exploitable */
   if (/embed|aqa|imagen|image|veo|video|tts|audio|speech|live|native|computer|robotics|deep-research/.test(n)) return false;
+  /* Les variantes « agent / outil » : Antigravity, les modèles qui parlent
+     par function-calls, les moteurs de navigation. Elles acceptent
+     `generateContent` mais ne rendent pas la liste JSON qu'on attend —
+     demander un blend à l'une d'elles, c'est une requête perdue. */
+  if (/antigravity|computer-use|browser|code-assist|agentic|thinking-exp/.test(n)) return false;
   /* un modèle qui ne peut pas écrire un blend entier est écarté — mais
      seulement si l'API annonce la limite : on ne rejette pas un modèle
      parce qu'un champ manque */
   if (typeof m.outputTokenLimit === 'number' && m.outputTokenLimit > 0 && m.outputTokenLimit < 1500) return false;
   return true;
 }
+
+/**
+ * La famille qu'on sait vraiment employer : `gemini-*`.
+ *
+ * La demande de l'auditeur est nette — « celle qui faisait hydrogen, puis
+ * 3.8 flash, et tout » : les modèles Gemini **de sortie de texte**, dans
+ * leur ordre de puissance, pas les `gemma`, pas les moteurs d'agent.
+ * Les `gemma` restent dans la liste (ils peuvent écrire), mais **après**
+ * tous les Gemini : ils sont la dernière réserve, jamais le premier choix.
+ */
+const famille = (m: ApiModel | string): number => {
+  const n = (typeof m === 'string' ? m : m.name).replace(/^models\//, '').toLowerCase();
+  if (/^gemini-/.test(n)) return 0;         // la famille demandée, d'abord
+  if (/^gemma-/.test(n)) return 1;          // réserve honnête, ensuite
+  return 2;                                 // le reste : seulement s'il le faut
+};
 
 /** La puissance annoncée d'un modèle : ce qu'il peut écrire, en tokens. */
 const powerOf = (m: ApiModel): number => {
@@ -95,8 +116,6 @@ const powerOf = (m: ApiModel): number => {
 };
 function rankOf(m: ApiModel): number {
   const n = m.name.replace(/^models\//, '').toLowerCase();
-  /* la génération arrive en tête : les versions numériques récentes
-     d'abord, les variantes génériques (`latest`) ensuite, le reste après */
   /* La version est le premier nombre du nom, quel que soit le préfixe.
      Avant, seule la forme `gemini-<n>` était reconnue : un modèle comme
      `gemma-4-27b` tombait à la version 0 et se retrouvait **dernier** de
@@ -107,9 +126,14 @@ function rankOf(m: ApiModel): number {
      capable — et `rankOf` trie du plus petit au plus grand. Le signe
      comptait à l'envers : `flash` passait devant `pro`, alors que tout
      le reste du moteur promet le contraire. */
-  const family = /-pro/.test(n) ? 0 : /-flash/.test(n) ? 1 : /-nerf|ultra/.test(n) ? 0.5 : 2;
-  /* on préfère le plus puissant : ce qui peut écrire le plus passe devant */
-  return -version * 100 + family * 10 - Math.min(9, powerOf(m) / 100000);
+  const role = /-pro/.test(n) ? 0 : /-flash/.test(n) ? 1 : /-nerf|ultra/.test(n) ? 0.5 : 2;
+  /* 1. la famille d'abord (Gemini avant Gemma avant le reste) ;
+     2. puis la version, la plus récente en tête ;
+     3. puis le rôle (pro avant flash, à version égale) ;
+     4. puis ce que le modèle peut écrire.
+     Le tout trié du plus petit au plus grand : chaque terme est pondéré
+     pour que le précédent décide seul. */
+  return famille(m) * 1e7 - version * 1e4 + role * 100 + (m.outputTokenLimit ? -Math.min(99, m.outputTokenLimit / 10000) : 0);
 }
 
 type Engine = { model: string; at: number; queue: string[] };
@@ -154,6 +178,19 @@ const noteQuota = (model: string, journalier: boolean) =>
  * `pro` avant `flash`, et à version égale celle qui peut écrire le plus
  * de tokens. Ce n'est pas un classement de goût, c'est ce que l'API dit.
  */
+/* Pourquoi un modèle annoncé par la clé n'est pas dans la file : la
+   même raison est montrée dans Réglages, pour qu'on ne se demande pas
+   « pourquoi celui-là n'est jamais essayé ? ». */
+const ecartesTable = new Map<string, Map<string, string>>();
+const ecartesPour = (apiKey: string) => {
+  let m = ecartesTable.get(apiKey);
+  if (!m) { m = new Map(); ecartesTable.set(apiKey, m); }
+  return m;
+};
+const ecarter = (apiKey: string, nom: string, raison: string) => {
+  ecartesPour(apiKey).set(nom.replace(/^models\//, ''), raison);
+};
+
 async function listTextModels(apiKey: string): Promise<string[]> {
   const all: ApiModel[] = [];
   let pageToken = '';
@@ -168,8 +205,23 @@ async function listTextModels(apiKey: string): Promise<string[]> {
     pageToken = data.nextPageToken || '';
     if (!pageToken) break;
   }
+  /* on note, pour l'écran, ce que la liste annonce mais qu'on n'utilise pas */
+  ecartesPour(apiKey).clear();
+  for (const m of all) {
+    const n = m.name.replace(/^models\//, '');
+    if (!canWriteText(m)) {
+      ecarter(apiKey, n, /image|imagen|veo|tts|audio|embed|aqa/.test(n) ? 'génère autre chose que du texte'
+        : /antigravity|computer|agentic/.test(n) ? 'moteur d’agent, pas un modèle d’écriture'
+          : (m.supportedGenerationMethods || []).includes('generateContent') ? 'ne peut pas écrire un blend entier' : 'n’écrit pas de texte');
+    } else if (famille(m) > 1) {
+      ecarter(apiKey, n, 'famille inconnue — gardée en dernier recours');
+    }
+  }
   return all
     .filter(canWriteText)
+    /* la famille Gemini de sortie de texte passe devant ; les autres
+       (gemma, etc.) restent en réserve, jamais en tête */
+    .filter((m) => famille(m) <= 1)
     .filter((m) => !brokenModels.has(m.name.replace(/^models\//, '')))
     .filter((m) => !outOfQuota(m.name.replace(/^models\//, '')))
     .sort((a, b) => rankOf(a) - rankOf(b))
@@ -258,11 +310,23 @@ async function callModel(
       throw Object.assign(new Error(`${model} ${res.status}`), { status: res.status, detail, model });
     }
     const data = await res.json();
-    const text = (data.candidates?.[0]?.content?.parts || [])
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    /* ── un modèle qui répond, mais pas en texte ──
+       Certains modèles « texte » de la liste rendent en réalité autre
+       chose (pixels, audio, un objet sans `text`). Ce n'est pas une
+       panne de quota : c'est ce modèle-là qui ne sait pas écrire. On le
+       signale, et l'appelant passe au suivant dans la même file. */
+    const text = parts
       .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
       .join('')
       .trim();
-    return text || null;
+    if (!text) {
+      const fin = data.candidates?.[0]?.finishReason || '';
+      throw Object.assign(new Error(`${model} : réponse sans texte${fin ? ` (${fin})` : ''}`), {
+        status: 200, model, illisible: true,
+      });
+    }
+    return text;
   } finally {
     clearTimeout(timer);
     opts.signal?.removeEventListener('abort', abort);
@@ -329,6 +393,9 @@ async function callModelResilient(
  * blend réduit aux piliers, sans un mot d'explication. C'est ce qui
  * donnait l'impression que « ça ne marche pas » sans savoir pourquoi.
  */
+/** le refus est-il une incarnation, pas un mur de quota ? */
+const illisible = (e: any) => !!e?.illisible;
+
 function explain(e: any): string {
   const st = e?.status;
   if (st === 403) return 'clé Gemini refusée (403) — vérifie la clé et que l’API Generative Language est autorisée';
@@ -444,10 +511,13 @@ export class GeminiService {
        restait six capables de le composer. On les essaie dans l'ordre,
        et on s'arrête au premier qui répond : en pratique un ou deux
        appels, pas huit. */
-    const chain: { model: string; key: string }[] = [];
+    /* `memeFamilleSeulement` : après un mur de quota, on ne réessaie que
+       des Gemini — les autres familles échoueraient pareil (même quota
+       de projet), c'est une requête perdue. */
+    const chain: { model: string; key: string; famille: boolean }[] = [];
     try {
       const models = await engineQueue(apiKey);
-      chain.push(...models.map((m) => ({ model: m, key: apiKey })));
+      chain.push(...models.map((m) => ({ model: m, key: apiKey, famille: /^gemini-/.test(m) })));
     } catch { /* la liste n'a pas répondu : on le dira plus bas */ }
     if (!chain.length) {
       onProgress?.('Aucun modèle de texte disponible — on compose par voisinage sur YouTube.');
@@ -466,6 +536,11 @@ export class GeminiService {
     const call: CallModel = async (prompt, temperature, budgetMs) => {
       let last: any = null;
       let journalier = false;
+      /* ── toute la file, jusqu'au dernier ──
+         L'ordre : les Gemini de texte, du plus récent au plus ancien,
+         puis les autres (gemma…) en réserve. On les essaie **tous**,
+         dans cet ordre, et on s'arrête au premier qui écrit vraiment.
+         Aucun plafond : la demande est explicite. */
       for (const step of chain) {
         /* un modèle déjà à sec n'est pas rappelé : sinon chaque appel du
            blend repayait un 429 sur le même modèle, cinq fois de suite */
@@ -496,21 +571,39 @@ export class GeminiService {
             dernierMur = explain(e);
             break;
           }
+          if (illisible(e) || st === 400 || st === 404) {
+            /* ce modèle-là ne sait pas écrire ce qu'on demande (ou
+               n'existe plus sous ce nom) : c'est LUI qui est en cause,
+               pas la clé. On l'écarte pour un moment et on passe au
+               suivant — sans quoi il resterait en tête de file et
+               coûterait un appel perdu à chaque blend. */
+            brokenModels.set(step.model, Date.now());
+            dernierMur = st === 404 ? 'un modèle introuvable (404)' : 'un modèle qui répond sans texte';
+            continue;
+          }
         }
       }
       /* Tout a échoué, mais pour du **débit** et non du quota du jour :
          le blocage retombe en une minute. Une seule attente, un seul
          nouvel essai — au-delà, insister serait la bagarre qu'on s'est
          interdite. */
-      if (last && !journalier && epuisees.size === 0) {
+      /* un refus de forme (modèle qui n'écrit pas) n'est pas du débit :
+         attendre douze secondes ne le fera pas écrire */
+      if (last && !journalier && epuisees.size === 0 && !illisible(last)) {
         onProgress?.('Le débit de Gemini est saturé — un instant, on réessaie.');
         quotaOut.clear();
         await new Promise((r) => setTimeout(r, 12000));
         for (const step of chain) {
+          if (brokenModels.has(step.model)) continue;
           try {
             const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
             if (raw) { rememberEngine(step.key, step.model); modeleQuiRepond = step.model; return raw; }
-          } catch (e: any) { last = e; if (e?.status === 429) continue; break; }
+          } catch (e: any) {
+            last = e;
+            if (e?.status === 429) continue;
+            if (illisible(e) || e?.status === 400 || e?.status === 404) { brokenModels.set(step.model, Date.now()); continue; }
+            break;
+          }
         }
       }
       if (last) throw last;
@@ -552,6 +645,8 @@ export class GeminiService {
     /* ═══ 2. et 3. choisir — trois sélections distinctes ═══ */
     const picked: { cat: TrackCategory; picks: Pick[] }[] = [];
     const forbiddenList = () => Array.from(forbidden).slice(-80);
+    /* les propositions en réserve, par catégorie (voir `ask`) */
+    const margeDe = new Map<TrackCategory, Pick[]>();
 
     const ask = async (role: TrackCategory, count: number) => {
       if (count <= 0) return [] as Pick[];
@@ -588,6 +683,22 @@ export class GeminiService {
       }
       console.debug(`[curateur] ${role} : ${titres.length} proposés, ${clean.length} retenus (demandé ${count})`,
         titres.map((t) => `${t.title}/${t.artist}`));
+      /* ── la marge, gardée pour plus tard ──
+         Le modèle propose plus de titres que nécessaire : c'est
+         exactement ce qu'il faut quand un morceau ne se lit pas sur
+         YouTube. On garde donc les propositions **non retenues** par
+         catégorie ; la vérification pourra y puiser au lieu de laisser
+         une place vide. Aucune n'est inventée : elles viennent toutes du
+         modèle. */
+      const dejaPris = new Set(clean.map((c) => `${c.artist} — ${c.title}`.toLowerCase().trim()));
+      const resteCat = (margeDe.get(role) || []);
+      for (const t of titres) {
+        const k = `${t.artist} — ${t.title}`.toLowerCase().trim();
+        if (dejaPris.has(k)) continue;
+        if (resteCat.some((x) => `${x.artist} — ${x.title}`.toLowerCase().trim() === k)) continue;
+        resteCat.push(t);
+      }
+      margeDe.set(role, resteCat);
       /* pas assez ? une seconde passe, une seule fois, avec les titres
          déjà retenus ajoutés aux interdits — le modèle ne peut donc pas
          répéter ce qu'il vient de proposer. C'est ce qui évite un blend
@@ -634,8 +745,15 @@ export class GeminiService {
     };
 
     /* les piliers d'abord : ce sont des morceaux réels, déjà choisis par
-       la personne — ils ne dépendent pas du modèle */
-    const anchorPicks: Pick[] = seedTracks.slice(0, counts.anchor).map((t) => ({
+       la personne — ils ne dépendent pas du modèle. Ils sont vérifiés
+       comme les autres : un pilier dont la vidéo ne se lit plus est
+       redemandé, puis retiré, jamais laissé muet dans la file. */
+    const piliers = await this.piliersVerifies(seedTracks, counts.anchor);
+    /* les titres déjà traités par la vérification : la marge ne doit pas
+       reproposer le morceau qu'on vient d'écarter, ni un doublon */
+    const titresTentes = new Set<string>();
+    const cleTitre = (t: string, a: string) => `${norm(a)}|${norm(t)}`;
+    const anchorPicks: Pick[] = piliers.map((t) => ({
       title: t.title,
       artist: t.artist,
       rationale: 'Pilier : morceau de ta sélection.',
@@ -664,12 +782,21 @@ export class GeminiService {
 
     /* ═══ 4. vérifier sur YouTube, puis rassembler ═══ */
     onProgress?.('Vérification des titres sur YouTube…');
+
+
     /* Les pertes sont comptées : si des places restent vides, c'est
        presque toujours l'un de ces trois murs — et le dire à l'écran
        évite le « pourquoi seulement les piliers ? ». */
     const pertes = { introuvable: 0, titreDouteux: 0, doublon: 0 };
     const toTrack = async (p: Pick, cat: TrackCategory): Promise<Track | null> => {
-      const seed = seedTracks.find(
+      titresTentes.add(cleTitre(p.title, p.artist));
+      /* le pilier a déjà été vérifié plus haut (et son identifiant
+         éventuellement réparé) : on reprend CETTE version, sinon on
+         ramènerait le vieil identifiant mort qu'on vient de remplacer */
+      const seed = piliers.find(
+        (s) => s.title.toLowerCase().trim() === p.title.toLowerCase().trim()
+          && s.artist.toLowerCase().trim() === p.artist.toLowerCase().trim(),
+      ) || seedTracks.find(
         (s) => s.title.toLowerCase().trim() === p.title.toLowerCase().trim()
           && s.artist.toLowerCase().trim() === p.artist.toLowerCase().trim(),
       );
@@ -756,7 +883,38 @@ export class GeminiService {
       ...fresh.map((p) => toTrack(p, 'fresh')),
     ]);
 
-    const rings = resolved.filter((t): t is Track => !!t);
+    /* ── les places vides, comblées par la marge du modèle ──
+       Chaque titre écarté (introuvable, ou pas lisible ici) coûtait une
+       place. On reprend les propositions que le modèle avait faites
+       au-delà du compte — elles sont déjà triées par lui pour ce rôle —
+       et on les vérifie l'une après l'autre, jusqu'à remplir. Rien
+       d'inventé, et jamais deux fois le même morceau. */
+    const parCat: Record<string, { voulu: number; gardes: Track[] }> = {
+      anchor: { voulu: counts.anchor, gardes: [] },
+      deep_dive: { voulu: counts.deepDive, gardes: [] },
+      fresh: { voulu: counts.fresh, gardes: [] },
+    };
+    resolved.forEach((t, i) => {
+      const cat: TrackCategory = i < anchorPicks.length ? 'anchor'
+        : i < anchorPicks.length + dives.length ? 'deep_dive' : 'fresh';
+      if (t) parCat[cat].gardes.push(t);
+    });
+
+    for (const cat of ['anchor', 'deep_dive', 'fresh'] as TrackCategory[]) {
+      const manquePour = () => parCat[cat].voulu - parCat[cat].gardes.length;
+      const file = margeDe.get(cat) || [];
+      let essais = 0;
+      while (manquePour() > 0 && file.length && essais < 6) {
+        essais += 1;
+        const p = file.shift()!;
+        if (titresTentes.has(cleTitre(p.title, p.artist))) continue;
+        if (parCat[cat].gardes.some((g) => cleTitre(g.title, g.artist) === cleTitre(p.title, p.artist))) continue;
+        const t = await toTrack(p, cat);
+        if (t) parCat[cat].gardes.push(t);
+      }
+    }
+
+    const rings = [...parCat.anchor.gardes, ...parCat.deep_dive.gardes, ...parCat.fresh.gardes];
     /* l'ordre du blend : les piliers d'abord, puis les faces cachées, puis
        les découvertes — un vrai enchaînement, pas un tirage */
     const blend = [
@@ -825,7 +983,10 @@ export class GeminiService {
     this.derniereNote = raison
       ? `Composé par voisinage YouTube (${raison}). Aucun morceau n’a été inventé.`
       : 'Composé par voisinage YouTube, sans modèle d’IA. Aucun morceau n’a été inventé.';
-    const out: Track[] = this.anchorsOnly(seedTracks, counts.anchor);
+    /* les piliers passent le même contrôle que dans le chemin IA : une
+       vidéo retirée depuis la playlist ne doit pas ouvrir le blend */
+    onProgress?.('Vérification des morceaux sur YouTube…');
+    const out: Track[] = await this.piliersVerifies(seedTracks, counts.anchor);
     const vus = new Set(out.map((t) => `${t.artist} — ${t.title}`.toLowerCase().trim()));
     const vusTitres = new Set(out.map((t) => t.title.toLowerCase().trim()));
     const videoIds = new Set(out.map((t) => t.videoId));
@@ -878,6 +1039,9 @@ export class GeminiService {
       out.push({
         id: `voisin-${vi.videoId}`,
         videoId: vi.videoId,
+        /* Piped ne rend que des vidéos du catalogue : elles existent et se
+           lisent (le contrôle fin, lui, se fait à la lecture) */
+        verifie: true,
         title: titre,
         artist: artiste,
         thumbnailUrl: `https://i.ytimg.com/vi/${vi.videoId}/hqdefault.jpg`,
@@ -951,6 +1115,30 @@ export class GeminiService {
       category: 'anchor' as TrackCategory,
       rationale: 'Pilier : morceau de ta sélection.',
     }));
+  }
+
+  /**
+   * Les piliers, vérifiés comme les autres.
+   *
+   * Un pilier vient d'une playlist de la personne : son identifiant
+   * existe. Mais une vidéo de playlist peut avoir été retirée depuis —
+   * et c'était l'autre moitié du problème, une file qui commence sur des
+   * morceaux morts. On vérifie sans clé (oembed + lecteur), et on
+   * redemande le morceau par son titre s'il ne se lit plus. Un pilier
+   * qu'on ne retrouve pas est retiré : mieux vaut un blend plus court
+   * qu'un blend qui saute.
+   */
+  private async piliersVerifies(seedTracks: Track[], anchorCount: number): Promise<Track[]> {
+    const base = this.anchorsOnly(seedTracks, anchorCount);
+    const out: Track[] = [];
+    for (const t of base) {
+      const test = await youtubeService.estJouable(t.videoId).catch(() => null);
+      if (!test || test.ok !== false) { out.push({ ...t, verifie: true }); continue; }
+      const neuf = await youtubeService.reparerVideoId(t.title, t.artist).catch(() => null);
+      if (neuf) out.push({ ...t, videoId: neuf, verifie: true });
+      else console.debug(`[pilier] ${t.title} / ${t.artist} : ${test.raison} — retiré du blend`);
+    }
+    return out;
   }
 
   /**
@@ -1272,15 +1460,18 @@ function raisonDesVides(p: { introuvable: number; titreDouteux: number; doublon:
  */
 export async function inspectModels(apiKey: string): Promise<{
   models: string[];
+  /** tous ceux que la clé annonce et qu'on a écartés, avec la raison */
+  ecartes: { nom: string; raison: string }[];
   error?: string;
 }> {
   try {
     const models = await listTextModels(apiKey);
+    const ecartes = [...ecartesPour(apiKey).entries()].map(([nom, raison]) => ({ nom, raison }));
     return models.length
-      ? { models }
-      : { models: [], error: 'Aucun modèle de texte disponible pour cette clé.' };
+      ? { models, ecartes }
+      : { models: [], ecartes, error: 'Aucun modèle de texte disponible pour cette clé.' };
   } catch (e: any) {
-    return { models: [], error: e?.message || 'models.list a échoué.' };
+    return { models: [], ecartes: [], error: e?.message || 'models.list a échoué.' };
   }
 }
 

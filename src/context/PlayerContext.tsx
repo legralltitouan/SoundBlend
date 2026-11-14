@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { Track } from '../types';
 import { sameTrack } from '../lib/track';
 import { applyRatingToTaste, recordTrackRating } from '../services/storage';
+import { youtubeService } from '../services/youtube';
 
 interface PlayerContextType {
   currentTrack: Track | null;
@@ -29,6 +30,11 @@ interface PlayerContextType {
   reprendre: () => void;
   /** vrai quand le navigateur a refusé la reprise en arrière-plan */
   repriseRefusee: boolean;
+  /** le dernier morceau sauté faute de lecteur — dit à l'écran, jamais en silence */
+  morceauxSautes: number;
+  /** le morceau qu'on n'a pas pu réparer (identifiant mort, introuvable) */
+  dernierSaute: Track | null;
+  oublierSautes: () => void;
 }
 
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
@@ -43,6 +49,18 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isVideoOpen, setIsVideoOpen] = useState<boolean>(false);
   const [queue, setQueue] = useState<Track[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
+  /* ── les morceaux qui ne se lisent pas ──
+     Constat de l'auditeur : la file passait des morceaux sans lecteur,
+     un par un, sans un mot. Un identifiant mort n'est pas une fatalité :
+     on redemande le morceau à YouTube. S'il est introuvable, on le dit,
+     et on passe au suivant. */
+  const [morceauxSautes, setMorceauxSautes] = useState<number>(0);
+  const [dernierSaute, setDernierSaute] = useState<Track | null>(null);
+  const oublierSautes = () => { setMorceauxSautes(0); setDernierSaute(null); };
+  /* les morceaux déjà réparés pendant cette session : id mort → id neuf */
+  const repares = useRef<Map<string, string>>(new Map());
+  /* les morceaux qu'on a renoncé à réparer : on ne les retente pas */
+  const abandonnes = useRef<Set<string>>(new Set());
 
   const playerRef = useRef<any>(null);
   /* l'intention de lecture : « je veux que ça joue », décidée par la
@@ -145,7 +163,14 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
           },
           onError: () => {
-            if (queueRef.current.length > 1) setTimeout(() => advance.current(), 600);
+            /* 2, 5, 100, 101, 150 : identifiant invalide, lecteur HTML5,
+               vidéo retirée, non intégrable, ou bloquée par l'ayant
+               droit. Aucune de ces erreurs ne guérit en insistant, et
+               toutes donnaient le même silence. On tente la réparation
+               une fois, puis on saute en le disant. */
+            const t = currentRef.current;
+            if (t) setTimeout(() => sauter(t), 400);
+            else if (queueRef.current.length > 1) setTimeout(() => advance.current(), 600);
           },
         },
       });
@@ -159,11 +184,65 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const queueRef = useRef<Track[]>([]);
   const indexRef = useRef<number>(-1);
   const playingRef = useRef<boolean>(false);
+  const currentRef = useRef<Track | null>(null);
   queueRef.current = queue;
   indexRef.current = currentIndex;
   playingRef.current = isPlaying;
+  currentRef.current = currentTrack;
 
-  /* enchaînement : morceau suivant, bouclage en fin de file */
+  /* ─────────── lire un morceau, ou le réparer ───────────
+     Avant, on chargeait `track.videoId` sans se demander s'il vivait
+     encore. Une vidéo retirée ou bloquée faisait donc défiler la file en
+     silence (l'appelant `onError` de YouTube sautait au suivant, et
+     ainsi de suite). Maintenant : on demande au morceau s'il se lit ; si
+     non, on le redemande à YouTube par son titre et son artiste ; si
+     vraiment rien ne se lit, on le déclare sauté — à l'écran, pas dans
+     la console — et on passe au suivant. */
+  const jouer = (track: Track, essais = 0) => {
+    if (!track.videoId) { sauter(track); return; }
+    ensurePlayer(track.videoId);
+  };
+
+  /* le morceau ne peut pas être lu : on le répare, sinon on le saute */
+  const reparer = async (track: Track): Promise<boolean> => {
+    const deja = repares.current.get(track.videoId);
+    if (deja) { ensurePlayer(deja); return true; }
+    if (abandonnes.current.has(track.videoId)) return false;
+    try {
+      const neuf = await youtubeService.reparerVideoId(track.title, track.artist);
+      if (neuf && neuf !== track.videoId) {
+        repares.current.set(track.videoId, neuf);
+        /* la file et le morceau affiché prennent l'identifiant réparé :
+           la prochaine lecture n'aura plus à le redemander */
+        setQueue((prev) => prev.map((t) => (t.id === track.id ? { ...t, videoId: neuf, verifie: true } : t)));
+        setCurrentTrack((cur) => (cur && cur.id === track.id ? { ...cur, videoId: neuf, verifie: true } : cur));
+        ensurePlayer(neuf);
+        return true;
+      }
+    } catch { /* réseau muet : on saute, sans insister */ }
+    abandonnes.current.add(track.videoId);
+    return false;
+  };
+
+  const sauter = (track: Track, apresReparation = false) => {
+    if (!apresReparation) {
+      /* on tente d'abord la réparation, une fois par morceau */
+      void reparer(track).then((ok) => {
+        if (!ok) sauter(track, true);
+      });
+      return;
+    }
+    setMorceauxSautes((n) => n + 1);
+    setDernierSaute(track);
+    /* le suivant : on ne tourne pas en boucle sur la même file */
+    const q = queueRef.current;
+    if (q.length > 1 && track.id) advance.current();
+  };
+
+  /* enchaînement : morceau suivant, bouclage en fin de file.
+     Déclaré APRÈS `sauter` (qui l'appelle) ; on passe par une ref pour
+     que le callback du lecteur, créé une fois, voie toujours la version
+     à jour. */
   const advance = useRef<() => void>(() => {});
   advance.current = () => {
     const q = queueRef.current;
@@ -177,7 +256,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setProgress(0);
     markWanted(true);
     setIsPlaying(true);
-    if (next.videoId) ensurePlayer(next.videoId);
+    jouer(next);
   };
 
   // attend que l'API YouTube soit disponible, sans créer de lecteur à vide
@@ -348,8 +427,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     markWanted(true);
     setIsPlaying(true);
-    if (!track.videoId) return; // fiche sans vidéo : rien à charger
-    ensurePlayer(track.videoId);
+    /* sans identifiant, ou avec un identifiant mort : on répare avant de
+       jouer — jamais de lecture muette présentée comme un succès */
+    jouer(track);
   };
 
   const togglePlay = () => {
@@ -480,6 +560,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         clearRating,
         reprendre,
         repriseRefusee,
+        morceauxSautes,
+        dernierSaute,
+        oublierSautes,
       }}
     >
       {children}

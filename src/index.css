@@ -2432,10 +2432,13 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
 }
 .sb-model-probe ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .sb-model-probe li {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
   font-size: 12px; color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
+/* le nom d'un modèle est une donnée, pas une phrase : il ne se coupe pas
+   au milieu d'un mot, c'est la mention qui passe à la ligne */
+.sb-model-probe li > span { flex: 0 0 auto; white-space: nowrap; }
 .sb-model-probe li[data-first='1'] { color: var(--ink); font-weight: 600; }
 .sb-model-probe li em {
   font-style: normal; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
@@ -2710,4 +2713,48 @@ html[data-mode='dark'] .sb-install-done svg { color: #3ddc84; }
 .nowplaying-ambience::after {
   content: ''; position: absolute; inset: 0;
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 62%, transparent) 0%, color-mix(in srgb, var(--bg) 88%, transparent) 62%, var(--bg) 100%);
+}
+
+/* ── un morceau qui ne se lit pas ────────────────────────────────────
+   Même objet que le bandeau de progression, mais il ne glisse pas : on
+   ne le range pas, on le lit ou on le ferme. La pastille d'alerte reste
+   chaude — c'est un manque, pas une étape. */
+.sb-task--saute {
+  grid-template-columns: 34px minmax(0, 1fr) 26px;
+  align-items: center;
+}
+.sb-task-dot--warn {
+  background: color-mix(in srgb, #f0a13c 20%, transparent);
+  color: #f0a13c;
+}
+.sb-task-close {
+  appearance: none; border: 0; background: transparent;
+  color: var(--ink-3); cursor: pointer;
+  display: grid; place-items: center;
+  width: 26px; height: 26px; border-radius: 8px;
+}
+.sb-task-close:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+
+/* ── les modèles écartés, et pourquoi ───────────────────────────────
+   Le pendant de la liste d'essai : ce que la clé annonce mais qu'on
+   n'utilise pas. Sans ça, on se demande pourquoi un nom vu dans
+   Google AI Studio n'apparaît jamais dans l'app. */
+.sb-model-ecartes ul {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; gap: 3px;
+}
+.sb-model-ecartes li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
+  font-size: 11px; color: var(--ink-3);
+}
+.sb-model-ecartes li em {
+  flex: 1 1 100%;
+  font-style: normal; opacity: .9;
+  letter-spacing: 0; text-transform: none;
+  color: var(--ink-3);
+}
+.sb-model-ecartes li + li { margin-top: 6px; }
+.sb-model-ecartes li span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink-2); flex: 0 0 auto;
 }

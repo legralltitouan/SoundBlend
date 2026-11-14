@@ -10,6 +10,9 @@ export interface Track {
   durationFormatted?: string;
   videoUrl?: string;
   videoId: string;
+  /** Vérifié sur YouTube (le lecteur répond-il ?) — posé une fois, pour
+      toute la vie du morceau, quand le blend est composé. */
+  verifie?: boolean;
   category?: TrackCategory;
   rationale?: string;
   userRating?: 'liked' | 'disliked' | null;

@@ -88,7 +88,7 @@ export const pipedSearch = async (query: string, filter: 'music_songs' | 'videos
 
 /* ─────────────── vérifier une vidéo, sans clé ─────────────── */
 
-const oembedCache = new Map<string, { at: number; ok: boolean; title: string; author: string }>();
+const oembedCache = new Map<string, { at: number; ok: boolean; title: string; author: string; jouable: boolean; duree?: number }>();
 const OEMBED_TTL = 60 * 60 * 1000;
 
 /**
@@ -102,19 +102,33 @@ const OEMBED_TTL = 60 * 60 * 1000;
  */
 export const verifyVideo = async (
   videoId: string,
-): Promise<{ ok: boolean; title: string; author: string } | null> => {
+): Promise<{ ok: boolean; title: string; author: string; jouable?: boolean; duree?: number } | null> => {
   const hit = oembedCache.get(videoId);
-  if (hit && Date.now() - hit.at < OEMBED_TTL) return { ok: hit.ok, title: hit.title, author: hit.author };
+  if (hit && Date.now() - hit.at < OEMBED_TTL) return { ok: hit.ok, title: hit.title, author: hit.author, jouable: hit.jouable, duree: hit.duree };
   const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
   const res = await cut(
     fetch(url, { headers: { Accept: 'application/json' } })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        /* 400 / 401 / 404 : YouTube ne connaît plus cette vidéo, ou elle
+           est privée — c'est un « non » franc. Un 403, un 5xx ou une page
+           de pare-feu ne disent rien du morceau : ce n'est pas à eux de
+           le condamner. */
+        if (!r.ok) return { __ko: r.status };
+        return r.json();
+      })
       .catch(() => null),
     6000,
     null as any,
   );
   if (!res) return null;                       // réseau muet : on ne sait pas
-  const out = { ok: true, title: String(res.title || ''), author: String(res.author_name || '') };
+  if (res.__ko) {
+    const mort = res.__ko === 400 || res.__ko === 401 || res.__ko === 404 || res.__ko === 410;
+    if (!mort) return null;                    // 403, 5xx : on ne sait pas
+    const out = { ok: false, title: '', author: '', jouable: false };
+    oembedCache.set(videoId, { at: Date.now(), ...out });
+    return out;
+  }
+  const out = { ok: true, title: String(res.title || ''), author: String(res.author_name || ''), jouable: true };
   oembedCache.set(videoId, { at: Date.now(), ...out });
   return out;
 };

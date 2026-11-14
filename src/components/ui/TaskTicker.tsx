@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Check, Clock } from 'lucide-react';
+import { Sparkles, Check, Clock, AlertTriangle, X } from 'lucide-react';
 import { useUI } from '../../context/UIContext';
 import { useReplaceQueue, stepLabel } from '../../context/ReplaceQueueContext';
 import { usePlayer } from '../../context/PlayerContext';
@@ -36,7 +36,7 @@ const isNarrow = () => typeof window !== 'undefined' && window.innerWidth <= 819
 export const TaskTicker: React.FC = () => {
   const { task } = useUI();
   const queue = useReplaceQueue();
-  const { repriseRefusee, reprendre, currentTrack } = usePlayer();
+  const { repriseRefusee, reprendre, currentTrack, morceauxSautes, dernierSaute, oublierSautes } = usePlayer();
 
   const running = useMemo(
     () => queue?.jobs.find((j) => j.status === 'running') || null,
@@ -119,6 +119,48 @@ export const TaskTicker: React.FC = () => {
             <span className="sb-task-sub">Touche ici pour reprendre « {currentTrack.title} ».</span>
           </span>
         </motion.button>
+      </AnimatePresence>
+    );
+  }
+
+  /* ── un morceau n'a pas pu être lu ──
+     Le silence était le pire des aveux : la file traversait des vidéos
+     mortes sans rien dire. Maintenant, quand un morceau résiste — même
+     après avoir été redemandé à YouTube — on le nomme, et on propose
+     d'ouvrir sa recherche pour l'écouter ailleurs. */
+  if (!active && dernierSaute && morceauxSautes > 0) {
+    return (
+      <AnimatePresence>
+        <motion.div
+          key="saute"
+          className="sb-task sb-task--saute"
+          role="status"
+          aria-live="polite"
+          initial={{ opacity: 0, y: 10, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 8 }}
+          transition={{ type: 'spring', stiffness: 340, damping: 30 }}
+        >
+          <span className="sb-task-dot sb-task-dot--warn" aria-hidden>
+            <AlertTriangle size={12} />
+          </span>
+          <span className="sb-task-text">
+            <span className="sb-task-head">
+              {morceauxSautes > 1 ? `${morceauxSautes} morceaux introuvables` : 'Morceau introuvable'}
+            </span>
+            <span className="sb-task-sub">
+              « {dernierSaute.title} » ne se lit pas sur YouTube — il a été redemandé, puis écarté.
+            </span>
+          </span>
+          <button
+            className="sb-task-close"
+            onClick={oublierSautes}
+            aria-label="Masquer"
+            title="Masquer"
+          >
+            <X size={13} />
+          </button>
+        </motion.div>
       </AnimatePresence>
     );
   }
