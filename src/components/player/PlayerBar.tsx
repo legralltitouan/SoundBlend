@@ -2,7 +2,7 @@ import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, ChevronUp,
-  ThumbsUp, ThumbsDown, ListMusic, Maximize2, ExternalLink,
+  ThumbsUp, ThumbsDown, ListMusic, ExternalLink,
 } from 'lucide-react';
 import { usePlayer } from '../../context/PlayerContext';
 import { useData } from '../../context/DataContext';
@@ -41,7 +41,7 @@ const fmt = (s: number) => {
 export const PlayerBar: React.FC = () => {
   const {
     currentTrack, isPlaying, progress, duration, volume, isMuted,
-    togglePlay, seekTo, setVolume, toggleMute, nextTrack, prevTrack, stepTrack, toggleVideoModal,
+    togglePlay, seekTo, setVolume, toggleMute, nextTrack, prevTrack, stepTrack, mode, toggleMode, clip, attachVideo,
     queue,
   } = usePlayer();
 
@@ -196,9 +196,6 @@ export const PlayerBar: React.FC = () => {
               >
                 <ThumbsDown size={16} strokeWidth={1.9} fill={ownRating === 'disliked' ? 'currentColor' : 'none'} />
               </button>
-              <button className="icon-btn sb-hide-sm" onClick={toggleVideoModal} aria-label="Clip">
-                <Maximize2 size={15} strokeWidth={1.9} />
-              </button>
               <button className="icon-btn" onClick={() => sheet.open()} aria-label="File d’attente">
                 <ListMusic size={16} strokeWidth={1.9} />
               </button>
@@ -251,7 +248,41 @@ export const PlayerBar: React.FC = () => {
                 <button className="icon-btn" onClick={() => sheet.close()} aria-label="Réduire">
                   <ChevronUp size={20} style={{ transform: 'rotate(180deg)' }} />
                 </button>
-                <span className="nowplaying-eyebrow">En lecture</span>
+
+                {/* ═══ le sélecteur d'image ═══
+                    À la place de l'ancien mot « En lecture ». Deux mots,
+                    rien d'autre : pas de vignette de pochette dans le
+                    rail (tu avais raison, ça chargeait un contrôle qui
+                    n'est qu'un choix binaire), et la pastille blanche
+                    épouse exactement la position choisie. */}
+                <div className="sb-artmode" role="group" aria-label="Image du lecteur" data-mode={mode}>
+                  <button
+                    className="sb-artmode__opt"
+                    data-on={mode === 'audio' ? '1' : '0'}
+                    onClick={() => { if (mode !== 'audio') toggleMode(); }}
+                    aria-pressed={mode === 'audio'}
+                    title="Afficher la pochette"
+                  >
+                    Titre
+                  </button>
+                  <button
+                    className="sb-artmode__opt"
+                    data-on={mode === 'clip' ? '1' : '0'}
+                    data-off={clip === 'aucun' ? '1' : '0'}
+                    disabled={clip === 'aucun'}
+                    onClick={() => { if (mode !== 'clip' && clip !== 'aucun') toggleMode(); }}
+                    aria-pressed={mode === 'clip'}
+                    title={
+                      clip === 'aucun' ? 'Aucun clip connu pour ce morceau'
+                        : clip === 'cherche' ? 'Recherche du clip…'
+                          : 'Afficher le clip'
+                    }
+                  >
+                    {clip === 'cherche' && <span className="sb-artmode__spin" aria-hidden />}
+                    Vidéo
+                  </button>
+                </div>
+
                 <span className="nowplaying-spacer" aria-hidden />
               </div>
 
@@ -270,8 +301,22 @@ export const PlayerBar: React.FC = () => {
                     <div className="nowplaying-art nowplaying-art--left" aria-hidden>
                       <Art track={prevT || currentTrack} size="100%" radius={16} large />
                     </div>
-                    <div key={currentTrack.id} className="nowplaying-art nowplaying-art--main">
-                      <Art track={currentTrack} size="100%" radius={16} large />
+                    <div key={currentTrack.id} className="nowplaying-art nowplaying-art--main" data-artmode={mode}>
+                      {/* le clip vit ICI, dans la boîte de la pochette :
+                          même place, même rayon, même ombre — l'écran ne
+                          se réorganise pas quand on bascule, seule
+                          l'image change. Le lecteur YouTube est déplacé
+                          dans cette boîte par `attachVideo` ; en pochette
+                          il est renvoyé hors de l'écran, et la musique ne
+                          s'interrompt jamais. */}
+                      <div
+                        className="nowplaying-clip"
+                        data-on={mode === 'clip' && clip === 'pret' ? '1' : '0'}
+                        ref={mode === 'clip' ? attachVideo : undefined}
+                      />
+                      <div className="nowplaying-art__still" data-hidden={mode === 'clip' && clip === 'pret' ? '1' : '0'}>
+                        <Art track={currentTrack} size="100%" radius={16} large />
+                      </div>
                     </div>
                     <div className="nowplaying-art nowplaying-art--right" aria-hidden>
                       <Art track={nextT || currentTrack} size="100%" radius={16} large />
@@ -655,55 +700,4 @@ const WaveRail: React.FC<{ value: number; max: number; hovering: boolean; draggi
   return <canvas ref={ref} className="prail-wave prail-wave--big" aria-hidden />;
 };
 
-export const VideoModal: React.FC = () => {
-  const { isVideoOpen, toggleVideoModal, currentTrack } = usePlayer();
-  if (!currentTrack) return null;
-  return (
-    <AnimatePresence>
-      {isVideoOpen && (
-        <div className="fixed inset-0 z-[75] grid place-items-center p-4">
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            onClick={toggleVideoModal}
-            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.8)', backdropFilter: 'blur(10px)' }}
-          />
-          <motion.div
-            initial={{ scale: 0.94, y: 16, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            style={{
-              position: 'relative', width: 'min(920px, 96vw)', zIndex: 1,
-              background: 'var(--bg)', borderRadius: 18,
-              border: '1px solid var(--line-strong)', boxShadow: 'var(--shadow-pop)', overflow: 'hidden',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px' }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentTrack.title}</div>
-                <div className="ink-3" style={{ fontSize: 12 }}>{currentTrack.artist}</div>
-              </div>
-              <span style={{ flex: 1 }} />
-              <a className="icon-btn" href={`https://music.youtube.com/watch?v=${currentTrack.videoId}`} target="_blank" rel="noreferrer" title="YouTube Music"><ExternalLink size={17} /></a>
-              <button className="icon-btn" onClick={toggleVideoModal} aria-label="Fermer"><XIcon /></button>
-            </div>
-            <div style={{ position: 'relative', width: '100%', paddingBottom: '56.25%', background: '#000' }}>
-              <iframe
-                src={`https://www.youtube-nocookie.com/embed/${currentTrack.videoId}?autoplay=1&enablejsapi=1`}
-                title={currentTrack.title}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
-              />
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
-  );
-};
 
-/* petite croix, pour ne pas réimporter tout le jeu d'icônes */
-const XIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
-    <path d="M18 6 6 18M6 6l12 12" />
-  </svg>
-);

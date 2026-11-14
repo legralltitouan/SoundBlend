@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useUI } from '../../context/UIContext';
-import { usePlayer } from '../../context/PlayerContext';
 import { useAndroidBack, type BackLayer } from '../../lib/useAndroidBack';
 import { BACK_HOME_EVENT } from '../../lib/backEvents';
 
@@ -13,7 +12,7 @@ import { BACK_HOME_EVENT } from '../../lib/backEvents';
 
 export const BackHandler: React.FC = () => {
   const { view, setView, modal, closeModal, onboarded, finishOnboarding } = useUI();
-  const { isVideoOpen, toggleVideoModal } = usePlayer();
+
 
   /* le plein écran du lecteur : il vit dans son propre composant, donc
      il nous dit simplement s'il est ouvert par un attribut du document.
@@ -40,7 +39,6 @@ export const BackHandler: React.FC = () => {
      c'est donc lui la couche du dessus quand il est ouvert. */
   const layers: BackLayer[] = [];
   if (modal) layers.push({ key: 'modal', close: closeModal });
-  if (isVideoOpen) layers.push({ key: 'video', close: toggleVideoModal });
   if (sheetOpen) layers.push({ key: 'sheet', close: closeSheet });
   /* l'accueil de bienvenue n'est pas une couche : c'est le premier écran,
      le retour n'a pas de sens avant d'être entré dans l'app */

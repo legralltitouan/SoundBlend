@@ -11,7 +11,8 @@ interface PlayerContextType {
   duration: number;
   volume: number;
   isMuted: boolean;
-  isVideoOpen: boolean;
+  /** l'image : `audio` montre la pochette, `clip` montre la vidéo */
+  mode: 'audio' | 'clip';
   queue: Track[];
   currentIndex: number;
   playTrack: (track: Track, newQueue?: Track[]) => void;
@@ -23,7 +24,12 @@ interface PlayerContextType {
   prevTrack: () => void;
   /** le morceau voisin, dans la file en cours (glissement sur la pochette) */
   stepTrack: (step: 1 | -1) => void;
-  toggleVideoModal: () => void;
+  /** basculer pochette ↔ clip (le bouton du haut du grand lecteur) */
+  toggleMode: () => void;
+  /** où en est le clip du morceau courant */
+  clip: ClipEtat;
+  /** le lecteur vidéo vient de se déplacer dans le grand lecteur */
+  attachVideo: (el: HTMLDivElement | null) => void;
   rateTrack: (track: Track, rating?: 'liked' | 'disliked') => void;
   clearRating: (track: Track) => void;
   /** reprendre la lecture d'un geste de la personne (toujours accepté) */
@@ -37,6 +43,12 @@ interface PlayerContextType {
   oublierSautes: () => void;
 }
 
+/* ─────────── l'état du clip courant ───────────
+   `aucun` n'est pas une erreur : c'est « pas de clip connu pour ce
+   morceau ». On garde alors la pochette, et le bouton le dit sans mentir.
+   `inconnu` : on n'a pas encore eu l'occasion de demander. */
+export type ClipEtat = 'inconnu' | 'cherche' | 'pret' | 'aucun';
+
 const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
 
 export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -46,7 +58,17 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [duration, setDuration] = useState<number>(210);
   const [volume, setVolumeState] = useState<number>(80);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isVideoOpen, setIsVideoOpen] = useState<boolean>(false);
+  /* ─────────── le mode image ───────────
+     Une seule règle : la musique ne s'interrompt jamais. Le lecteur
+     YouTube est déplacé dans le grand lecteur, pas recréé ; sa position
+     n'est pas touchée, sauf si la vidéo du clip n'est pas la même que
+     celle qu'on écoute — et dans ce cas seulement, on recale sur la
+     seconde près (voir `attachVideo`). */
+  const [mode, setMode] = useState<'audio' | 'clip'>('audio');
+  const [clipId, setClipId] = useState<string | null>(null);
+  const [clipEtat, setClipEtat] = useState<ClipEtat>('inconnu');
+  const clipSlot = useRef<HTMLDivElement | null>(null);
+  const clipTaille = useRef({ w: 0, h: 0 });
   const [queue, setQueue] = useState<Track[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
   /* ── les morceaux qui ne se lisent pas ──
@@ -75,6 +97,27 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   /* crée l'iframe YouTube (invisible) et la branche sur nos callbacks.
      Elle n'est créée qu'au premier morceau : rien n'est chargé avant. */
+  /* le lecteur caché, celui qui vit hors de l'écran quand on est en
+     pochette */
+  const ombre = () => {
+    let host = document.getElementById('youtube-player-host');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'youtube-player-host';
+      host.setAttribute('aria-hidden', 'true');
+      Object.assign(host.style, {
+        position: 'fixed', left: '-10000px', top: '0',
+        width: '2px', height: '2px', overflow: 'hidden',
+        opacity: '0', pointerEvents: 'none',
+      });
+      const mount = document.createElement('div');
+      mount.id = 'youtube-player-mount';
+      host.appendChild(mount);
+      document.body.appendChild(host);
+    }
+    return host;
+  };
+
   const ensurePlayer = (videoId: string) => {
     if (playerRef.current?.loadVideoById) {
       playerRef.current.loadVideoById(videoId);
@@ -97,21 +140,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
 
-    let host = document.getElementById('youtube-player-host');
-    if (!host) {
-      host = document.createElement('div');
-      host.id = 'youtube-player-host';
-      host.setAttribute('aria-hidden', 'true');
-      Object.assign(host.style, {
-        position: 'fixed', left: '-10000px', top: '0',
-        width: '2px', height: '2px', overflow: 'hidden',
-        opacity: '0', pointerEvents: 'none',
-      });
-      const mount = document.createElement('div');
-      mount.id = 'youtube-player-mount';
-      host.appendChild(mount);
-      document.body.appendChild(host);
-    }
+    ombre();
 
     try {
       playerRef.current = new window.YT.Player('youtube-player-mount', {
@@ -469,6 +498,147 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     jouer(track);
   };
 
+  /* ═══════════ le clip du morceau courant ═══════════
+     On ne cherche que quand on le demande (le bouton du grand lecteur)
+     ou quand le grand lecteur s'ouvre en mode clip. La recherche ne
+     bloque rien : la pochette reste affichée pendant ce temps. */
+  const chercherClip = (t: Track | null) => {
+    if (!t) return;
+    const cle = `${t.artist}::${t.title}`.toLowerCase();
+    if (clipDemandes.current.has(cle)) return;
+    clipDemandes.current.add(cle);
+    setClipEtat('cherche');
+    void youtubeService
+      .trouverClip({ title: t.title, artist: t.artist, videoId: t.videoId, durationSeconds: t.durationSeconds })
+      .then((id) => {
+        /* la réponse peut arriver après un changement de morceau */
+        if (currentRef.current?.id !== t.id) return;
+        setClipId(id);
+        setClipEtat(id ? 'pret' : 'aucun');
+      })
+      .catch(() => {
+        if (currentRef.current?.id === t.id) { setClipId(null); setClipEtat('aucun'); }
+      });
+  };
+
+  const clipDemandes = useRef<Set<string>>(new Set());
+
+  /* ── déplacer le lecteur YouTube dans le grand lecteur ──
+     C'est la pièce maîtresse : on ne détruit rien, on **déplace** la
+     même iframe. Le son ne s'interrompt donc pas une seconde, et la
+     position reste exactement celle du morceau.
+
+     Deux cas :
+       · image = la vidéo qu'on écoute → rien à faire, c'est déjà synchro ;
+       · image = un clip qui n'est pas la vidéo du son → on charge le clip
+         **à la position du son** et on le met en sourdine : c'est le son
+         de la musique qui commande, l'image suit. À chaque seconde où
+         l'écart dépasserait 0,7 s, on recale. Aucune boucle, aucun
+         doublon : une seule source de son, toujours. */
+  const attachVideo = React.useCallback((el: HTMLDivElement | null) => {
+    clipSlot.current = el;
+    const p = playerRef.current;
+    const iframe: HTMLIFrameElement | null = p?.getIframe ? p.getIframe() : null;
+    if (!iframe) return;
+
+    const placer = () => {
+      const cible = clipSlot.current;
+      if (!cible) { ombre().appendChild(iframe); return; }
+      if (iframe.parentElement !== cible) {
+        cible.appendChild(iframe);
+        /* de vrais pixels : YouTube refuse de peindre dans un cadre de
+           2 × 2, même si son CSS est en 100 % */
+        const r = cible.getBoundingClientRect();
+        clipTaille.current = { w: Math.round(r.width), h: Math.round(r.height) };
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = '0';
+        iframe.setAttribute('width', String(Math.max(300, clipTaille.current.w)));
+        iframe.setAttribute('height', String(Math.max(170, clipTaille.current.h)));
+        p?.setSize?.(Math.max(300, clipTaille.current.w), Math.max(170, clipTaille.current.h));
+      }
+    };
+
+    placer();
+
+
+    const ro = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+        const c = clipSlot.current;
+        if (!c || iframe.parentElement !== c) return;
+        const r = c.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        p?.setSize?.(Math.round(r.width), Math.round(r.height));
+      })
+      : null;
+    if (ro && el) ro.observe(el);
+    return () => ro?.disconnect();
+  }, [mode, clipId, currentTrack]);
+
+  const clipCharge = useRef<string | null>(null);
+
+  /* ── le clip arrive après la bascule ──
+     On a demandé à YouTube ; la réponse peut prendre deux secondes. Si on
+     est déjà en mode clip quand elle arrive, c'est ici qu'on charge la
+     vidéo — à la position du son, à l'instant où on la reçoit. Aucune
+     resynchro n'est nécessaire ensuite : le clip EST le lecteur, il n'y a
+     qu'une horloge à bord. */
+  useEffect(() => {
+    if (mode !== 'clip' || !clipId || !currentTrack) return;
+    if (clipId === currentTrack.videoId) return;   /* c'est déjà la vidéo qu'on écoute */
+    if (clipCharge.current === clipId) return;
+    const p = playerRef.current;
+    if (!p?.loadVideoById || !wantedPlay.current) return;
+    const ici = p.getCurrentTime?.() || progressRef.current || 0;
+    clipCharge.current = clipId;
+    try { p.loadVideoById({ videoId: clipId, startSeconds: Math.max(0, ici - 0.4) }); } catch { /* ignore */ }
+  }, [mode, clipId, currentTrack]);
+
+  const toggleMode = () => {
+    setMode((m) => {
+      const suivant = m === 'audio' ? 'clip' : 'audio';
+      if (suivant === 'clip') {
+        /* on demande le clip au moment où on le montre, et pas avant :
+           inutile d'interroger YouTube pour chaque morceau écouté */
+        if (clipId && currentTrack && clipId !== currentTrack.videoId) {
+          const p = playerRef.current;
+          try {
+            const ici = progressRef.current || 0;
+            clipCharge.current = clipId;
+            p?.loadVideoById?.({ videoId: clipId, startSeconds: Math.max(0, ici - 0.4) });
+          } catch { /* lecteur absent */ }
+        }
+        if (clipEtat === 'inconnu') chercherClip(currentTrack);
+      } else {
+        /* retour à la pochette : on remet la vidéo du morceau, au même
+           endroit, et on rend le son au lecteur */
+        const p = playerRef.current;
+        try {
+          if (clipId && currentTrack && clipId !== currentTrack.videoId) {
+            const ici = progressRef.current || 0;
+            p?.loadVideoById?.({ videoId: currentTrack.videoId, startSeconds: Math.max(0, ici) });
+            clipCharge.current = null;
+          }
+        } catch { /* lecteur absent */ }
+      }
+      return suivant;
+    });
+  };
+
+  /* un nouveau morceau remet l'image à zéro : le clip de l'ancien n'a
+     rien à voir avec celui du nouveau */
+  const dernierMorceau = useRef<string | null>(null);
+  useEffect(() => {
+    const id = currentTrack?.id ?? null;
+    if (id === dernierMorceau.current) return;
+    dernierMorceau.current = id;
+    setClipId(null);
+    setClipEtat('inconnu');
+    clipCharge.current = null;
+    if (mode === 'clip') chercherClip(currentTrack);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [currentTrack?.id, mode]);
+
   const togglePlay = () => {
     if (!currentTrack) return;
 
@@ -534,9 +704,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     playTrack(t);
   };
 
-  const toggleVideoModal = () => {
-    setIsVideoOpen(!isVideoOpen);
-  };
 
   const clearRating = (track: Track) => {
     setQueue((prevQueue) => prevQueue.map((t) => (sameTrack(t, track) ? { ...t, userRating: null } : t)));
@@ -581,7 +748,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         duration,
         volume,
         isMuted,
-        isVideoOpen,
+        mode,
         queue,
         currentIndex,
         playTrack,
@@ -592,7 +759,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         nextTrack,
         prevTrack,
         stepTrack,
-        toggleVideoModal,
+        toggleMode,
+        clip: clipEtat,
+        attachVideo,
         rateTrack,
         clearRating,
         reprendre,

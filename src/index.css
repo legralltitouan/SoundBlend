@@ -911,6 +911,99 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   box-shadow: 0 30px 70px -30px rgba(0,0,0,.75);
 }
 .nowplaying-art > span { width: 100%; height: 100%; border-radius: inherit; }
+
+/* ═══ l'image du grand lecteur : pochette OU clip ═══
+   Le clip n'a pas sa propre boîte dans la mise en page : il vit dans
+   celle de la pochette. C'est ce qui fait que basculer ne réorganise
+   rien — seule l'image change, à la même place, avec le même rayon.
+   Le lecteur YouTube y est déplacé (jamais recréé) : le son ne coupe pas. */
+.nowplaying-art { position: relative; }
+.nowplaying-art__still,
+.nowplaying-clip {
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  background: #000;
+  transition: opacity .32s cubic-bezier(.4,0,.2,1);
+}
+.nowplaying-art__still { z-index: 1; }
+.nowplaying-art__still > span { width: 100%; height: 100%; border-radius: inherit; }
+.nowplaying-art__still[data-hidden='1'] { opacity: 0; pointer-events: none; }
+.nowplaying-clip {
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  /* le clip remplit la boîte : YouTube peint dans une iframe qu'on
+     dimensionne en pixels réels, ici on ne fait que rogner les bords */
+}
+.nowplaying-clip[data-on='1'] { opacity: 1; }
+.nowplaying-clip iframe {
+  position: absolute; inset: 0;
+  width: 100% !important; height: 100% !important;
+  border: 0;
+  /* le clic est à nous : la barre YouTube (titre, partage, logos) n'a
+     rien à faire dans un lecteur déjà entièrement commandé par l'app */
+  pointer-events: none;
+}
+
+/* ─── le sélecteur d'image, à la place de l'ancien mot « En lecture » ───
+   Le dessin demandé : un seul galet sombre, deux positions, et la
+   pastille claire qui **remplit exactement** la moitié choisie. Pas de
+   marge entre le galet et la pastille, pas de vignette, pas de trou.
+   La pastille est un pseudo-élément de largeur 50 % : elle ne peut donc
+   jamais laisser d'espace vide, quelle que soit la longueur des mots. */
+.sb-artmode {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: min(212px, 58vw);
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 26%, transparent);
+  isolation: isolate;
+}
+/* la pastille : la moitié du galet, au pixel */
+.sb-artmode::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 0;
+  width: 50%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 88%, white);
+  box-shadow: 0 1px 2px rgba(0,0,0,.16);
+  transition: transform .26s cubic-bezier(.32,.72,0,1);
+  z-index: 0;
+}
+.sb-artmode[data-mode='clip']::before { transform: translateX(100%); }
+.sb-artmode__opt {
+  position: relative;
+  z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  height: 100%;
+  padding: 0;
+  border: 0; background: transparent;
+  color: var(--ink-2);
+  font: inherit; font-size: 12.5px; font-weight: 650;
+  letter-spacing: .005em;
+  cursor: pointer;
+  transition: color .2s, opacity .2s;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.sb-artmode__opt[data-on='1'] { color: var(--ink); }
+.sb-artmode__opt[data-off='1'] { opacity: .42; cursor: default; }
+.sb-artmode__opt:disabled { cursor: default; }
+.sb-artmode__opt:not([data-off='1']):active { transform: scale(.98); }
+.sb-artmode__spin {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid currentColor; border-top-color: transparent;
+  animation: sb-spin .9s linear infinite;
+}
+@keyframes sb-spin { to { transform: rotate(360deg); } }
+
 .nowplaying-meta { text-align: center; max-width: 480px; }
 .nowplaying-meta h2 { font-size: 26px; margin: 0 0 6px; font-weight: 400; }
 .nowplaying-meta p { margin: 0; font-size: 14px; }
@@ -2410,7 +2503,7 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
 }
 /* c'est un canvas désormais : le filtre SVG recalculé à chaque image
    laissait un bord net et des marches dans les dégradés sombres */
-.sb-organic-canvas {
+.sb-organic-svg {
   position: absolute; inset: 0;
   display: block;
   width: 100%; height: 100%;
@@ -2650,7 +2743,7 @@ html[data-mode='dark'] .sb-install-done svg { color: #3ddc84; }
        largeur de l'écran moins les marges : sur un téléphone étroit,
        c'est la largeur qui décide. */
     --art: clamp(120px, min(calc(100vh - 430px - var(--safe-b)), 92vw), 46vh);
-    --art-r: 12px;
+    --art-r: 16px;
   }
 
   .nowplaying-top { padding: calc(10px + var(--safe-t)) 14px 6px; }

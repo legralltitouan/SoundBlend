@@ -14,7 +14,7 @@ import { SettingsView } from './components/views/SettingsView';
 import { PickerModal } from './components/modals/PickerModal';
 import { ConfigModal } from './components/modals/ConfigModal';
 import { GeneratingOverlay } from './components/modals/GeneratingOverlay';
-import { PlayerBar, VideoModal } from './components/player/PlayerBar';
+import { PlayerBar } from './components/player/PlayerBar';
 import { Check } from 'lucide-react';
 import { WelcomeFlow } from './components/shell/WelcomeFlow';
 import { Ambience } from './components/shell/Ambience';
@@ -62,7 +62,6 @@ const Modals: React.FC = () => (
     <PickerModal />
     <ConfigModal />
     <GeneratingOverlay />
-    <VideoModal />
   </>
 );
 

@@ -41,6 +41,26 @@ const TOKEN_KEY = 'soundblend_yt_token';
 const TOKEN_EXP_KEY = 'soundblend_yt_token_exp';
 const USER_KEY = 'soundblend_yt_user';
 
+/* ── la mémoire des clips : un morceau ne change pas de clip d'une
+   écoute à l'autre, et on ne refait pas la recherche à chaque ouverture du
+   lecteur. Une heure suffit — et un « pas de clip » se retente plus tard,
+   parce que les clips sortent. ── */
+const clipCache = new Map<string, { at: number; val: string | null }>();
+const clipEnCours = new Map<string, Promise<string | null>>();
+const CLIP_TTL = 60 * 60 * 1000;
+
+/* la comparaison de titres : sans accents, sans casse, sans ponctuation —
+   « Stomp!" et « stomp » sont le même morceau */
+const normaliser = (t: string): string =>
+  (t || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(official|video|clip|hd|hq|version|single|album|feat|ft)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 // Cache search queries to prevent burning YouTube API quota (100 units per search)
 const searchCache = new Map<string, string>();
 // Cache playlist tracks
@@ -645,6 +665,94 @@ export class YouTubeService {
 
     jouableCache.set(videoId, { at: Date.now() + JOUABLE_TTL, val });
     return val;
+  }
+
+  /**
+   * ─────────── un VRAI clip, pour l'image ───────────
+   *
+   * Beaucoup de morceaux de la file pointent vers une vidéo « audio » (la
+   * piste seule, une pochette fixe, publiée par un compte « - Topic »).
+   * Pour écouter, c'est parfait ; pour *regarder*, c'est une image
+   * immobile. On cherche donc, une fois par morceau et seulement quand on
+   * le demande, une vidéo qui montre quelque chose :
+   *
+   *   1. une recherche « artiste titre official video », sans clé ;
+   *   2. on écarte tout ce qui est un « Topic », un « audio », un
+   *      « lyrics », un concert d'une heure ou une version accélérée ;
+   *   3. on exige que le titre et l'artiste se retrouvent dans le
+   *      résultat — on ne remplace pas un morceau par un autre ;
+   *   4. `oembed` confirme qu'elle existe et accepte l'intégration.
+   *
+   * `null` veut dire « pas de clip connu » — et ce n'est pas une erreur :
+   * on gardera alors la pochette, sans jamais rien inventer.
+   */
+  public async trouverClip(track: { title: string; artist: string; videoId: string; durationSeconds?: number }): Promise<string | null> {
+    const cle = `${track.artist}::${track.title}`.toLowerCase();
+    const memo = clipCache.get(cle);
+    if (memo && Date.now() < memo.at) return memo.val;
+    if (clipEnCours.has(cle)) return clipEnCours.get(cle)!;
+
+    const travail = (async (): Promise<string | null> => {
+      /* la vidéo d'origine est peut-être déjà un clip : on regarde ce que
+         YouTube dit d'elle avant de chercher ailleurs */
+      const propre = await verifyVideo(track.videoId).catch(() => null);
+      const nomPropre = `${propre?.author || ''}`.toLowerCase();
+      const dejaUnClip = !!propre?.ok && !!nomPropre && !/topic|vevo\s*-?\s*topic/.test(nomPropre);
+
+      const requete = `${track.artist} ${track.title} official video`;
+      const vus: Video[] = [];
+      try {
+        const api = await this.searchTracks(requete, 8);
+        for (const t of api.tracks) {
+          if (t.videoId) vus.push({ videoId: t.videoId, title: t.title, artist: t.artist });
+        }
+      } catch { /* la recherche du compte peut manquer : Piped prend la suite */ }
+      if (!vus.length) {
+        const p = await pipedSearch(requete, 'music_songs').catch(() => []);
+        vus.push(...p);
+      }
+
+      const mots = normaliser(track.title);
+      const artiste = normaliser(track.artist);
+      const mauvais = /\b(audio|lyrics?|paroles|topic|instrumental|karaoke|reaction|cover|live|concert|remix|sped up|slowed|nightcore)\b/;
+      /* la longueur : un clip qui dure 30 s ou 1 h 20 n'est pas la même
+         chanson — et, surtout, il déplacerait la barre de progression.
+         On exige donc une durée comparable quand on la connaît. */
+      const duree = track.durationSeconds || 0;
+      const dureeOk = (d?: number) => !duree || !d || Math.abs(d - duree) <= Math.max(25, duree * 0.22);
+
+      let candidat: string | null = null;
+      for (const v of vus) {
+        if (!v.videoId || v.videoId === track.videoId) continue;
+        const titre = normaliser(v.title);
+        const auteur = normaliser(v.artist);
+        if (mauvais.test(titre) || mauvais.test(auteur)) continue;
+        /* le titre du morceau doit se retrouver dans le résultat, et
+           l'artiste aussi : sinon c'est une autre chanson */
+        if (!titre.includes(mots) && !mots.includes(titre.slice(0, Math.max(4, mots.length)))) continue;
+        if (artiste && !titre.includes(artiste) && !auteur.includes(artiste)) continue;
+        if (!dureeOk(v.durationSeconds)) continue;
+        candidat = v.videoId;
+        /* `oembed` tranche : intégration acceptée, ou rien */
+        const ok = await verifyVideo(v.videoId).catch(() => null);
+        if (ok?.ok && ok.jouable !== false) return v.videoId;
+        candidat = null;
+      }
+
+      /* rien de convaincant : si la vidéo d'origine est déjà un clip (un
+         vrai compte d'artiste, pas un « Topic »), on l'annonce comme tel */
+      if (dejaUnClip && propre?.ok) return track.videoId;
+      return candidat;
+    })();
+
+    clipEnCours.set(cle, travail);
+    try {
+      const val = await travail;
+      clipCache.set(cle, { at: Date.now() + CLIP_TTL, val });
+      return val;
+    } finally {
+      clipEnCours.delete(cle);
+    }
   }
 
   /**

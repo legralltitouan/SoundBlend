@@ -300,7 +300,10 @@ export const usePlayerSheet = (opts: Opts) => {
 
   /* ═══ ouvrir depuis la barre du bas ═══ */
 
-  const bar = useRef({ down: false, y0: 0, x0: 0, claimed: false, startY: 0 });
+  /* on retient aussi la vitesse du doigt : un geste franc ouvre même
+     court, c'est ce qui manquait pour que le lecteur s'ouvre au premier
+     essai */
+  const bar = useRef({ down: false, y0: 0, x0: 0, claimed: false, startY: 0, lastY: 0, lastT: 0, vy: 0 });
 
   const onBarDown = useCallback((e: React.PointerEvent) => {
     if (e.pointerType === 'mouse') return;
@@ -313,7 +316,10 @@ export const usePlayerSheet = (opts: Opts) => {
        monter la feuille. */
     if (t.closest('.prail')) return;
     if (t.closest('button, a') && !t.closest('.nowbar-track')) return;
-    bar.current = { down: true, y0: e.clientY, x0: e.clientX, claimed: false, startY: 0 };
+    bar.current = {
+      down: true, y0: e.clientY, x0: e.clientX, claimed: false, startY: 0,
+      lastY: e.clientY, lastT: performance.now(), vy: 0,
+    };
     try { (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
   }, []);
 
@@ -321,8 +327,17 @@ export const usePlayerSheet = (opts: Opts) => {
     const b = bar.current;
     if (!b.down) return;
     const dy = e.clientY - b.y0;
+    /* la vitesse, lissée : le premier mouvement compte double, sinon un
+       doigt déjà lancé n'a pas le temps d'en donner deux */
+    const now = performance.now();
+    const dt = Math.max(1, now - b.lastT);
+    b.vy = b.vy * 0.35 + ((e.clientY - b.lastY) / dt) * 0.65;
+    b.lastY = e.clientY;
+    b.lastT = now;
     if (!b.claimed) {
-      if (dy > -SLOP) return;
+      /* on part au premier pixel vers le haut : attendre huit pixels,
+         c'était déjà un geste sur trois qui ne s'engageait pas */
+      if (dy > -3) return;
       if (Math.abs(e.clientX - b.x0) > Math.abs(dy) * 1.2) { b.down = false; return; }
       b.claimed = true;
       /* la feuille apparaît à la hauteur exacte du doigt */
@@ -344,7 +359,17 @@ export const usePlayerSheet = (opts: Opts) => {
     setDragging(false);
     setSettling(true);
     const h = H();
-    if (yRef.current < h * 0.7) setYBoth(0);
+    /* ─── le seuil, et pourquoi il a baissé ───
+       Il fallait remonter la feuille à 30 % de l'écran pour qu'elle
+       reste ouverte : sur un téléphone, cela fait ~250 px, et un geste
+       sur deux s'arrêtait avant. Désormais :
+         · 5,5 % de l'écran (≈45 px) suffisent — la feuille suit le doigt,
+           donc on voit tout de suite qu'on est en train de l'ouvrir ;
+         · ou un geste franc vers le haut, même sur 15 px (0,28 px/ms).
+       Fermer demande toujours plus : c'est le sens de l'erreur. */
+    const monte = h - yRef.current;
+    const vif = b.vy < -0.28;
+    if (monte > h * 0.055 || (vif && monte > 12)) setYBoth(0);
     else setYBoth(h);
   }, [H]);
 
