@@ -1,6 +1,7 @@
 import { BlendConfig, TasteMemory, Track, TrackCategory } from '../types';
 import { getStoredSettings, getSeenTracks, rememberSeenTrack } from './storage';
 import { youtubeService, withTimeout } from './youtube';
+import { trackKeys, dedupeTracks, uniqueByVideo } from '../lib/dedupe';
 
 /* Les étapes d'un remplacement : le bandeau à l'écran les raconte une par
    une, pour qu'on sache toujours où en est la recherche. */
@@ -294,6 +295,19 @@ function firstJson(raw: string): any | null {
 
 /* Combien de titres proposés ressemblent vraiment à ce qu'on attendait :
    sert à rejeter une réponse hors sujet (liste vide, doublons, charabia). */
+
+/* ─────────── l'unicité ───────────
+   Un blend ne contient jamais deux fois le même morceau. On compare sur
+   trois clés, de la plus sûre à la plus tolérante :
+   · l'identifiant vidéo YouTube — deux fois le même fichier ;
+   · le titre + artiste normalisés — la même chanson sous un autre envoi ;
+   · le titre normalisé seul, quand l'artiste est écrit différemment.
+   Accents, casse, « (Live) », « - Remastered » et ponctuation sont
+   ignorés : « Get Lucky — Radio Edit » et « Get Lucky », c'est le même. */
+/* les outils d'unicité vivent dans `lib/dedupe` : le stockage en a
+   besoin aussi, et il ne peut pas importer ce service (cycle). */
+export { norm, trackKeys, dedupeTracks, uniqueByVideo, uniqueTracks } from '../lib/dedupe';
+
 function usableCount(items: any): number {
   if (!Array.isArray(items)) return 0;
   return items.filter((i) => i && typeof i.title === 'string' && i.title.length > 1
@@ -346,6 +360,11 @@ Consignes précises de répartition :
 2. ANCHOR (${anchorTarget} titres) : Choisis parmi les morceaux amorces ci-dessus.
 3. DEEP DIVES (${deepDiveTarget} titres) : Des morceaux moins connus, faces B, pépites d'albums ou remixes des MÊMES artistes que ceux des morceaux amorces.
 4. FRESH DISCOVERY (${freshTarget} titres) : Des artistes différents (mêmes micro-genres, texture sonore similaire, instruments proches) que l'auditeur appréciera.
+
+RÈGLE ABSOLUE : aucun morceau ne doit apparaître deux fois. Chaque titre
+doit avoir un couple titre/artiste unique dans ta réponse, et aucun ne
+doit reprendre un morceau déjà cité (même avec une mention live, remix
+ou remaster).
 
 Pour chaque morceau, fournis une courte explication ("rationale") en français expliquant le lien musical (ex: "Même groove de basse funk", "Face B intimiste de l'album de 2019", "Même ambiance synthwave mélancolique").
 
@@ -419,7 +438,11 @@ Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionne
           } as Track;
         }));
 
-        return tracks;
+        /* le modèle peut répéter un titre, ou proposer deux envois du même
+           morceau : on ne garde que le premier de chaque. Le garde-fou est
+           ici, au dernier moment, parce que c'est le seul endroit où l'on
+           connaît l'identifiant vidéo — le critère le plus sûr. */
+        return uniqueByVideo(dedupeTracks(tracks));
       } catch (e: any) {
         /* 429 : la clé est en quota pour TOUS les modèles. Insister sur les
            suivants ne fait qu'ajouter des requêtes refusées dans la
@@ -454,10 +477,15 @@ Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionne
     tasteMemory: TasteMemory
   ): Track[] {
     const results: Track[] = [];
+    /* le registre des clés déjà prises, tenu à mesure qu'on empile */
+    const trackKeys2 = new Set<string>();
+    const note = (t: { videoId?: string; title?: string; artist?: string }) =>
+      trackKeys(t).forEach((k) => trackKeys2.add(k));
 
     // 1. ANCHOR: Take from seed tracks
     const selectedAnchors = seedTracks.slice(0, anchorCount);
     selectedAnchors.forEach(t => {
+      note(t);
       results.push({
         ...t,
         category: 'anchor',
@@ -509,6 +537,9 @@ Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionne
       if (artistDives) {
         for (const item of artistDives) {
           if (deepDivesAdded >= deepDiveCount) break;
+          /* déjà proposé sous un autre nom ? on passe */
+          if (trackKeys({ videoId: item.videoId, title: item.title, artist }).some((k) => trackKeys2.has(k))) continue;
+          note({ videoId: item.videoId, title: item.title, artist });
           results.push({
             id: `dd-${Math.random().toString(36).substr(2, 7)}`,
             videoId: item.videoId,
@@ -529,6 +560,9 @@ Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionne
     while (deepDivesAdded < deepDiveCount) {
       const fallback = genericDeepDives[deepDivesAdded % genericDeepDives.length];
       const artist = fallback.artist || seedArtists[deepDivesAdded % seedArtists.length] || 'Artiste Similaire';
+      /* un morceau déjà présent ne revient pas : on saute, quitte à
+         rendre un titre de moins plutôt qu'un doublon */
+      if (trackKeys({ title: fallback.title, artist }).some((k) => trackKeys2.has(k))) { deepDivesAdded++; continue; }
       results.push({
         id: `dd-gen-${Math.random().toString(36).substr(2, 7)}`,
         videoId: fallback.videoId,
@@ -559,6 +593,10 @@ Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionne
 
     for (let i = 0; i < freshCount; i++) {
       const pick = filteredFresh[i % filteredFresh.length];
+      /* même règle : jamais deux fois le même morceau, même présenté
+         comme une « découverte » */
+      if (trackKeys({ videoId: pick.videoId, title: pick.song, artist: pick.title }).some((k) => trackKeys2.has(k))) continue;
+      note({ videoId: pick.videoId, title: pick.song, artist: pick.title });
       results.push({
         id: `fresh-${Math.random().toString(36).substr(2, 7)}`,
         videoId: pick.videoId,
@@ -573,7 +611,10 @@ Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionne
       });
     }
 
-    return results;
+    /* même règle hors ligne : le catalogue local peut proposer deux fois
+       « Something About Us » selon les artistes amorces. On garde l'ordre,
+       on jette les doublons. */
+    return uniqueByVideo(dedupeTracks(results));
   }
 
   /**

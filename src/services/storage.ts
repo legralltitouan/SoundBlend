@@ -4,16 +4,20 @@ const SETTINGS_KEY = 'soundblend_settings';
 const TASTE_MEMORY_KEY = 'soundblend_taste_memory';
 const RECENT_BLENDS_KEY = 'soundblend_recent_blends';
 
-/* Aucune clé n'est écrite ici, ni en secours.
-   Le code est public : la moindre clé laissée dans un fichier source
-   part avec le dépôt. Les valeurs viennent de `.env` en local — fichier
-   qui n'est jamais envoyé — et, une fois en ligne, de ce que la personne
-   saisit dans Réglages → Clés & API (gardé dans son navigateur).
-   Vide, l'app demande les clés : elle ne casse pas. */
+/* Aucune clé n'est écrite ici, et **aucune n'est lue au moment du build**.
+
+   Vite remplace `import.meta.env.VITE_*` par sa valeur à la compilation :
+   la moindre variable laissée dans un `.env` local se retrouverait donc
+   dans le fichier JavaScript publié, lisible par n'importe qui. Le code
+   est public : on ne prend pas ce risque.
+
+   Les clés viennent uniquement de ce que la personne saisit dans
+   Réglages → Clés & API, et restent dans son navigateur. Vide, l'app
+   demande les clés : elle ne casse pas. */
 export const DEFAULT_SETTINGS: AppSettings = {
-  googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID || '',
-  youtubeApiKey: import.meta.env.VITE_YOUTUBE_API_KEY || '',
-  geminiApiKey: import.meta.env.VITE_GEMINI_API_KEY || '',
+  googleClientId: '',
+  youtubeApiKey: '',
+  geminiApiKey: '',
 };
 
 export const getStoredSettings = (): AppSettings => {
@@ -100,37 +104,54 @@ export const saveStoredTasteMemory = (memory: TasteMemory): void => {
   }
 };
 
-export const recordTrackRating = (track: Track, rating: 'liked' | 'disliked'): TasteMemory => {
+/* ═══════════════════════════════════════════════════════════════
+   La mémoire des goûts suit le registre des avis, dans les deux sens.
+
+   Avant, retirer un avis ne faisait que décocher le pouce : le morceau
+   restait dans « Tes goûts ». Deux listes racontaient alors deux choses
+   différentes. Désormais une seule fonction applique un avis — posé ou
+   retiré — et retire aussi le morceau de l'autre liste.
+   ═══════════════════════════════════════════════════════════════ */
+
+const sameMemoryTrack = (a: { id?: string; title?: string; artist?: string }, b: { id?: string; title?: string; artist?: string }) => {
+  if (a.id && b.id && a.id === b.id) return true;
+  const ta = (a.title || '').trim().toLowerCase();
+  const tb = (b.title || '').trim().toLowerCase();
+  if (!ta || ta !== tb) return false;
+  const aa = (a.artist || '').trim().toLowerCase();
+  const ab = (b.artist || '').trim().toLowerCase();
+  return !aa || !ab || aa === ab;
+};
+
+/** applique un avis au souvenir : `null` = on oublie ce morceau. */
+export const applyRatingToTaste = (
+  track: { id?: string; videoId?: string; title?: string; artist?: string },
+  rating: 'liked' | 'disliked' | null,
+): TasteMemory => {
   const current = getStoredTasteMemory();
   const now = new Date().toISOString();
+  const seed = { id: (track as any).id || `${track.title}-${track.artist}`, title: track.title || '', artist: track.artist || '' };
 
-  const likedTracks = current.likedTracks.filter(t => t.id !== track.id && t.title.toLowerCase() !== track.title.toLowerCase());
-  const dislikedTracks = current.dislikedTracks.filter(t => t.id !== track.id && t.title.toLowerCase() !== track.title.toLowerCase());
-  let likedArtists = [...current.likedArtists];
-  let dislikedArtists = [...current.dislikedArtists];
+  /* 1. on retire le morceau des deux listes, quelle que soit la note */
+  let likedTracks = current.likedTracks.filter((t) => !sameMemoryTrack(t, seed));
+  let dislikedTracks = current.dislikedTracks.filter((t) => !sameMemoryTrack(t, seed));
 
-  if (rating === 'liked') {
-    likedTracks.unshift({
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      addedAt: now,
-    });
-    if (!likedArtists.includes(track.artist)) {
-      likedArtists.push(track.artist);
-    }
-    dislikedArtists = dislikedArtists.filter(a => a.toLowerCase() !== track.artist.toLowerCase());
-  } else {
-    dislikedTracks.unshift({
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      addedAt: now,
-    });
-    if (!dislikedArtists.includes(track.artist)) {
-      dislikedArtists.push(track.artist);
-    }
-    likedArtists = likedArtists.filter(a => a.toLowerCase() !== track.artist.toLowerCase());
+  /* 2. on le remet, dans la bonne liste, en tête */
+  if (rating === 'liked') likedTracks = [{ ...seed, addedAt: now }, ...likedTracks];
+  if (rating === 'disliked') dislikedTracks = [{ ...seed, addedAt: now }, ...dislikedTracks];
+
+  /* 3. les artistes : un artiste aimé ne peut pas être « évité », et
+     inversement. Sans avis, il quitte les deux seulement s'il n'a plus
+     aucun morceau noté. */
+  const artist = (seed.artist || '').trim();
+  const sameArtist = (x: string) => x.trim().toLowerCase() === artist.toLowerCase();
+  let likedArtists = current.likedArtists.filter((a) => !sameArtist(a));
+  let dislikedArtists = current.dislikedArtists.filter((a) => !sameArtist(a));
+  if (artist) {
+    const stillLiked = likedTracks.some((t) => t.artist.trim().toLowerCase() === artist.toLowerCase());
+    const stillDisliked = dislikedTracks.some((t) => t.artist.trim().toLowerCase() === artist.toLowerCase());
+    if (stillLiked) likedArtists = [...likedArtists, artist];
+    if (stillDisliked) dislikedArtists = [...dislikedArtists, artist];
   }
 
   const updated: TasteMemory = {
@@ -139,10 +160,13 @@ export const recordTrackRating = (track: Track, rating: 'liked' | 'disliked'): T
     likedArtists: likedArtists.slice(0, 50),
     dislikedArtists: dislikedArtists.slice(0, 50),
   };
-
   saveStoredTasteMemory(updated);
   return updated;
 };
+
+/** compatibilité : un pouce posé */
+export const recordTrackRating = (track: Track, rating: 'liked' | 'disliked'): TasteMemory =>
+  applyRatingToTaste(track, rating);
 
 export const getStoredBlends = (): GeneratedBlend[] => {
   try {

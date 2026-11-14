@@ -10,6 +10,7 @@ import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { geminiService } from '../../services/gemini';
+import { dedupeTracks } from '../../lib/dedupe';
 import { youtubeService } from '../../services/youtube';
 import { getStoredTasteMemory } from '../../services/storage';
 import { useReplaceQueue } from '../../context/ReplaceQueueContext';
@@ -32,7 +33,7 @@ const CAT: Record<TrackCategory, { label: string; color: string }> = {
 export const BlendView: React.FC = () => {
   const { currentBlend, updateBlend, settings, isAuthenticated, ratingOf, setRating } = useData();
   const { design, showToast, setView } = useUI();
-  const { playTrack, currentTrack, isPlaying, rateTrack } = usePlayer();
+  const { playTrack, currentTrack, isPlaying } = usePlayer();
 
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(currentBlend?.title || '');
@@ -138,7 +139,11 @@ export const BlendView: React.FC = () => {
   const myRating = (t: Track) => ratingOf(t) ?? t.userRating ?? null;
   const rate = (t: Track, rating: 'liked' | 'disliked') => {
     const next: 'liked' | 'disliked' | null = myRating(t) === rating ? null : rating;
-    rateTrack(t, rating);
+    /* `setRating` est la seule vérité : il écrit la note *et* tient la
+       mémoire des goûts. Un second appui sur le même pouce envoie
+       `null` — le morceau quitte alors « Tes goûts », ici comme dans le
+       lecteur. (Passer par `rateTrack` en plus faisait écrire la mémoire
+       deux fois, avec un état intermédiaire faux.) */
     setRating(t, next);
     updateBlend({
       ...blend,
@@ -173,8 +178,12 @@ export const BlendView: React.FC = () => {
           const note = geminiService.takeEngineNote();
           if (note) onStep(note as any);
           if (!fresh) continue;
-          if (blend.tracks.some((t) => t.id !== track.id && t.videoId && t.videoId === fresh.videoId)) continue;
+          /* la proposition ne doit être ni le morceau remplacé, ni un autre
+             morceau du blend — ni le même en double, sous un autre titre */
+          const others = blend.tracks.filter((t) => t.id !== track.id);
           if (!fresh.videoId) continue;
+          if (others.some((t) => (t.videoId && t.videoId === fresh.videoId)
+            || t.title.trim().toLowerCase() === fresh.title.trim().toLowerCase())) continue;
           return { title: fresh.title, artist: fresh.artist, track: fresh };
         }
         return null;
@@ -192,7 +201,10 @@ export const BlendView: React.FC = () => {
     if (target) {
       updateBlend({
         ...blend,
-        tracks: blend.tracks.map((t) => (t.id === ready.trackId ? ready.result!.track : t)),
+        /* et on vérifie une dernière fois l'unicité : la liste publiée ne
+           peut pas contenir deux fois le même morceau, quel que soit le
+           chemin emprunté pour y arriver. */
+        tracks: dedupeTracks(blend.tracks.map((t) => (t.id === ready.trackId ? ready.result!.track : t))),
       });
       showToast(`« ${target.title} » remplacé par « ${ready.result.title} » — ${ready.result.artist}.`);
     }
@@ -345,7 +357,11 @@ export const BlendView: React.FC = () => {
 
               <button className="sb-track-meta" onClick={() => playTrack(t, blend.tracks)}>
                 <span className="sb-row-title">
-                  {t.title}
+                  {/* le titre se tronque, l'étiquette reste entière :
+                      deux morceaux dans une même ligne, le premier seul
+                      accepte de rétrécir. Avant, l'étiquette était poussée
+                      hors du cadre et disparaissait. */}
+                  <span className="sb-row-titletext">{t.title}</span>
                   {cat && <span className="sb-cat" data-cat={t.category}>{cat.label}</span>}
                 </span>
                 <span className="sb-row-sub">

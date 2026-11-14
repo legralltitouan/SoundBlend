@@ -1,173 +1,110 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, ThumbsUp, ThumbsDown,
-  Maximize2, ExternalLink, ListMusic, ChevronUp,
+  Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, ChevronUp,
+  ThumbsUp, ThumbsDown, ListMusic, Maximize2, ExternalLink,
 } from 'lucide-react';
 import { usePlayer } from '../../context/PlayerContext';
 import { useData } from '../../context/DataContext';
-import { useCover } from '../ui/Art';
-import { Art } from '../ui/Art';
+import { usePlayerSheet, useViewportHeight } from './PlayerGestures';
+import { Art, useCover } from '../ui/Art';
+import { usePalette, paletteToCss } from '../../lib/palette';
+import type { Track } from '../../types';
+
+/* ═══════════════════════════════════════════════════════════════
+   Le lecteur, version mobile d'abord.
+
+   Deux objets, un seul geste :
+
+   · **la barre** — la bande du bas, toujours là pendant la lecture.
+     Un doigt qui monte dessus fait apparaître le plein écran, collé à
+     sa course : la feuille ne « s'ouvre » pas d'un coup, elle suit.
+
+   · **la feuille** — le plein écran. Elle descend avec le doigt, où
+     qu'on le pose (la pochette, le titre, la barre de progression hors
+     du rail, le bas de l'écran). Un glissement latéral sur la pochette
+     fait défiler les morceaux : la pochette part avec le doigt, la
+     voisine entre par le bord, et l'ambiance passe de l'une à l'autre.
+
+   La position de la feuille est *une seule* valeur, `y` : 0 ouvert,
+   `vh` rangé. Rien d'autre ne la déplace — c'est ce qui évite les
+   conflits entre une transition et une transformation manuelle.
+   ═══════════════════════════════════════════════════════════════ */
 
 const fmt = (s: number) => {
-  if (!Number.isFinite(s) || s < 0) s = 0;
+  if (!Number.isFinite(s) || s < 0) return '0:00';
   const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${sec.toString().padStart(2, '0')}`;
-};
-
-/* ═══════════════════════════════════════════════════════════════
-   Lecteur persistant — une seule barre de progression, celle du
-   haut, qui s'épaissit au survol et se déplace à la main.
-   Sur bureau, le volume prend la place de l'ancienne barre en double.
-   ═══════════════════════════════════════════════════════════════ */
-
-
-/* ═══════════════════════════════════════════════════════════════
-   Gestes de la feuille « En lecture ».
-
-   · un glissement vers le bas ferme la feuille — on suit le doigt,
-     et si le geste est franc on referme, sinon la feuille remonte ;
-   · un glissement horizontal sur la pochette passe au morceau
-     suivant (vers la gauche) ou revient au précédent (vers la droite),
-     avec la pochette qui suit le doigt.
-
-   Rien de tout cela ne doit gêner la barre de progression : les
-   gestes partent du fond de la feuille et de la pochette seulement.
-   ═══════════════════════════════════════════════════════════════ */
-
-type Gesture = {
-  active: boolean;
-  mode: 'sheet' | 'cover' | null;
-  x: number; y: number; dx: number; dy: number;
-  axis: 'none' | 'x' | 'y';
-};
-
-const useSheetGestures = (opts: {
-  onClose: () => void;
-  onNext: () => void;
-  onPrev: () => void;
-}) => {
-  const [offset, setOffset] = useState(0);          // la feuille suit le doigt
-  const [coverDx, setCoverDx] = useState(0);        // la pochette suit le doigt
-  const g = useRef<Gesture>({ active: false, mode: null, x: 0, y: 0, dx: 0, dy: 0, axis: 'none' });
-
-  /* un seul point d'entrée : c'est l'endroit où le doigt se pose qui
-     décide du geste. Pas de gestionnaire concurrent, donc pas de doute
-     sur ce qui doit se produire au relâchement. */
-  const start = (e: React.PointerEvent) => {
-    if (e.pointerType === 'mouse') return;           // à la souris, rien à simuler
-    const t = e.target as HTMLElement;
-    /* la barre de progression et la file gardent leurs propres gestes */
-    if (t.closest('.prail, .nowplaying-queue')) return;
-    const mode: Gesture['mode'] = t.closest('.nowplaying-art') ? 'cover' : 'sheet';
-    g.current = { active: true, mode, x: e.clientX, y: e.clientY, dx: 0, dy: 0, axis: 'none' };
-    const el = e.currentTarget as HTMLElement;
-    try { el.setPointerCapture?.(e.pointerId); } catch { /* sans capture, tant pis */ }
-  };
-
-  const move = (e: React.PointerEvent) => {
-    const d = g.current;
-    if (!d.active) return;
-    d.dx = e.clientX - d.x;
-    d.dy = e.clientY - d.y;
-    if (d.axis === 'none') {
-      if (Math.abs(d.dx) < 10 && Math.abs(d.dy) < 10) return;
-      d.axis = Math.abs(d.dx) > Math.abs(d.dy) ? 'x' : 'y';
-    }
-    if (d.mode === 'cover' && d.axis === 'x') setCoverDx(d.dx);
-    if (d.mode === 'sheet' && d.axis === 'y' && d.dy > 0) setOffset(d.dy);
-  };
-
-  const end = () => {
-    const d = g.current;
-    if (!d.active) return;
-    d.active = false;
-
-    if (d.mode === 'cover' && d.axis === 'x') {
-      /* un geste franc d'au moins 60 px change de morceau */
-      if (d.dx < -60) opts.onNext();
-      else if (d.dx > 60) opts.onPrev();
-      setCoverDx(0);
-      return;
-    }
-    if (d.mode === 'sheet' && d.axis === 'y') {
-      /* la feuille se referme si elle a été tirée assez bas */
-      if (d.dy > 110) opts.onClose();
-      setOffset(0);
-      return;
-    }
-    setOffset(0);
-    setCoverDx(0);
-  };
-
-  return { offset, coverDx, start, move, end };
-};
-
-/* ═══════════════════════════════════════════════════════════════
-   Geste de la barre du bas : un glissement vers le haut n'importe où
-   sur la barre (pochette, titre, vide) ouvre le lecteur plein écran —
-   comme le fait l'app mobile. Un appui simple, lui, ne change rien.
-   ═══════════════════════════════════════════════════════════════ */
-
-const useBarSwipe = (onUp: () => void) => {
-  const g = useRef({ x: 0, y: 0, active: false, dy: 0 });
-  const start = (e: React.PointerEvent) => {
-    if (e.pointerType === 'mouse') return;
-    g.current = { x: e.clientX, y: e.clientY, active: true, dy: 0 };
-  };
-  const move = (e: React.PointerEvent) => {
-    if (!g.current.active) return;
-    g.current.dy = e.clientY - g.current.y;
-  };
-  const end = () => {
-    if (!g.current.active) return;
-    const { dy, x } = g.current;
-    g.current.active = false;
-    /* geste franc vers le haut, sans dérive horizontale */
-    if (dy < -34) onUp();
-  };
-  return {
-    onPointerDown: start,
-    onPointerMove: move,
-    onPointerUp: end,
-    onPointerCancel: () => { g.current.active = false; },
-  };
+  const r = Math.floor(s % 60);
+  return `${m}:${String(r).padStart(2, '0')}`;
 };
 
 export const PlayerBar: React.FC = () => {
   const {
     currentTrack, isPlaying, progress, duration, volume, isMuted,
     togglePlay, seekTo, setVolume, toggleMute, nextTrack, prevTrack, stepTrack, toggleVideoModal,
+    queue,
   } = usePlayer();
 
   /* même registre que la liste du blend : un vote posé ici s'y voit, et
      réciproquement — plus de décalage entre les deux affichages */
   const { ratingOf, setRating } = useData();
-  const { rateTrack } = usePlayer();
   const ownRating = currentTrack ? ratingOf(currentTrack) ?? currentTrack.userRating ?? null : null;
   const vote = (r: 'liked' | 'disliked') => {
     if (!currentTrack) return;
-    rateTrack(currentTrack, r);
+    /* un second appui sur le même pouce retire l'avis — et « Tes goûts »
+       doit le refléter, c'est setRating qui s'en charge. */
     setRating(currentTrack, ownRating === r ? null : r);
   };
 
-  const [expanded, setExpanded] = useState(false);
-  /* les gestes de la feuille : glisser vers le bas pour la refermer,
-     glisser sur la pochette pour changer de morceau */
-  const sheet = useSheetGestures({
-    onClose: () => setExpanded(false),
+  const vh = useViewportHeight();
+  /* la position visée pendant qu'on glisse sur la barre (null = au repos) */
+  const [scrub, setScrub] = useState<number | null>(null);
+  /* où en est le doigt dans le glissement latéral, de -1 à 1 : c'est ce
+     qui règle l'opacité de l'ambiance (l'ambiance change *pendant* le
+     geste, et non d'un coup au changement de morceau) */
+  const [coverMix, setCoverMix] = useState(0);
+
+  /* les deux voisins, pour les faces latérales du carrousel */
+  const peekTrack = (step: 1 | -1) => {
+    if (!queue.length || !currentTrack) return null;
+    const i = queue.findIndex((t) => t.id === currentTrack.id);
+    if (i < 0) return null;
+    return queue[(i + step + queue.length) % queue.length] ?? null;
+  };
+
+  /* l'ambiance du morceau voisin : on la lit maintenant, pour que la
+     couleur soit prête quand le doigt arrive au bout du geste */
+  const prevT = currentTrack ? peekTrack(-1) : null;
+  const nextT = currentTrack ? peekTrack(1) : null;
+  const curCover = useCover(currentTrack ?? { videoId: '', title: '', artist: '' });
+  const prevCover = useCover(prevT ?? { videoId: '', title: '', artist: '' });
+  const nextCover = useCover(nextT ?? { videoId: '', title: '', artist: '' });
+  /* les trois palettes : la couleur du fond vient d'elles, pas de l'image
+     floutée (qui n'est là que pour la texture). C'est ce qui permet à la
+     teinte de passer de l'une à l'autre pendant le geste. */
+  const curPal = usePalette(curCover.small);
+  const prevPal = usePalette(prevCover.small);
+  const nextPal = usePalette(nextCover.small);
+
+  const sheet = usePlayerSheet({
+    height: () => vh,
+    /* la course d'une pochette : de son centre au centre de la scène,
+       c'est-à-dire exactement la distance qui la fait sortir du cadre */
+    coverWidth: () => {
+      const el = document.querySelector('.nowplaying-art--main');
+      const w = el ? el.getBoundingClientRect().width : Math.min(window.innerWidth, vh) * 0.9;
+      return window.innerWidth / 2 + w / 2 + 4;
+    },
     onNext: () => stepTrack(1),
     onPrev: () => stepTrack(-1),
+    onCoverProgress: setCoverMix,
   });
-
 
   const pct = useMemo(() => (duration ? Math.min(100, (progress / duration) * 100) : 0), [progress, duration]);
 
-  /* glisser vers le haut sur la barre ouvre le plein écran */
-  const barSwipe = useBarSwipe(() => setExpanded(true));
-
   if (!currentTrack) return null;
+
+  const coverSize = 'var(--art, min(46vh, 380px))';
 
   return (
     <>
@@ -177,7 +114,7 @@ export const PlayerBar: React.FC = () => {
           className="ytm-nowbar"
           initial={{ y: 70, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 70, opacity: 0 }}
           transition={{ type: 'spring', stiffness: 300, damping: 32 }}
-          {...barSwipe}
+          {...sheet.barHandlers}
         >
           {/* progression : fine au repos, épaisse et manipulable au survol */}
           <ProgressRail
@@ -188,7 +125,7 @@ export const PlayerBar: React.FC = () => {
           />
 
           <button
-            onClick={() => setExpanded(true)}
+            onClick={() => sheet.open()}
             className="nowbar-track"
             aria-label="Ouvrir le lecteur"
           >
@@ -259,7 +196,7 @@ export const PlayerBar: React.FC = () => {
               <button className="icon-btn sb-hide-sm" onClick={toggleVideoModal} aria-label="Clip">
                 <Maximize2 size={15} strokeWidth={1.9} />
               </button>
-              <button className="icon-btn" onClick={() => setExpanded(true)} aria-label="File d’attente">
+              <button className="icon-btn" onClick={() => sheet.open()} aria-label="File d’attente">
                 <ListMusic size={16} strokeWidth={1.9} />
               </button>
             </div>
@@ -267,119 +204,161 @@ export const PlayerBar: React.FC = () => {
         </motion.div>
       </AnimatePresence>
 
-      {/* Now playing plein écran */}
+      {/* ═══ le plein écran ═══
+          Il existe dans le DOM tant que `sheet.mounted` est vrai ; sa
+          position verticale est `sheet.y`, et rien d'autre. Quand le
+          doigt commande, pas de transition ; au relâchement, une
+          transition finit la course et `onSettled` décide de la suite. */}
       <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+        {sheet.mounted && (
+          <div
             className="nowplaying"
-            style={{ transform: sheet.offset ? `translateY(${sheet.offset}px)` : undefined }}
-            data-dragging={sheet.offset > 4 ? '1' : '0'}
-            onPointerDownCapture={sheet.start}
-            onPointerMoveCapture={sheet.move}
-            onPointerUpCapture={sheet.end}
-            onPointerCancelCapture={sheet.end}
+            data-drag={sheet.dragging ? '1' : '0'}
+            data-anim={sheet.settling && !sheet.dragging ? '1' : '0'}
+            style={{ transform: `translate3d(0, ${sheet.y}px, 0)` }}
+            onTransitionEnd={(e) => { if (e.propertyName === 'transform') sheet.onSettled(); }}
           >
-            {/* poignée : le repère du glissement vers le bas */}
-            <span className="nowplaying-grip" aria-hidden />
-            {/* ambiance : la pochette du morceau, floutée derrière l'écran */}
             <div className="nowplaying-ambience" aria-hidden>
-              {/* les mêmes nappes animées que le reste du site, aux couleurs de la pochette */}
-              <div className="nowplaying-aura">
-                <i /><i /><i />
-              </div>
-            </div>
-
-            <div className="nowplaying-top">
-              <button className="icon-btn" onClick={() => setExpanded(false)} aria-label="Réduire">
-                <ChevronUp size={20} style={{ transform: 'rotate(180deg)' }} />
-              </button>
-              <span className="nowplaying-eyebrow">En lecture</span>
-              {/* plus d'icône en haut à droite : la croix du haut suffit */}
-              <span className="nowplaying-spacer" aria-hidden />
-            </div>
-
-            <div className="nowplaying-body">
-              <motion.div
-                key={currentTrack.id}
-                initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                className="nowplaying-art"
+              {/* trois couches : la teinte du morceau courant, puis celles
+                  des voisins. Elles ne s'allument qu'avec le doigt — la
+                  couleur passe donc de l'une à l'autre *pendant* le
+                  glissement, et la nouvelle est déjà en place quand le
+                  morceau change. */}
+              <span className="nowplaying-ambience__layer nowplaying-ambience__layer--base"
                 style={{
-                  transform: sheet.coverDx ? `translateX(${sheet.coverDx}px) rotate(${sheet.coverDx * 0.02}deg)` : undefined,
-                  opacity: sheet.coverDx ? Math.max(0.45, 1 - Math.abs(sheet.coverDx) / 420) : 1,
-                }}
+                  ...paletteToCss(curPal),
+                  backgroundImage: curCover.small ? `url("${curCover.small}")` : undefined,
+                }} />
+              <span className="nowplaying-ambience__layer"
+                style={{
+                  ...paletteToCss(prevPal),
+                  backgroundImage: prevCover.small ? `url("${prevCover.small}")` : undefined,
+                  opacity: Math.max(0, -coverMix) * 0.9,
+                }} />
+              <span className="nowplaying-ambience__layer"
+                style={{
+                  ...paletteToCss(nextPal),
+                  backgroundImage: nextCover.small ? `url("${nextCover.small}")` : undefined,
+                  opacity: Math.max(0, coverMix) * 0.9,
+                }} />
+            </div>
 
-              >
-                <Art track={currentTrack} size="100%" radius={16} large />
-              </motion.div>
-              <div className="nowplaying-meta">
-                <h2 className="title-display">{currentTrack.title}</h2>
-                <p className="ink-3">{currentTrack.artist}</p>
-                {currentTrack.rationale && <p className="ink-2 nowplaying-why">{currentTrack.rationale}</p>}
+            <div className="nowplaying-sheet" {...sheet.sheetHandlers}>
+              <div className="nowplaying-top">
+                <button className="icon-btn" onClick={() => sheet.close()} aria-label="Réduire">
+                  <ChevronUp size={20} style={{ transform: 'rotate(180deg)' }} />
+                </button>
+                <span className="nowplaying-eyebrow">En lecture</span>
+                <span className="nowplaying-spacer" aria-hidden />
               </div>
 
-              <div className="nowplaying-progress">
-                <ProgressRail
-                  value={progress}
-                  max={duration || 100}
-                  onSeek={seekTo}
-                  className="big-rail"
-                  label="Progression"
-                />
-                <div className="nowplaying-times">
-                  <span>{fmt(progress)}</span>
-                  <span>{fmt(duration)}</span>
+              <div className="nowplaying-body">
+                {/* le carrousel : trois faces sur une piste. On translate la
+                    piste entière — les voisines entrent et sortent avec le
+                    doigt, sans le moindre fondu. */}
+                {/* le carrousel : trois faces, une piste, un décalage.
+                    Rien ne change de taille ici — seule la piste coulisse. */}
+                <div className="nowplaying-stage">
+                  <div
+                    className="nowplaying-track"
+                    data-dragging={sheet.dragging ? '1' : '0'}
+                    style={{ '--dx': `${sheet.dx}px` } as React.CSSProperties}
+                  >
+                    <div className="nowplaying-art nowplaying-art--left" aria-hidden>
+                      <Art track={prevT || currentTrack} size="100%" radius={16} large />
+                    </div>
+                    <div key={currentTrack.id} className="nowplaying-art nowplaying-art--main">
+                      <Art track={currentTrack} size="100%" radius={16} large />
+                    </div>
+                    <div className="nowplaying-art nowplaying-art--right" aria-hidden>
+                      <Art track={nextT || currentTrack} size="100%" radius={16} large />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="nowplaying-meta">
+                  <h2 className="title-display">{currentTrack.title}</h2>
+                  <p className="ink-3">{currentTrack.artist}</p>
+                  {currentTrack.rationale && <p className="ink-2 nowplaying-why">{currentTrack.rationale}</p>}
+                </div>
+
+                <div className="nowplaying-progress">
+                  <ProgressRail
+                    value={progress}
+                    max={duration || 100}
+                    onSeek={seekTo}
+                    onPreview={setScrub}
+                    className="big-rail"
+                    label="Progression"
+                  />
+                  <div className="nowplaying-times">
+                    {/* pendant le geste, l'heure suit le doigt — pas la lecture */}
+                    <span>{fmt(scrub ?? progress)}</span>
+                    <span>{fmt(duration)}</span>
+                  </div>
+                </div>
+
+                <div className="nowplaying-controls">
+                  <button className="icon-btn nowplaying-vote" data-on={ownRating === 'disliked' ? 'true' : 'false'}
+                    onClick={() => vote('disliked')} aria-label="Je n’aime pas" aria-pressed={ownRating === 'disliked'}>
+                    <ThumbsDown size={19} strokeWidth={1.8} fill={ownRating === 'disliked' ? 'currentColor' : 'none'} />
+                  </button>
+                  <button className="icon-btn" onClick={prevTrack} aria-label="Précédent">
+                    <SkipBack size={24} strokeWidth={1.6} />
+                  </button>
+                  <button className="nowplaying-play" onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Lecture'}>
+                    {isPlaying
+                      ? <Pause size={24} fill="currentColor" />
+                      : <Play size={24} fill="currentColor" style={{ marginLeft: 3 }} />}
+                  </button>
+                  <button className="icon-btn" onClick={nextTrack} aria-label="Suivant">
+                    <SkipForward size={24} strokeWidth={1.6} />
+                  </button>
+                  <button className="icon-btn nowplaying-vote" data-on={ownRating === 'liked' ? 'true' : 'false'}
+                    onClick={() => vote('liked')} aria-label="J’aime" aria-pressed={ownRating === 'liked'}>
+                    <ThumbsUp size={19} strokeWidth={1.8} fill={ownRating === 'liked' ? 'currentColor' : 'none'} />
+                  </button>
                 </div>
               </div>
 
-              <div className="nowplaying-controls">
-                <button className="icon-btn nowplaying-vote" data-on={ownRating === 'disliked' ? 'true' : 'false'}
-                  onClick={() => vote('disliked')} aria-label="Je n’aime pas" aria-pressed={ownRating === 'disliked'}>
-                  <ThumbsDown size={19} strokeWidth={1.8} fill={ownRating === 'disliked' ? 'currentColor' : 'none'} />
-                </button>
-                <button className="icon-btn" onClick={prevTrack} aria-label="Précédent">
-                  <SkipBack size={24} strokeWidth={1.6} />
-                </button>
-                <button className="nowplaying-play" onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Lecture'}>
-                  {isPlaying
-                    ? <Pause size={24} fill="currentColor" />
-                    : <Play size={24} fill="currentColor" style={{ marginLeft: 3 }} />}
-                </button>
-                <button className="icon-btn" onClick={nextTrack} aria-label="Suivant">
-                  <SkipForward size={24} strokeWidth={1.6} />
-                </button>
-                <button className="icon-btn nowplaying-vote" data-on={ownRating === 'liked' ? 'true' : 'false'}
-                  onClick={() => vote('liked')} aria-label="J’aime" aria-pressed={ownRating === 'liked'}>
-                  <ThumbsUp size={19} strokeWidth={1.8} fill={ownRating === 'liked' ? 'currentColor' : 'none'} />
-                </button>
-              </div>
+              {/* choisir un morceau change le lecteur, il ne le referme pas */}
+              <QueueStrip />
             </div>
-
-            <QueueStrip onPick={() => setExpanded(false)} />
-          </motion.div>
+          </div>
         )}
       </AnimatePresence>
+
+      {/* la pochette courante, pour que le navigateur la garde en cache
+          pendant que le doigt arrive sur la voisine */}
+      <span className="sr-only" aria-hidden style={{ display: 'none' }}>{coverSize}</span>
     </>
   );
 };
 
 /* ─────────────── file d'attente du plein écran ─────────────── */
 
-const QueueStrip: React.FC<{ onPick: () => void }> = ({ onPick }) => {
-  const { queue, currentIndex, playTrack } = usePlayer();
-  if (queue.length === 0) return null;
+const QueueStrip: React.FC = () => {
+  const { queue, currentTrack, playTrack } = usePlayer();
+  const ref = useRef<HTMLDivElement>(null);
+
+  /* le morceau en cours reste visible dans la file */
+  useEffect(() => {
+    const el = ref.current?.querySelector('[data-now="1"]') as HTMLElement | null;
+    if (el) el.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }, [currentTrack?.id]);
+
+  if (!queue.length) return null;
   return (
-    <div className="nowplaying-queue">
-      {queue.map((t, i) => (
+    <div className="nowplaying-queue" ref={ref}>
+      {queue.map((t: Track) => (
         <button
-          key={t.id + i}
-          onClick={() => { playTrack(t, queue); onPick(); }}
-          data-active={i === currentIndex}
+          key={t.id}
           className="queue-item"
+          data-now={t.id === currentTrack?.id ? '1' : '0'}
+          onClick={() => playTrack(t, queue)}
+          title={`${t.title} — ${t.artist}`}
         >
-          <Art track={t} size={96} radius={8} />
+          <Art track={t} size={84} radius={10} />
           <span className="queue-title">{t.title}</span>
         </button>
       ))}
@@ -387,10 +366,14 @@ const QueueStrip: React.FC<{ onPick: () => void }> = ({ onPick }) => {
   );
 };
 
-/* ═══════════════════════════════════════════════════════════════
-   Barre de lecture manipulable : clic, clic maintenu, glissement.
-   Même comportement sur téléphone et sur ordinateur.
-   ═══════════════════════════════════════════════════════════════ */
+/* ─────────────── la barre de progression ───────────────
+
+   Une seule règle : **pendant le doigt, on ne déplace que l'aperçu**.
+   La nappe, le curseur et l'heure suivent le pixel. Le vrai `seekTo`
+   part au relâchement. Avant, chaque pixel du geste demandait un saut
+   au lecteur YouTube : des dizaines de sauts par seconde, une position
+   qui repartait en arrière, et l'écran qui clignotait.
+   ─────────────────────────────────────────────────────────── */
 
 const ProgressRail: React.FC<{
   value: number;
@@ -398,109 +381,118 @@ const ProgressRail: React.FC<{
   onSeek: (v: number) => void;
   className?: string;
   label?: string;
-}> = ({ value, max, onSeek, className = '', label = 'Progression' }) => {
-  const railRef = useRef<HTMLDivElement>(null);
-  const [dragging, setDragging] = useState(false);
-  const [hovering, setHovering] = useState(false);
+  onPreview?: (v: number | null) => void;
+}> = ({ value, max, onSeek, className = '', label = 'Progression', onPreview }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState(false);
+  const [hover, setHover] = useState(false);
   const [preview, setPreview] = useState<number | null>(null);
-
-  const ratioFromEvent = (clientX: number) => {
-    const el = railRef.current;
-    if (!el) return 0;
-    const r = el.getBoundingClientRect();
-    return Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-  };
+  const latest = useRef(0);
 
   const shown = preview ?? value;
   const pct = max > 0 ? Math.min(100, Math.max(0, (shown / max) * 100)) : 0;
-  /* la vague n'habille que la progression (barre du bas + plein écran) ;
-     le volume garde son filet simple */
-  /* la vague colorée est réservée au plein écran ; la barre du bas garde son
-     filet d'origine, avec l'anneau lumineux comme repère */
-  const isWave = className.includes('big-rail');
-  const isBottom = className.includes('nowbar-progress');
+
+  const ratioFrom = (clientX: number) => {
+    const el = ref.current;
+    if (!el) return 0;
+    const r = el.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - r.left) / Math.max(1, r.width)));
+  };
 
   const begin = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    setDragging(true);
-    const v = ratioFromEvent(e.clientX) * max;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    setDrag(true);
+    const v = ratioFrom(e.clientX) * max;
+    latest.current = v;
     setPreview(v);
-    onSeek(v);
+    onPreview?.(v);
   };
 
   const move = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragging) return;
-    const v = ratioFromEvent(e.clientX) * max;
+    if (!drag) return;
+    const v = ratioFrom(e.clientX) * max;
+    latest.current = v;
     setPreview(v);
-    onSeek(v);
+    onPreview?.(v);
   };
 
   const end = () => {
-    setDragging(false);
+    if (drag) onSeek(latest.current);
+    setDrag(false);
     setPreview(null);
+    onPreview?.(null);
   };
 
   return (
     <div
-      ref={railRef}
-      className={`prail ${className} ${dragging ? 'is-dragging' : ''} ${hovering ? 'is-hovering' : ''}`}
+      ref={ref}
+      className={`prail ${className} ${drag ? 'is-dragging' : ''} ${hover ? 'is-hovering' : ''}`}
+      role="slider"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={Math.round(max)}
+      aria-valuenow={Math.round(shown)}
+      tabIndex={0}
       onPointerDown={begin}
       onPointerMove={move}
       onPointerUp={end}
       onPointerCancel={end}
-      onPointerLeave={() => { setHovering(false); if (dragging) end(); }}
-      onPointerEnter={() => setHovering(true)}
-      role="slider"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={Math.round(max) || 0}
-      aria-valuenow={Math.round(value)}
-      tabIndex={0}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => { setHover(false); if (drag) end(); }}
       onKeyDown={(e) => {
-        if (e.key === 'ArrowRight') onSeek(Math.min(max, value + 5));
-        if (e.key === 'ArrowLeft') onSeek(Math.max(0, value - 5));
+        const step = max > 60 ? 5 : 1;
+        if (e.key === 'ArrowRight') { e.preventDefault(); onSeek(Math.min(max, value + step)); }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); onSeek(Math.max(0, value - step)); }
       }}
     >
-      {isWave ? (
-        <WaveRail value={shown} max={max} pct={pct} className={className} />
+      {className.includes('big-rail') ? (
+        <WaveRail value={shown} max={max} hovering={hover} dragging={drag} />
       ) : (
         <>
           <span className="prail-track" />
           <span className="prail-fill" style={{ width: `${pct}%` }} />
         </>
       )}
-      {(hovering || dragging || isBottom) && <span className="prail-knob" style={{ left: `${pct}%` }} />}
+      {/* la pastille ne disparaît jamais sur la grande barre : elle est le
+          point de repère du doigt, même quand on arrive dessus par surprise */}
+      {(hover || drag || className.includes('big-rail')) && (
+        <span className="prail-knob" style={{ left: `${pct}%` }} />
+      )}
     </div>
   );
 };
 
-
 /* ═══════════════════════════════════════════════════════════════
-   La barre de progression : une ligne, et des aurores.
+   La nappe de la grande barre — les aurores.
 
-   · une ligne fine traverse toute la largeur — la piste ;
-   · sur la partie écoutée, deux ou trois « aurores » colorées, tirées de
-     la pochette, s'élèvent et retombent en douceur, comme une nappe ;
-   · un anneau lumineux marque la position exacte.
-   Tout est tracé dans un seul canvas, en pause quand rien ne joue.
+   Trois bosses de couleur posées juste avant le curseur, lues dans la
+   palette de la pochette. Elles respirent pendant la lecture et suivent
+   le doigt quand on glisse.
+
+   Trois choses, et trois seulement, causaeint le glitch d'avant :
+
+   · l'effet était reconstruit à chaque survol ou changement de
+     lecture ; le canevas était redimensionné, donc vidé, et une image
+     noire passait. Il est maintenant créé **une fois** ;
+   · la boucle était figée sur l'état du moment : on lit désormais
+     tout dans des refs (position, survol, lecture) ;
+   · la boucle ne tournait qu'en lecture, et un événement « redessine »
+     que personne n'écoutait était censé la relancer. Elle tourne
+     toujours : c'est elle qui fait suivre le doigt.
    ═══════════════════════════════════════════════════════════════ */
 
-const WaveRail: React.FC<{ value: number; max: number; pct: number; className: string }> = ({ value, max, pct, className }) => {
+const WaveRail: React.FC<{ value: number; max: number; hovering: boolean; dragging: boolean }> = ({
+  value, max, hovering, dragging,
+}) => {
   const ref = useRef<HTMLCanvasElement | null>(null);
-  const pctRef = useRef(pct);
-  pctRef.current = pct;
   const { isPlaying, currentTrack } = usePlayer();
-  const [hover, setHover] = useState(false);
 
-  useEffect(() => {
-    const el = ref.current?.closest('.prail');
-    if (!el) return;
-    const io = new MutationObserver(() =>
-      setHover(el.classList.contains('is-hovering') || el.classList.contains('is-dragging')));
-    io.observe(el, { attributes: true, attributeFilter: ['class'] });
-    return () => io.disconnect();
-  }, []);
+  /* tout ce qui change souvent, en ref : la boucle n'est jamais recréée */
+  const live = useRef({ pct: 0, hover: false, playing: false, t: 0 });
+  live.current.pct = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+  live.current.hover = hovering || dragging;
+  live.current.playing = isPlaying;
 
   /* une graine par morceau : chaque titre a sa propre forme d'aurore */
   const seed = useMemo(() => {
@@ -518,67 +510,57 @@ const WaveRail: React.FC<{ value: number; max: number; pct: number; className: s
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     let w = 0, h = 0, raf = 0;
-    let t = 0;
-    let phase = Math.random() * 100;
+    let t = seed;
+    let phase = (seed % 97) / 15;
 
-    const palette = () => {
+    /* la palette est lue une fois, puis à chaque changement de morceau */
+    let col = { h: 352, s: '62%', l: '48%', ink: '#ffffff' };
+    const readPalette = () => {
       const st = getComputedStyle(document.documentElement);
-      return {
+      col = {
         h: Number(st.getPropertyValue('--p-h')) || 352,
         s: (st.getPropertyValue('--p-s') || '62%').trim(),
         l: (st.getPropertyValue('--p-l') || '48%').trim(),
         ink: (st.getPropertyValue('--ink') || '#ffffff').trim(),
       };
     };
-    let col = palette();
-    const onPalette = () => { col = palette(); if (!isPlaying) draw(); };
+    readPalette();
+    const onPalette = () => readPalette();
     window.addEventListener('sb:palette', onPalette);
 
-    /* trois aurores : centre, largeur, amplitude, couleur */
     /* les aurores vivent juste avant le curseur : une crête large, deux
        plus fines, comme une nappe qui vient mourir sur la position */
-    /* centres en fraction de la partie écoutée, largeurs en fraction de la
-       barre : les bosses gardent une taille constante, bien séparées */
     const auroras = [
       { c: 0.46, w: 0.115, a: 0.55 },
       { c: 0.70, w: 0.085, a: 1.0 },
       { c: 0.88, w: 0.060, a: 0.66 },
     ];
 
-    /* l'aurore i, hauteur au point x (0 → 1 sur la partie écoutée) */
     const crest = (x: number, split: number, i: number, maxAmp: number) => {
       const a = auroras[i];
       const d = (x - a.c * split) / Math.max(8, a.w * w);
       const bell = Math.exp(-d * d * 2.1);
-      const breathe = 0.88 + Math.sin(t * 0.5 + i * 1.9 + phase) * 0.12;
+      const breathe = 0.88 + Math.sin(t * 0.02 + i * 1.9 + phase) * 0.12;
       return bell * a.a * breathe * maxAmp;
     };
 
     const draw = () => {
-      ctx.clearRect(0, 0, w, h);
       if (w < 8) return;
-      /* Dans la barre du bas, le filet est au ras du haut du canevas : les
-         aurores doivent tenir sous le bord supérieur, sinon elles sont
-         rognées. On calcule donc la place réellement disponible au-dessus
-         du filet, et on y borne les crêtes. */
-      const atEdge = className.includes('nowbar-progress');
-      const mid = atEdge ? 2 : h - 4;
-      const splitRaw = (pctRef.current / 100) * w;
-      /* sous 24 px, la forme n'a pas la place de respirer : on garde une
-         amorce discrète plutôt qu'un triangle écrasé */
-      const split = Math.max(0, Math.min(w, splitRaw));
-      /* marge de sécurité : la crête la plus haute ne doit jamais toucher
-         le bord (ni le haut du canevas, ni la ligne du bas) */
-      const room = atEdge ? Math.max(2, h - mid - 2) : Math.max(2, h * 0.5 - 2);
-      const maxAmp = room * 0.92 * (hover ? 1.1 : 1);
+      ctx.clearRect(0, 0, w, h);
+      const mid = h - 4;
+      const split = Math.max(0, Math.min(w, live.current.pct * w));
+      const room = Math.max(2, h * 0.52 - 2);
+      const maxAmp = room * 0.92 * (live.current.hover ? 1.1 : 1);
+      /* en pause, l'aurore respire à peine : elle reste vivante sans danser */
+      const amp = live.current.playing ? 1 : 0.55;
 
-      /* 1. la piste : une ligne fine sur toute la largeur */
+      /* 1. la piste, fine, sur toute la largeur */
       ctx.globalAlpha = 0.22;
       ctx.strokeStyle = col.ink;
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
 
-      /* 2. la ligne écoutée, plus franche */
+      /* 2. la partie écoutée, plus franche */
       if (split > 1) {
         ctx.globalAlpha = 0.75;
         ctx.lineWidth = 2.4;
@@ -586,7 +568,7 @@ const WaveRail: React.FC<{ value: number; max: number; pct: number; className: s
         ctx.globalAlpha = 1;
       }
 
-      /* 3. les aurores, uniquement sur la partie écoutée, en fondu au bord */
+      /* 3. les aurores, uniquement sur la partie écoutée */
       if (split > 24) {
         auroras.forEach((a, i) => {
           const hue = (col.h + (i === 0 ? -18 : i === 1 ? 12 : 40)) % 360;
@@ -596,17 +578,16 @@ const WaveRail: React.FC<{ value: number; max: number; pct: number; className: s
           grad.addColorStop(0.55, `hsl(${hue} ${col.s} ${light}% / 0.98)`);
           grad.addColorStop(1, `hsl(${(hue + 16) % 360} ${col.s} ${Math.max(30, light - 14)}% / 0.9)`);
 
-          /* la forme : une bosse, posée sur la ligne */
           ctx.beginPath();
           for (let x = 0; x <= split; x += 1) {
-            const edge = Math.min(1, (x / split) * 5, ((split - x) / 26)); // meurt avant le curseur
-            const y = Math.min(crest(x, split, i, maxAmp) * Math.max(0, edge), mid - 1);
+            const edge = Math.min(1, (x / split) * 5, (split - x) / 26);
+            const y = Math.min(crest(x, split, i, maxAmp * amp) * Math.max(0, edge), mid - 1);
             if (x === 0) ctx.moveTo(x, mid - y); else ctx.lineTo(x, mid - y);
           }
           for (let x = split; x >= 0; x -= 1) {
-            const edge = Math.min(1, (x / split) * 5, ((split - x) / 26));
-            const y = Math.min(crest(x, split, i, maxAmp) * Math.max(0, edge), mid - 1);
-            ctx.lineTo(x, Math.min(h - 1, mid + y * 0.08));      // à peine sous la ligne
+            const edge = Math.min(1, (x / split) * 5, (split - x) / 26);
+            const y = Math.min(crest(x, split, i, maxAmp * amp) * Math.max(0, edge), mid - 1);
+            ctx.lineTo(x, Math.min(h - 1, mid + y * 0.08));
           }
           ctx.closePath();
           ctx.fillStyle = grad;
@@ -618,8 +599,8 @@ const WaveRail: React.FC<{ value: number; max: number; pct: number; className: s
         /* un liséré clair sur la crête principale */
         ctx.beginPath();
         for (let x = 0; x <= split; x += 1) {
-          const edge = Math.min(1, (x / split) * 5, ((split - x) / 26));
-          const y = Math.min(crest(x, split, 1, maxAmp) * Math.max(0, edge), mid - 1);
+          const edge = Math.min(1, (x / split) * 5, (split - x) / 26);
+          const y = Math.min(crest(x, split, 1, maxAmp * amp) * Math.max(0, edge), mid - 1);
           if (x === 0) ctx.moveTo(x, mid - y); else ctx.lineTo(x, mid - y);
         }
         ctx.globalAlpha = 0.5;
@@ -630,48 +611,41 @@ const WaveRail: React.FC<{ value: number; max: number; pct: number; className: s
       }
     };
 
-    const loop = () => { t += 0.012; draw(); raf = requestAnimationFrame(loop); };
+    const loop = () => {
+      live.current.t += 0.012;
+      t += 0.012;
+      draw();
+      raf = requestAnimationFrame(loop);
+    };
 
     const resize = () => {
       const r = canvas.getBoundingClientRect();
       const nw = Math.max(1, Math.round(r.width));
       const nh = Math.max(1, Math.round(r.height));
-      if (nw === w && nh === h) return;
+      /* on ne touche au tampon *que* s'il change de taille : le redimensionner
+         le vide, et c'est ce qui produisait l'image noire au survol */
+      if (nw === Math.round(w) && nh === Math.round(h)) return;
       w = r.width; h = r.height;
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      draw();
     };
 
-    const ro = new ResizeObserver(resize);
+    const ro = new ResizeObserver(() => { resize(); draw(); });
     ro.observe(canvas);
     resize();
-    if (isPlaying) raf = requestAnimationFrame(loop);
+    draw();
+    raf = requestAnimationFrame(loop);
 
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       window.removeEventListener('sb:palette', onPalette);
     };
-  }, [isPlaying, seed, hover]);
+    /* une seule fois : la boucle lit tout dans `live` */
+  }, [seed]);
 
-  /* hors lecture, la position change encore (glissement) : on redessine */
-  useEffect(() => {
-    if (isPlaying) return;
-    const c = ref.current;
-    if (!c) return;
-    const ev = new CustomEvent('sb:redraw');
-    c.dispatchEvent(ev);
-  }, [pct, isPlaying]);
-
-  return (
-    <canvas
-      ref={ref}
-      className={`prail-wave ${className.includes('big-rail') ? 'prail-wave--big' : ''} ${className.includes('nowbar-progress') ? 'prail-wave--edge' : ''}`}
-      aria-hidden
-    />
-  );
+  return <canvas ref={ref} className="prail-wave prail-wave--big" aria-hidden />;
 };
 
 export const VideoModal: React.FC = () => {

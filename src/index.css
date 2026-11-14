@@ -413,8 +413,12 @@ html[data-mode='light'] .ytm-search { background: color-mix(in srgb, #000 5%, tr
 .sb-row-art { width: 44px; height: 44px; border-radius: 5px; object-fit: cover; flex: 0 0 auto; }
 .sb-row-meta { min-width: 0; flex: 1; display: block; }
 .sb-row-title {
-  display: block; font-size: 14px; color: var(--ink);
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 14px; color: var(--ink);
   min-width: 0; max-width: 100%;
+}
+.sb-row-titletext {
+  min-width: 0; flex: 0 1 auto;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .sb-row-title--strong { font-weight: 500; font-size: 14.5px; }
@@ -531,10 +535,19 @@ html[data-mode='light'] .ytm-search { background: color-mix(in srgb, #000 5%, tr
 }
 .sb-track-row:hover .sb-track-play,
 .sb-track-row[data-playing='1'] .sb-track-play { opacity: 1; }
-.sb-track-meta { min-width: 0; text-align: left; padding: 0; display: block; }
+/* la colonne du titre est la seule élastique : elle rétrécit, elle ne
+   pousse jamais les actions hors de l'écran. `min-width: 0` est la clé —
+   sans lui, une grille refuse de descendre sous la taille du texte. */
+.sb-track-meta {
+  min-width: 0; width: 100%;
+  text-align: left; padding: 0; display: block; overflow: hidden;
+}
+.sb-track-meta .sb-row-title,
+.sb-track-meta .sb-row-sub { max-width: 100%; }
 .sb-track-row[data-playing='1'] .sb-row-title { color: var(--accent); }
 .sb-cat {
-  font-size: 11px; color: var(--ink-3); margin-left: 6px;
+  font-size: 11px; color: var(--ink-3);
+  white-space: nowrap; flex: 0 0 auto;
 }
 .sb-cat[data-cat='anchor'] { color: var(--anchor, var(--accent)); }
 .sb-cat[data-cat='deep_dive'] { color: var(--deep, #ff7a00); }
@@ -845,17 +858,30 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   text-transform: uppercase; color: var(--ink-2);
 }
 .nowplaying-spacer { width: 38px; height: 38px; flex: 0 0 auto; }
+/* ═══ le corps du lecteur ═══
+   Trois blocs, dans une colonne qui accepte de rétrécir : la pochette
+   (flexible, jamais plus grande que la place libre), le texte, puis les
+   commandes. C'est ce qui empêche le bouton lecture de chevaucher la
+   file sur un écran court. */
 .nowplaying-body {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 26px; padding: 0 26px 20px; min-height: 0;
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 2.4vh, 26px);
+  padding: 0 26px;
+  min-height: 0;
+  overflow: hidden;
 }
+/* la pochette suit la place disponible : `--art` est calculé pour la
+   fenêtre du carrousel, et borné pour ne jamais pousser les commandes
+   hors champ sur un téléphone court. */
+.nowplaying { --art: min(46vh, 380px); --art-r: 16px; }
 .nowplaying-art {
-  width: min(46vh, 380px); height: min(46vh, 380px);
-  border-radius: 16px; overflow: hidden; flex: 0 0 auto;
+  width: var(--art); height: var(--art);
+  border-radius: var(--art-r); overflow: hidden; flex: 0 0 auto;
   box-shadow: 0 30px 70px -30px rgba(0,0,0,.75);
 }
 .nowplaying-art > span { width: 100%; height: 100%; border-radius: inherit; }
-@media (max-width: 819px) { .nowplaying-art { border-radius: 12px; width: min(40vh, 320px); height: min(40vh, 320px); } }
 .nowplaying-meta { text-align: center; max-width: 480px; }
 .nowplaying-meta h2 { font-size: 26px; margin: 0 0 6px; font-weight: 400; }
 .nowplaying-meta p { margin: 0; font-size: 14px; }
@@ -874,9 +900,19 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   width: 62px; height: 62px; border-radius: 999px; border: 0; cursor: pointer;
   background: var(--ink); color: var(--bg); display: grid; place-items: center;
 }
+/* la file au bas de la feuille : elle garde une hauteur fixe, donc les
+   commandes ne peuvent pas glisser dessous */
 .nowplaying-queue {
-  display: flex; gap: 10px; overflow-x: auto; padding: 0 20px 24px;
+  flex: 0 0 auto;
+  display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden;
+  /* la file défile horizontalement au doigt ; un glissement vertical
+     dessus n'est pas à elle — il remonte à la feuille, qui se ferme */
+  touch-action: pan-x;
+  padding: 10px 20px calc(14px + var(--safe-b));
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.nowplaying-queue::-webkit-scrollbar { display: none; }
 .queue-item {
   flex: 0 0 auto; width: 96px; background: none; border: 0; padding: 0;
   cursor: pointer; text-align: left; opacity: .55; transition: opacity .2s;
@@ -957,11 +993,18 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   .sb-blend-head { flex-direction: column; align-items: flex-start; gap: 16px; }
   .sb-mosaic { width: 132px; height: 132px; }
   .sb-blend-info h1 { font-size: 2rem; }
-  .sb-track-row { grid-template-columns: 20px 44px minmax(0, 1fr) auto; column-gap: 10px; }
+  .sb-track-row {
+    /* la somme tombe sous la largeur d'un téléphone : 20 + 44 + texte +
+       4 actions + les gouttières. La colonne de texte absorbe le reste. */
+    grid-template-columns: 18px 42px minmax(0, 1fr) auto;
+    column-gap: 8px;
+    max-width: 100%;
+  }
   /* quatre actions tiennent sur la ligne : pouce haut, pouce bas, remplacer,
      retirer. On resserre un peu pour que le pouce vers le bas reste
      accessible au doigt, sans jamais sortir de l'écran. */
-  .sb-track-actions .icon-btn { width: 30px; height: 32px; }
+  .sb-track-actions .icon-btn { width: 28px; height: 32px; }
+  .sb-track-actions { flex: 0 0 auto; }
   .sb-track-actions { gap: 0; }
   .sb-track-row { column-gap: 8px; }
   .ytm-nowbar { left: 0; right: 0; bottom: calc(var(--nav-h) + var(--safe-b)); }
@@ -1318,17 +1361,36 @@ html[data-mode='light'] .welcome-glow i { opacity: .22; }
 .nowplaying {
   position: fixed; inset: 0; z-index: 72; background: var(--bg);
   display: flex; flex-direction: column; overflow: hidden;
-  /* les gestes de la feuille (fermer, changer de morceau) nous appartiennent */
+  /* le doigt décide de l'axe : on n'abandonne pas le geste au navigateur.
+     `pan-y` laisserait le scroll vertical au navigateur et casserait la
+     fermeture ; `none` sur la feuille, et chaque zone qui doit s'écarter
+     en récupère ce qu'il lui faut (la file défile en `pan-x`). */
   touch-action: none; will-change: transform;
+  backface-visibility: hidden;
 }
-/* le doigt suit la feuille : pas de transition pendant le geste, une
-   transition douce quand on la relâche */
-.nowplaying[data-dragging='1'] { transition: none; }
-.nowplaying:not([data-dragging='1']) {
-  transition: transform .34s var(--ease), opacity .3s var(--ease);
-  border-top-left-radius: 18px; border-top-right-radius: 18px;
+/* ═══ la feuille ═══
+   Le conteneur porte l'ouverture (framer-motion) ; la feuille intérieure
+   porte le doigt. Pas de transition quand on tire : c'est le pixel du
+   doigt qui commande, sinon un décalage d'un cheveu rend le geste mou. */
+/* la feuille : c'est le conteneur `.nowplaying` qui porte la position
+   (`transform` posé en style inline). Ici on ne fait que la mise en page. */
+/* la feuille elle-même est transparente : c'est l'ambiance, derrière,
+   qui donne sa couleur au plein écran — et c'est elle qui change
+   pendant le glissement latéral. */
+.nowplaying-sheet {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  background: transparent;
+  border-top-left-radius: 20px; border-top-right-radius: 20px;
+  overflow: hidden;
 }
-.nowplaying[data-dragging='1'] { border-top-left-radius: 18px; border-top-right-radius: 18px; }
+.nowplaying[data-drag='1'] { transition: none !important; }
+.nowplaying[data-anim='1'] {
+  transition: transform .34s cubic-bezier(.22,.61,.36,1);
+}
+.nowplaying[data-drag='1'] .nowplaying-sheet {
+  box-shadow: 0 -24px 60px -20px rgba(0,0,0,.55);
+}
 /* la poignée, repère discret du glissement vers le bas */
 .nowplaying-grip {
   position: absolute; top: calc(8px + var(--safe-t)); left: 50%; transform: translateX(-50%);
@@ -1337,7 +1399,59 @@ html[data-mode='light'] .welcome-glow i { opacity: .22; }
   pointer-events: none;
 }
 /* la pochette suit le doigt pour changer de morceau */
-.nowplaying-art { touch-action: none; will-change: transform, opacity; }
+/* ═══ le carrousel de pochettes ═══
+   Trois faces sur une piste : la précédente à gauche, la courante au
+   milieu, la suivante à droite. On translate la piste entière, donc les
+   voisines entrent et sortent avec le doigt, sans fondu. */
+/* ═══ la scène ═══
+   Une fenêtre fixe, toute la largeur, qui coupe. Dedans, trois faces
+   positionnées sur le même axe : la pochette courante au centre, la
+   précédente et la suivante écartées de `--off`.
+
+   `--off` vaut exactement « hors champ » : la moitié de la fenêtre plus
+   la moitié d'une pochette. Au repos, les voisines sont donc invisibles,
+   même sur un grand écran ; dès que le doigt tire de quelques pixels,
+   elles entrent par le bord, à la vitesse du doigt. Rien ne change de
+   taille pendant le geste : seule la position se déplace.
+   ─────────────────────────────────────────────────────────────── */
+.nowplaying-stage {
+  position: relative;
+  width: 100%;
+  max-width: 100vw;
+  height: var(--art, min(46vh, 380px));
+  overflow: hidden;
+  touch-action: none;
+  flex: 0 0 auto;
+  --off: calc(50vw + var(--art) / 2 + 4px);
+}
+.nowplaying-track {
+  position: absolute;
+  inset: 0;
+}
+.nowplaying-track .nowplaying-art {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--art);
+  height: var(--art);
+  border-radius: var(--art-r);
+  overflow: hidden;
+  box-shadow: none;
+  will-change: transform;
+  transform: translate3d(calc(-50% + var(--dx, 0px)), -50%, 0);
+  transition: transform .3s cubic-bezier(.22,.61,.36,1);
+}
+.nowplaying-track .nowplaying-art--left {
+  transform: translate3d(calc(-50% - var(--off) + var(--dx, 0px)), -50%, 0);
+}
+.nowplaying-track .nowplaying-art--right {
+  transform: translate3d(calc(-50% + var(--off) + var(--dx, 0px)), -50%, 0);
+}
+.nowplaying-track[data-dragging='1'] .nowplaying-art { transition: none; }
+.nowplaying-track .nowplaying-art--main {
+  box-shadow: 0 30px 70px -30px rgba(0,0,0,.75);
+}
+.nowplaying-art { touch-action: none; will-change: transform; }
 .nowplaying-queue { touch-action: pan-x; }
 .nowplaying .prail { touch-action: pan-x; }
 .nowplaying-ambience {
@@ -2336,3 +2450,138 @@ html[data-mode='dark'] .sb-install-done svg { color: #3ddc84; }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .sb-keys-missing svg { color: var(--accent); flex: 0 0 auto; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Le lecteur sur téléphone.
+
+   Deux problèmes réglés ici :
+
+   1. **la place** — sur un écran de 844 px de haut, une pochette de
+      46 vh + le titre + la barre + les commandes + la file dépassaient
+      la fenêtre : le bouton lecture passait par-dessus les pochettes du
+      bas. On donne maintenant à la pochette la hauteur qui *reste*,
+      calculée en retirant les blocs fixes. Elle rétrécit, les commandes
+      ne bougent plus.
+   2. **la largeur** — la file et les marges faisaient déborder la page à
+      droite. Tout est borné à 100 % de la largeur, et la file défile
+      horizontalement dans son propre cadre.
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 819px) {
+  .nowplaying,
+  .nowplaying-sheet { max-width: 100vw; overflow: hidden; }
+
+  /* la pochette : le reste de la place, entre 132 px et 46 vh.
+     132 px est le plancher pour qu'elle reste lisible sur un très petit
+     écran ; au-delà, c'est la fenêtre qui décide. */
+  .nowplaying {
+    /* la pochette prend la place qui reste, mais ne dépasse jamais la
+       largeur de l'écran moins les marges : sur un téléphone étroit,
+       c'est la largeur qui décide. */
+    --art: clamp(120px, min(calc(100vh - 430px - var(--safe-b)), 92vw), 46vh);
+    --art-r: 12px;
+  }
+
+  .nowplaying-top { padding: calc(10px + var(--safe-t)) 14px 6px; }
+
+  .nowplaying-body {
+    padding: 0 20px;
+    gap: clamp(8px, 1.4vh, 16px);
+    justify-content: flex-start;
+  }
+
+  .nowplaying-meta { margin-top: 2px; }
+  .nowplaying-meta h2 {
+    font-size: clamp(19px, 5.2vw, 26px);
+    line-height: 1.15;
+    /* deux lignes au plus : un titre long ne mange pas les commandes */
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .nowplaying-meta p { font-size: 13px; }
+  .nowplaying-why {
+    font-size: 11.5px !important;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .nowplaying-progress { width: 100%; }
+  .big-rail { height: 24px; }
+
+  .nowplaying-controls {
+    gap: clamp(8px, 4vw, 20px);
+    width: 100%;
+    justify-content: center;
+    /* l'espace sous les commandes : jamais collées à la file */
+    margin-bottom: 6px;
+  }
+  .nowplaying-play { width: 58px; height: 58px; }
+  .nowplaying-vote { width: 42px; height: 42px; }
+
+  .nowplaying-queue {
+    padding: 8px 16px calc(12px + var(--safe-b));
+    gap: 9px;
+  }
+  .queue-item { width: 84px; }
+  .queue-item img { width: 84px; height: 84px; }
+  .queue-title { font-size: 10.5px; }
+}
+
+/* un téléphone couché, ou une fenêtre très courte : on cache la pochette
+   latérale et on resserre encore, plutôt que de laisser déborder */
+@media (max-height: 560px) {
+  .nowplaying { --art: min(30vh, 200px); }
+  .nowplaying-why { display: none; }
+  .nowplaying-queue { padding-bottom: 8px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Garde-fou de largeur.
+
+   Sur téléphone, la page ne doit jamais glisser latéralement. Deux
+   familles de coupables : les lignes qui contiennent un titre très long
+   et une rangée d'actions, et les décors (l'ambiance, les nappes) qui
+   s'étalent volontairement hors cadre. On borne les premières, on
+   rogne les secondes.
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 819px) {
+  .sb-track-row,
+  .sb-row,
+  .sb-row-meta,
+  .sb-track-actions { min-width: 0; max-width: 100%; }
+
+  /* le décor : il déborde pour respirer, mais il ne fait pas défiler la
+     page. Il est déjà fixé et son parent coupe — on borne quand même la
+     couche qui porte les nappes, pour qu'aucun navigateur mobile ne
+     prenne leur débordement pour du contenu. */
+  .ambience { position: fixed; inset: 0; overflow: hidden; contain: paint; }
+  .ambience__layer { overflow: hidden; contain: paint; }
+}
+
+/* ═══ l'ambiance du plein écran, entre deux pochettes ═══
+   Deux couches d'image floutée : celle du voisin précédent et celle du
+   suivant. Elles sont à l'opacité 0 au repos ; c'est le geste qui les
+   allume, proportionnellement au doigt. La couleur du fond passe donc de
+   l'une à l'autre **pendant** le glissement, pas après. */
+.nowplaying-ambience {
+  position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+}
+/* chaque couche = une teinte pleine (issue de la palette de la pochette)
+   + la pochette elle-même, mélangée, pour la matière. Si l'image n'arrive
+   pas, la teinte reste : le fond a toujours une couleur. */
+.nowplaying-ambience__layer {
+  position: absolute; inset: -12%;
+  background-color: var(--p1, currentColor);
+  background-size: cover; background-position: center;
+  background-blend-mode: overlay;
+  filter: blur(34px) saturate(1.2);
+  opacity: 0;
+  transition: opacity .18s linear;
+  transform: scale(1.06);
+}
+.nowplaying-ambience__layer--base { opacity: .75; }
+.nowplaying[data-drag='1'] .nowplaying-ambience__layer { transition: none; }
+/* sous les couches d'images, le voile qui garde le texte lisible */
+.nowplaying-ambience::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 62%, transparent) 0%, color-mix(in srgb, var(--bg) 88%, transparent) 62%, var(--bg) 100%);
+}

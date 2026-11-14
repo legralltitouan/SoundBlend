@@ -3,7 +3,9 @@ import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile 
 import { sameTrack, trackKey, ratingKey, getStoredRatings, writeStoredRatings, type TrackRating } from '../lib/track';
 import { youtubeService } from '../services/youtube';
 import { geminiService } from '../services/gemini';
+import { uniqueTracks } from '../lib/dedupe';
 import {
+  applyRatingToTaste,
   getStoredSettings,
   saveStoredSettings,
   getStoredBlends,
@@ -104,7 +106,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return next;
     });
     setRatingsVersion((v) => v + 1);
-    /* la mémoire du goût suit le même mouvement */
+    /* la mémoire du goût suit le même mouvement — y compris quand on
+       retire un avis : le morceau quitte alors « Tes goûts ». */
+    applyRatingToTaste(t, rating);
     bumpTaste();
   }, [bumpTaste]);
 
@@ -214,7 +218,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         : b,
     );
 
-    /* et la mémoire du goût (listes d'artistes et de titres) */
+    /* la mémoire des goûts repart de zéro en même temps que les pouces :
+       deux listes vides valent mieux qu'une mémoire fantôme */
     saveStoredTasteMemory({ likedTracks: [], dislikedTracks: [], likedArtists: [], dislikedArtists: [] });
     bumpTaste();
     window.dispatchEvent(new CustomEvent('sb:ratings-reset'));
@@ -305,6 +310,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
               ? `Autour de ${artists[0]}`
               : 'Nouveau blend';
 
+        /* dernier filet : quel que soit le chemin qui a produit la liste
+           (modèle, repli local, remplacement), un blend ne part jamais
+           avec un morceau en double. */
         const blend: GeneratedBlend = {
           id: `blend-${Date.now()}`,
           title: name,
@@ -312,7 +320,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: now.toISOString(),
           expiresAt: expires.toISOString(),
           seedTracks: selectedTracks,
-          tracks: generatedTracks,
+          tracks: uniqueTracks(generatedTracks),
         };
 
         saveBlendToStorage(blend);

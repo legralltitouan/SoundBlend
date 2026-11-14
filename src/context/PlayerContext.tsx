@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Track } from '../types';
 import { sameTrack } from '../lib/track';
-import { recordTrackRating } from '../services/storage';
+import { applyRatingToTaste, recordTrackRating } from '../services/storage';
 
 interface PlayerContextType {
   currentTrack: Track | null;
@@ -23,7 +23,7 @@ interface PlayerContextType {
   /** le morceau voisin, dans la file en cours (glissement sur la pochette) */
   stepTrack: (step: 1 | -1) => void;
   toggleVideoModal: () => void;
-  rateTrack: (track: Track, rating: 'liked' | 'disliked') => void;
+  rateTrack: (track: Track, rating?: 'liked' | 'disliked') => void;
   clearRating: (track: Track) => void;
 }
 
@@ -299,12 +299,14 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const clearRating = (track: Track) => {
     setQueue((prevQueue) => prevQueue.map((t) => (sameTrack(t, track) ? { ...t, userRating: null } : t)));
     if (sameTrack(currentTrack, track)) setCurrentTrack({ ...currentTrack!, userRating: null });
+    /* et la mémoire des goûts oublie le morceau, sinon il reste dans
+       « Tes goûts » alors que le pouce est retiré */
+    applyRatingToTaste(track, null);
   };
 
-  const rateTrack = (track: Track, rating: 'liked' | 'disliked') => {
-    /* re-cliquer sur le pouce déjà actif retire la note */
-    const same = track.userRating === rating;
-    if (same) { clearRating(track); return; }
+  const rateTrack = (track: Track, rating?: 'liked' | 'disliked') => {
+    /* sans note, ou sur le pouce déjà actif : on retire l'avis */
+    if (!rating || track.userRating === rating) { clearRating(track); return; }
 
     // Record to storage
     recordTrackRating(track, rating);

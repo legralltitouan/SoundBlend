@@ -211,6 +211,13 @@ sous-dossier. Corrige en redéposant le fichier : GitHub relance seul.
 Elles restent dans ce navigateur. Pour un second appareil, ressaisis-les
 (ou copie-les), c'est tout.
 
+> **Depuis la v6.9.8, l'app ne lit plus aucune clé au moment de la
+> compilation.** Avant, un `.env` présent sur le PC pendant `npm run
+> build` faisait entrer la clé dans le fichier JavaScript publié — donc
+> dans le dépôt public. C'est corrigé : le fichier `dist/` livré ne
+> contient aucun identifiant, vérifié au scan. Les clés n'existent que
+> dans la saisie de l'écran Réglages.
+
 ---
 
 ## Étape 8 — Deux réglages côté Google (sinon ça bloque)
@@ -244,15 +251,57 @@ Sans ça, les recherches YouTube renvoient `403`.
 
 ---
 
-## Mettre à jour l'app plus tard
+## Mettre à jour l'app plus tard (la méthode qui marche)
 
-1. Sur GitHub, ouvre le fichier à remplacer → icône crayon (ou
-   **Add file** → **Upload files** pour un fichier venu de ton PC).
-2. **Commit changes**.
-3. GitHub recompile et republie tout seul en une minute. Rien d'autre.
+Ton dépôt a une particularité : **le contenu de l'app est à la racine**
+(`src/`, `public/`, `index.html`, `package.json`, `.github/workflows/`)
+— et c'est ce que ton `pages.yml` attend. On ne change donc **jamais**
+la structure, on remplace seulement les fichiers.
 
-Tu peux aussi déposer une nouvelle archive : **Add file** → **Upload
-files**, les fichiers de même nom sont remplacés.
+### Méthode A — glisser-déposer (la plus simple)
+
+1. Sur GitHub, ouvre le dépôt `legralltitouan/SoundBlend`.
+2. **Add file** → **Upload files**.
+3. Ouvre le dossier `site-v6.9.8/` livré dans l'archive, sélectionne
+   **tout ce qu'il contient** (`src`, `public`, `deploy`, les fichiers de
+   la racine…) et dépose-le dans la page.
+4. En bas, écris le message (`v6.9.8 — player au doigt, timeline réparée,
+   doublons verrouillés`), puis **Commit changes**.
+5. ⚠️ **Ne dépose jamais** `.github/workflows/pages.yml` : ton fichier
+   actuel fonctionne. GitHub le remplacerait par une variante prévue
+   pour un autre rangement (`soundblend-app/`), et le site casserait.
+   Si tu dois le modifier, fais-le au crayon, directement dans GitHub.
+
+GitHub lance alors *Publier sur GitHub Pages* : onglet **Actions**, la
+pastille passe au vert en une à deux minutes, et l'adresse est à jour.
+
+### Méthode B — en ligne de commande (si tu as Git sur ton PC)
+
+```bash
+# dans le dossier qui contient le contenu de site-v6.9.8/
+git clone https://github.com/legralltitouan/SoundBlend.git
+cd SoundBlend
+
+# on remplace le contenu de l'app, sans toucher au workflow
+cp -r /chemin/vers/site-v6.9.8/src            .
+cp -r /chemin/vers/site-v6.9.8/public         .
+cp -r /chemin/vers/site-v6.9.8/deploy         .
+cp    /chemin/vers/site-v6.9.8/index.html     .
+cp    /chemin/vers/site-v6.9.8/package.json   .
+cp    /chemin/vers/site-v6.9.8/package-lock.json .
+cp    /chemin/vers/site-v6.9.8/*.js  .        # vite, tailwind, postcss
+cp    /chemin/vers/site-v6.9.8/tsconfig*.json .
+
+git add -A && git commit -m "v6.9.8" && git push
+```
+
+### Vérifier que la mise à jour est bien en ligne
+
+1. **Actions** → le dernier *Publier sur GitHub Pages* est vert.
+2. Ouvre le site, puis **Réglages** en bas de l'écran : la version
+   affichée doit être **v6.9.8**.
+3. Si le téléphone montre encore l'ancienne version : ferme l'onglet,
+   rouvre-le (le service worker met le site en cache).
 
 ---
 
