@@ -2276,11 +2276,18 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
   font-size: clamp(30px, 6vw, 54px);
   font-weight: 300; letter-spacing: -.04em; line-height: 1;
 }
-.sb-gen-line { height: 22px; overflow: hidden; }
+/* La ligne d'état : les phrases du moteur ont grandi (l'analyse, le compte
+   final). Une seule ligne, mais qui a le droit de passer à la ligne —
+   deux au maximum — plutôt que d'être coupée en plein mot sur mobile. */
+.sb-gen-line { min-height: 22px; overflow: hidden; }
 .sb-gen-line p {
-  margin: 0; font-size: 13px;
+  margin: 0; font-size: 13px; line-height: 1.35;
   color: rgba(255,255,255,.62);
   font-variant-numeric: tabular-nums;
+  max-width: min(34ch, 78vw);
+  margin-inline: auto;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .sb-gen[data-mode='light'] .sb-gen-line p { color: rgba(10,10,10,.58); }
 
@@ -2310,8 +2317,15 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
   position: absolute; inset: 0;
   overflow: hidden;
   pointer-events: none;
+  /* le canevas est exactement la zone du parent : aucune marge, donc
+     aucun bord visible où que la boule passe */
+  contain: strict;
 }
-.sb-organic-svg { position: absolute; inset: 0; display: block; }
+.sb-organic-svg {
+  position: absolute; inset: 0;
+  display: block;
+  width: 100%; height: 100%;
+}
 
 /* le fond est celui du conteneur (crème en clair, noir en sombre) */
 /* en clair, la sphère est déjà douce : on n'ajoute pas de voile, on

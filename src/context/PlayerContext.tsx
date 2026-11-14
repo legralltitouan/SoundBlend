@@ -93,7 +93,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         width: '200',
         videoId,
         playerVars: {
-          autoplay: 1, controls: 0, disablekb: 1, fs: 0, modestbranding: 1, rel: 0, playsinline: 1,
+          autoplay: 1, controls: 0, disablekb: 1, fs: 0, modestbranding: 1, rel: 0,
+          /* `playsinline` garde la lecture DANS la page au lieu de forcer
+             le plein écran vidéo d'iOS ; sans lui, la sortie de l'app
+             interrompait la piste. */
+          playsinline: 1,
         },
         events: {
           onReady: (e: any) => {
@@ -103,6 +107,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             try { e.target.setVolume(volume); } catch { /* ignore */ }
           },
           onStateChange: (event: any) => {
+            /* 5 = vidéo en file d'attente, 3 = mise en tampon : ce ne sont
+               pas des pauses, on ne touche pas à l'état affiché */
             if (event.data === 1) {
               setIsPlaying(true);
               const d = playerRef.current?.getDuration?.() || 0;
@@ -151,6 +157,50 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // attend que l'API YouTube soit disponible, sans créer de lecteur à vide
   useEffect(() => {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, []);
+
+  /* ═══ la musique continue quand on quitte l'app ═══
+     Deux choses pouvaient couper le son en sortant : le navigateur met
+     l'onglet en veille, et le lecteur YouTube s'arrête de lui-même — ou
+     se met en pause quand il perd le focus sur iOS. On ne veut pas de
+     ça : une piste lancée doit continuer.
+
+     On ne *force* rien non plus : si la personne a appuyé sur pause, la
+     piste reste en pause (on mémorise son intention, `wantedPlay`). Au
+     retour au premier plan, si elle voulait écouter, on relance — après
+     un court délai, parce qu'iOS refuse la reprise dans la même image
+     que le retour de l'onglet. */
+  const wantedPlay = useRef(false);
+  wantedPlay.current = isPlaying;
+
+  useEffect(() => {
+    const resume = () => {
+      if (!wantedPlay.current) return;
+      const p = playerRef.current;
+      if (!p) return;
+      try {
+        const state = p.getPlayerState?.();
+        /* 1 = en lecture, 3 = mise en tampon ; dans ces deux cas, la
+           musique tourne déjà — ne rien faire, sinon on la fait sauter */
+        if (state === 1 || state === 3) return;
+        p.playVideo?.();
+      } catch { /* lecteur pas encore prêt : rien à faire */ }
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      /* deux essais : le premier tout de suite (Android), le second une
+         seconde plus tard (iOS a besoin que l'onglet soit vraiment actif) */
+      resume();
+      window.setTimeout(resume, 900);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    window.addEventListener('pageshow', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+      window.removeEventListener('pageshow', onVisible);
+    };
   }, []);
 
   /* ═══ suivi de la lecture : 60 images par seconde ═══

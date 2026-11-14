@@ -97,6 +97,7 @@ export const ReplaceQueueProvider: React.FC<{ children: React.ReactNode }> = ({ 
     runningRef.current = true;
     patch(next.id, { status: 'running', step: 'taste', startedAt: Date.now() });
 
+    console.debug('[file] départ', next.trackTitle);
     const runner = runnersRef.current.get(next.id);
     if (!runner) {
       runningRef.current = false;
@@ -110,7 +111,7 @@ export const ReplaceQueueProvider: React.FC<{ children: React.ReactNode }> = ({ 
         if (!res) patch(next.id, { status: 'error', error: 'Aucune proposition trouvée.' });
         else patch(next.id, { status: 'ready', result: res });
       })
-      .catch((e) => patch(next.id, { status: 'error', error: e?.message || 'Remplacement impossible.' }))
+      .catch((e) => { console.debug('[file] échec', e?.message); patch(next.id, { status: 'error', error: e?.message || 'Remplacement impossible.' }); })
       .finally(() => {
         runningRef.current = false;
         /* on laisse respirer une seconde entre deux morceaux : les appels

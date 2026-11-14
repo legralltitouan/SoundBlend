@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Clock, Sparkles, ShieldCheck, Car, Flame, Disc3, Compass } from 'lucide-react';
+import { splitCounts } from '../../services/curator';
 import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
 import { Modal, ModalHeader, ModalFooter, ModalBody } from '../ui/Modal';
@@ -23,9 +24,9 @@ const PRESETS: { label: string; ratio: BlendRatio }[] = [
 ];
 
 const CHANNELS = [
-  { key: 'anchor' as const, color: 'var(--accent)', label: 'Anchor', desc: 'Tes morceaux d’amorce, ceux que tu viens de cocher.' },
-  { key: 'deepDive' as const, color: 'var(--deepc, #ff7a00)', label: 'Deep dives', desc: 'Faces B, remixes et pépites des mêmes artistes.' },
-  { key: 'fresh' as const, color: 'var(--freshc, #5e39ff)', label: 'Fresh', desc: 'De nouveaux artistes dans la même texture sonore.' },
+  { key: 'anchor' as const, color: 'var(--accent)', label: 'Piliers', desc: 'Tes morceaux d’amorce, ceux que tu viens de cocher.' },
+  { key: 'deepDive' as const, color: 'var(--deepc, #ff7a00)', label: 'Faces cachées', desc: 'Albums, faces B, instrumentaux des mêmes artistes.' },
+  { key: 'fresh' as const, color: 'var(--freshc, #5e39ff)', label: 'Découvertes', desc: 'Des artistes que tu n’as pas choisis, dans la même texture sonore.' },
 ];
 
 /* ═══════════════════════════════════════════════════════════════
@@ -43,11 +44,12 @@ export const ConfigModal: React.FC = () => {
   const taste = getStoredTasteMemory();
   const target = useMemo(() => Math.max(4, Math.round(minutes / 3.5)), [minutes]);
 
-  const counts = useMemo(() => {
-    const anchor = Math.max(1, Math.round((target * ratio.anchor) / 100));
-    const deep = Math.max(1, Math.round((target * ratio.deepDive) / 100));
-    return { anchor, deepDive: deep, fresh: Math.max(1, target - anchor - deep) };
-  }, [target, ratio]);
+  /* même fonction que celles du moteur (curator.ts) : ce que cet écran
+     annonce est exactement ce que la génération demandera */
+  const counts = useMemo(
+    () => splitCounts(target, ratio, selectedTracks.length),
+    [target, ratio, selectedTracks.length],
+  );
 
   const setOne = (key: keyof BlendRatio, raw: number) => {
     const v = Math.min(80, Math.max(0, raw));
@@ -140,7 +142,7 @@ export const ConfigModal: React.FC = () => {
                 ratio={ratio as WheelRatio}
                 onChange={(next) => setRatio(next as BlendRatio)}
                 target={target}
-                labels={{ anchor: 'Anchor', deepDive: 'Deep dives', fresh: 'Fresh' }}
+                labels={{ anchor: 'Piliers', deepDive: 'Faces cachées', fresh: 'Découvertes' }}
               />
             </div>
           </div>

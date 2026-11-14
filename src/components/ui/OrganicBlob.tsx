@@ -25,17 +25,25 @@ import React, { useEffect, useRef } from 'react';
 
 type Props = { mode?: 'light' | 'dark'; className?: string };
 
-/* Le filtre de pigment travaille en unités utilisateur, et son `viewBox`
-   doit être la fenêtre — sinon le grain se met à l'échelle du SVG et
-   devient plus fin sur un petit écran que sur un grand.
+/* ═══ pourquoi un simple `viewBox` ne suffisait pas ═══
 
-   On déborde volontairement de 140 px de chaque côté : les nappes sont
-   floutées et déplacées par le bruit, elles dépassent donc largement leur
-   ellipse. Sans cette marge, le bord du filtre les coupait net — c'est ça
-   qu'on voyait comme un cadre autour de la boule. */
-const FILTER_PAD = 140;
-const viewBoxFor = (w: number, h: number) =>
-  `${-FILTER_PAD} ${-FILTER_PAD} ${w + FILTER_PAD * 2} ${h + FILTER_PAD * 2}`;
+   Les nappes sont positionnées en PIXELS de fenêtre (`innerWidth`,
+   `innerHeight`). Or l'ancien montage agrandissait le viewBox de 140 px
+   de chaque côté : le SVG était alors mis à l'échelle pour couvrir
+   l'écran (`slice`), si bien qu'un pixel écrit dans le code ne tombait
+   plus sur un pixel de l'écran. Le halo sortait du cadre, et surtout la
+   région du filtre — en unités utilisateur, donc décalée de ces 140 px —
+   s'arrêtait net au milieu de la boule. C'est cette limite qu'on voyait
+   comme une « bordure de délimitation » quand la sphère approchait du
+   bord.
+
+   Maintenant le SVG fait exactement la taille de son conteneur, sans
+   viewBox d'écart : 1 unité = 1 pixel. Le filtre garde une région plus
+   large que l'écran (il en a besoin pour flouter ce qui touche le bord),
+   mais cette région DÉBORDE de tous les côtés de la même façon : aucune
+   ligne ne peut apparaître à l'intérieur. Ce qui sort de l'écran est
+   simplement coupé par l'écran. */
+const FILTER_PAD = 420;
 
 /** les nappes, du cœur vers le halo. `dist` = écart au centre, en px. */
 type Layer = { rx: number; ry: number; dist: number; blur: number };
@@ -71,17 +79,46 @@ const PALETTE: Record<'light' | 'dark', { fill: string; opacity: number }[]> = {
 
 export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
   const refs = useRef<(SVGEllipseElement | null)[]>([]);
-  const [vb, setVb] = React.useState(() =>
-    viewBoxFor(
-      typeof window === 'undefined' ? 1400 : window.innerWidth,
-      typeof window === 'undefined' ? 880 : window.innerHeight,
-    ));
+  const host = useRef<HTMLDivElement | null>(null);
+  const [box, setBox] = React.useState(() =>
+    typeof window === 'undefined'
+      ? { w: 1400, h: 880 }
+      : { w: window.innerWidth, h: window.innerHeight });
+  /* On mesure le CONTENEUR, pas la fenêtre : dans un écran de composition
+     en plein écran les deux coïncident, mais sur un ordinateur avec une
+     barre de navigateur, la fenêtre fait quelques pixels de plus que la
+     zone peinte — et le canevas, légèrement plus grand, laissait voir un
+     bord. Ils sont désormais strictement de la même taille. */
   useEffect(() => {
-    const on = () => setVb(viewBoxFor(window.innerWidth, window.innerHeight));
-    on();
-    window.addEventListener('resize', on);
-    return () => window.removeEventListener('resize', on);
+    const el = host.current;
+    const read = () => {
+      const r = el?.getBoundingClientRect();
+      const w = Math.round(r && r.width ? r.width : window.innerWidth);
+      const h = Math.round(r && r.height ? r.height : window.innerHeight);
+      setBox((b) => (b.w === w && b.h === h ? b : { w, h }));
+    };
+    read();
+    window.addEventListener('resize', read);
+    window.addEventListener('orientationchange', read);
+    /* la barre d'adresse mobile qui se replie change la hauteur sans
+       prévenir personne : on suit aussi la taille du document */
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(read) : null;
+    if (el && ro) ro.observe(el);
+    return () => {
+      window.removeEventListener('resize', read);
+      window.removeEventListener('orientationchange', read);
+      ro?.disconnect();
+    };
   }, []);
+  const vb = `0 0 ${box.w} ${box.h}`;
+  /* ═══ l'échelle courante, pour les filtres ═══
+     Les nappes grandissent avec l'échelle (×0.7 sur un téléphone, ×1.7
+     sur un grand écran) mais leur FLOU, lui, était fixe : sur un ordinateur
+     les ellipses devenaient énormes avec un contour à peine adouci, et
+     c'est ce contour qu'on voyait comme une « bordure » quand la boule
+     approchait du bord. On calcule donc la même échelle ici, à partir de
+     la taille du conteneur, et chaque flou la suit. */
+  const shrink = Math.max(0.66, Math.min(1.75, Math.max(200, Math.min(640, box.w * 0.66)) / 290));
   const palette = PALETTE[mode];
 
   useEffect(() => {
@@ -127,23 +164,63 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
        plancher (0.52), d'où une boule de 150 px — une bille au milieu
        du vide. La marge de nage suit la taille réelle, sinon elle sort
        de l'écran. */
+    /* ═══ la taille de la sphère, et ses limites ═══
+       On vise 66 % de la largeur du cœur — mais la HALO compte aussi :
+       les nappes extérieures vont jusqu'à ~272 px du centre (rx 132 +
+       respiration + le flou du filtre), soit un rayon de 272 × scale.
+       Si ce rayon dépasse la demi-largeur de l'écran, la tache se fait
+       couper net par le bord du canevas — et c'est ce qu'on voyait :
+       « les bordures de délimitation quand la boule est proche du bord ».
+       On borne donc l'échelle pour que le halo tienne entièrement dans
+       le plus petit côté, et on n'autorise le déplacement qu'à
+       l'intérieur de ces limites. */
     let scale = 1;
-    let margy = 120;
+    /* rayon réel du halo, en px, pour l'échelle courante */
+    let reach = 150;
+
+    /* les limites de déplacement : la boule entière reste dans le cadre,
+       moins une marge de respiration */
+    const bounds = () => {
+      const w = vw();
+      const h = vh();
+      const m = reach * 0.94;          // 6 % de débord : un bord qui respire
+      const x0 = Math.min(m, w * 0.5);
+      const x1 = Math.max(x0, w - m);
+      const y0 = Math.min(m, h * 0.5);
+      const y1 = Math.max(y0, h - m);
+      return { x0, x1, y0, y1 };
+    };
+    const pickTarget = () => {
+      const { x0, x1, y0, y1 } = bounds();
+      target = {
+        x: x0 + Math.random() * Math.max(1, x1 - x0),
+        y: y0 + Math.random() * Math.max(1, y1 - y0),
+      };
+    };
+
     const rescale = () => {
       const w = vw();
       const h = vh();
-      /* largeur visée du cœur : 58 % de la largeur, borné pour ne pas
-         devenir énorme sur un grand écran */
-      const voulu = Math.max(210, Math.min(620, w * 0.66));
-      scale = Math.max(0.7, Math.min(1.75, voulu / 290));
-      /* la marge : de quoi laisser la boule entière dans l'écran, sans
-         qu'elle se colle aux bords */
-      const reach = 150 * scale;
-      margy = Math.max(reach, Math.min(w, h) * 0.18);
-      target = {
-        x: margy + Math.random() * Math.max(1, w - margy * 2),
-        y: margy * 1.4 + Math.random() * Math.max(1, h - margy * 2.8),
-      };
+      /* 1. la largeur visée du cœur, bornée courts écrans comme grands */
+      const voulu = Math.max(200, Math.min(640, w * 0.66));
+      let s2 = Math.max(0.66, Math.min(1.75, voulu / 290));
+      /* 2. le halo a le droit de sortir de l'écran — c'est une tache,
+         pas un objet ; mais pas au point de n'être qu'un aplat. On plafonne
+         son rayon à 90 % de la plus grande dimension. */
+      const HALO = 272;                 // rayon de la plus grande nappe
+      s2 = Math.min(s2, (Math.max(w, h) * 0.9) / HALO);
+      scale = s2;
+      reach = HALO * scale;
+      /* 3. on replace la boule si elle se retrouve dehors après un
+         changement de taille (rotation du téléphone, fenêtre redimensionnée) */
+      const { x0, x1, y0, y1 } = bounds();
+      if (nodes[1].x < x0 || nodes[1].x > x1 || nodes[1].y < y0 || nodes[1].y > y1) {
+        nodes[1].x = Math.min(x1, Math.max(x0, nodes[1].x));
+        nodes[1].y = Math.min(y1, Math.max(y0, nodes[1].y));
+        nodes[0].x = nodes[1].x;
+        nodes[0].y = nodes[1].y;
+      }
+      pickTarget();
     };
     rescale();
 
@@ -166,13 +243,8 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
       nodes[0].x = head.x + Math.cos(heading) * 4;
       nodes[0].y = head.y + Math.sin(heading) * 4;
 
-      /* arrivée : on choisit un autre point, jamais hors de l'écran */
-      if (Math.hypot(target.x - head.x, target.y - head.y) < 85 * scale) {
-        target = {
-          x: margy + Math.random() * Math.max(1, vw() - margy * 2),
-          y: margy * 1.4 + Math.random() * Math.max(1, vh() - margy * 2.8),
-        };
-      }
+      /* arrivée : on choisit un autre point, jamais hors du cadre */
+      if (Math.hypot(target.x - head.x, target.y - head.y) < 85 * scale) pickTarget();
 
       /* le corps suit, en gardant son écart et en ondulant */
       for (let i = 2; i < nodes.length; i++) {
@@ -215,31 +287,32 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
   }, [mode]);
 
   return (
-    <div className={`sb-organic ${className || ''}`} data-mode={mode} aria-hidden>
+    <div ref={host} className={`sb-organic ${className || ''}`} data-mode={mode} aria-hidden>
       <svg
         className="sb-organic-svg"
-        width="100%"
-        height="100%"
+        width={box.w}
+        height={box.h}
         xmlns="http://www.w3.org/2000/svg"
-        /* le filtre de pigment travaille sur toute la surface */
+        /* un pixel de code = un pixel d'écran, sans mise à l'échelle */
         viewBox={vb}
-        /* `slice` : le viewBox élargi remplit la fenêtre, donc la boule
-           garde sa taille et la marge de filtre déborde simplement hors
-           champ. En `meet` tout le viewBox tiendrait dans l'écran, et la
-           boule rétrécirait d'autant. */
-        preserveAspectRatio="xMidYMid slice"
+        preserveAspectRatio="none"
       >
         <defs>
           <filter
             id="sbOrganicPigment"
             filterUnits="userSpaceOnUse"
-            /* le viewBox déborde déjà de 140 px : 100 % du viewBox, c'est
-               la fenêtre plus la marge. Aucun bord net ne coupe la boule. */
-            x="0" y="0" width="100%" height="100%"
+            /* la région du filtre : l'écran, plus une marge égale de
+               chaque côté. Le flou et le déplacement du bruit peuvent
+               donc travailler sur toute la surface visible, et même
+               au-delà — aucune arête franche ne traverse l'écran. */
+            x={-FILTER_PAD}
+            y={-FILTER_PAD}
+            width={box.w + FILTER_PAD * 2}
+            height={box.h + FILTER_PAD * 2}
             colorInterpolationFilters="sRGB"
           >
-            <feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="3" seed="7" result="noise" />
-            <feDisplacementMap in="SourceGraphic" in2="noise" scale="12.5" xChannelSelector="R" yChannelSelector="G" result="dispersed" />
+            <feTurbulence type="fractalNoise" baseFrequency="0.62" numOctaves="2" seed="7" result="noise" />
+            <feDisplacementMap in="SourceGraphic" in2="noise" scale="11" xChannelSelector="R" yChannelSelector="G" result="dispersed" />
             <feColorMatrix
               in="noise"
               type="matrix"
@@ -251,8 +324,10 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
           </filter>
 
           {LAYERS.map((l, i) => (
-            <filter key={i} id={`sbOrganicB${i}`} x="-80%" y="-80%" width="260%" height="260%">
-              <feGaussianBlur stdDeviation={l.blur} />
+            <filter key={i} id={`sbOrganicB${i}`} x="-90%" y="-90%" width="280%" height="280%">
+              {/* le flou suit la taille réelle de la nappe : une ellipse
+                  deux fois plus grande est floutée deux fois plus */}
+              <feGaussianBlur stdDeviation={l.blur * (0.85 + 0.4 * shrink)} />
             </filter>
           ))}
         </defs>

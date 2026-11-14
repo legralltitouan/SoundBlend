@@ -210,3 +210,43 @@ export const deleteStoredBlend = (id: string): void => {
     console.error('Error deleting blend:', e);
   }
 };
+
+/* ═══════════════════════════════════════════════════════════════
+   Le portrait sonore : ce que l'IA a compris du style de l'auditeur.
+
+   Il ne remplace pas la mémoire des goûts, il la résume : une phrase de
+   style, les genres et les textures dominantes, ce qu'il faut éviter. Ce
+   résumé est réutilisé d'une génération à l'autre — il évite de repayer
+   une analyse complète à chaque fois, et il donne au modèle une
+   description stable de la personne, pas seulement une liste de titres.
+   ═══════════════════════════════════════════════════════════════ */
+
+const PORTRAIT_KEY = 'soundblend_portrait_v1';
+
+export type SoundPortrait = {
+  /** une phrase : le style de l'auditeur, en français */
+  style: string;
+  /** les familles musicales dominantes */
+  genres: string[];
+  /** les textures, instruments, couleurs de production */
+  textures: string[];
+  /** ce qu'il faut éviter */
+  avoid: string[];
+  /** la signature rythmique / énergétique */
+  energy: string;
+  /** la date de l'analyse, pour savoir si on la refait */
+  at: string;
+};
+
+export const getStoredPortrait = (): SoundPortrait | null => {
+  try {
+    const raw = localStorage.getItem(PORTRAIT_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as SoundPortrait;
+    return p && typeof p.style === 'string' ? p : null;
+  } catch { return null; }
+};
+
+export const saveStoredPortrait = (p: SoundPortrait): void => {
+  try { localStorage.setItem(PORTRAIT_KEY, JSON.stringify(p)); } catch { /* ignore */ }
+};

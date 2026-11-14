@@ -20,8 +20,8 @@ import type { Track, TrackCategory } from '../../types';
 import { trackKey } from '../../lib/track';
 
 const CAT: Record<TrackCategory, { label: string; color: string }> = {
-  anchor: { label: 'Anchor', color: 'var(--anchor)' },
-  deep_dive: { label: 'Deep dive', color: 'var(--deep)' },
+  anchor: { label: 'Pilier', color: 'var(--anchor)' },
+  deep_dive: { label: 'Face cachée', color: 'var(--deep)' },
   fresh: { label: 'Découverte', color: 'var(--fresh)' },
 };
 
@@ -277,8 +277,11 @@ export const BlendView: React.FC = () => {
             </h1>
           )}
 
+          {/* les mêmes mots que dans l'écran de composition et dans les
+              étiquettes des morceaux — plus de « anchor / deep dives » en
+              anglais au milieu d'une interface française */}
           <p className="sb-blend-counts">
-            {stats.anchor} anchor · {stats.deep} deep dives · {stats.fresh} découvertes
+            {stats.anchor} {stats.anchor > 1 ? 'piliers' : 'pilier'} · {stats.deep} {stats.deep > 1 ? 'faces cachées' : 'face cachée'} · {stats.fresh} {stats.fresh > 1 ? 'découvertes' : 'découverte'}
           </p>
 
           <div className="sb-blend-buttons">

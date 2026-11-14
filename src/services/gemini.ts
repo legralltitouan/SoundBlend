@@ -1,7 +1,12 @@
 import { BlendConfig, TasteMemory, Track, TrackCategory } from '../types';
-import { getStoredSettings, getSeenTracks, rememberSeenTrack } from './storage';
+import { getStoredSettings, getSeenTracks, rememberSeenTrack, getStoredPortrait } from './storage';
 import { youtubeService, withTimeout } from './youtube';
-import { trackKeys, dedupeTracks, uniqueByVideo } from '../lib/dedupe';
+import { dedupeTracks, uniqueByVideo, norm } from '../lib/dedupe';
+import {
+  analysisPrompt, parseAnalysis, toPortrait, rememberPortrait, portraitFor,
+  listPrompt, parsePicks, splitCounts, replacePrompt,
+  type Pick, type CallModel,
+} from './curator';
 
 /* Les étapes d'un remplacement : le bandeau à l'écran les raconte une par
    une, pour qu'on sache toujours où en est la recherche. */
@@ -327,299 +332,218 @@ export class GeminiService {
     const settings = getStoredSettings();
     const apiKey = settings.geminiApiKey;
 
-    // Calculate total track target based on duration (average 3.5 min/track)
+    /* la durée demandée, en morceaux de ~3,5 min */
     const targetCount = Math.max(4, Math.round(config.durationMinutes / 3.5));
+    const counts = splitCounts(targetCount, config.ratio, seedTracks.length);
 
-    const anchorTarget = Math.max(1, Math.round((targetCount * config.ratio.anchor) / 100));
-    const deepDiveTarget = Math.max(1, Math.round((targetCount * config.ratio.deepDive) / 100));
-    const freshTarget = Math.max(1, targetCount - anchorTarget - deepDiveTarget);
+    /* tout ce qui ne doit jamais ressortir : les amorces, les morceaux
+       déjà écoutés ou proposés, ceux que la personne a rejetés */
+    const forbidden = new Set<string>();
+    const forbid = (title?: string, artist?: string) => {
+      if (title && artist) forbidden.add(`${artist} — ${title}`);
+      if (title) forbidden.add(title);
+    };
+    seedTracks.forEach((t) => forbid(t.title, t.artist));
+    tasteMemory.dislikedTracks.forEach((t) => forbid(t.title, t.artist));
+    getSeenTracks().slice(-60).forEach((ligne) => forbidden.add(ligne));
+    const bannedArtists = new Set(
+      tasteMemory.dislikedArtists.map((a) => a.toLowerCase().trim()).filter(Boolean),
+    );
+    const seedArtistSet = new Set(seedTracks.map((t) => t.artist.toLowerCase().trim()));
 
-    onProgress?.("Analyse spectrale & empreinte musicale des morceaux sélectionnés...");
-
-    // If no API key is set, use the smart built-in generative engine
     if (!apiKey) {
-      await new Promise(r => setTimeout(r, 1200));
-      onProgress?.("Création du Blend dynamique selon vos proportions...");
-      await new Promise(r => setTimeout(r, 800));
-      return this.generateMockBlend(seedTracks, anchorTarget, deepDiveTarget, freshTarget, tasteMemory);
+      /* Sans clé, on le dit franchement. Le catalogue de secours a été
+         vidé de ses « morceaux d'office » : il ne contient plus que les
+         amorces et des suggestions neutres, et il est annoncé comme tel. */
+      onProgress?.('Aucune clé Gemini : impossible d’analyser les morceaux. Ajoute une clé dans Réglages → Clés & API.');
+      await new Promise((r) => setTimeout(r, 900));
+      return this.anchorsOnly(seedTracks, counts.anchor);
     }
 
-    const prompt = `
-Tu es le curateur musical expert et algorithmique de SoundBlend AI.
-Ton objectif est de générer une playlist équilibrée, raffinée et ultra-cohérente.
+    const models = (await engineQueue(apiKey)).slice(0, 3);
+    if (!models.length) {
+      onProgress?.('Aucun modèle de texte disponible pour cette clé — analyse impossible.');
+      await new Promise((r) => setTimeout(r, 700));
+      return this.anchorsOnly(seedTracks, counts.anchor);
+    }
 
-Voici les morceaux amorces sélectionnés par l'utilisateur :
-${seedTracks.map(t => `- "${t.title}" par ${t.artist}`).join('\n')}
-
-Profil de goûts de l'utilisateur :
-- Artistes/morceaux aimés : ${tasteMemory.likedArtists.join(', ') || 'Aucun pour l\'instant'}
-- Artistes/morceaux rejetés (INTERDITS, ne JAMAIS proposer ces artistes) : ${tasteMemory.dislikedArtists.join(', ') || 'Aucun'}
-
-Consignes précises de répartition :
-1. Total de titres à générer : exactement ${targetCount} morceaux.
-2. ANCHOR (${anchorTarget} titres) : Choisis parmi les morceaux amorces ci-dessus.
-3. DEEP DIVES (${deepDiveTarget} titres) : Des morceaux moins connus, faces B, pépites d'albums ou remixes des MÊMES artistes que ceux des morceaux amorces.
-4. FRESH DISCOVERY (${freshTarget} titres) : Des artistes différents (mêmes micro-genres, texture sonore similaire, instruments proches) que l'auditeur appréciera.
-
-RÈGLE ABSOLUE : aucun morceau ne doit apparaître deux fois. Chaque titre
-doit avoir un couple titre/artiste unique dans ta réponse, et aucun ne
-doit reprendre un morceau déjà cité (même avec une mention live, remix
-ou remaster).
-
-Pour chaque morceau, fournis une courte explication ("rationale") en français expliquant le lien musical (ex: "Même groove de basse funk", "Face B intimiste de l'album de 2019", "Même ambiance synthwave mélancolique").
-
-Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionnel :
-[
-  {
-    "title": "Nom du morceau",
-    "artist": "Nom de l'artiste",
-    "category": "anchor" | "deep_dive" | "fresh",
-    "rationale": "Explication courte du choix"
-  }
-]
-`;
-
-    /* ── la liste des modèles qui savent écrire, puis un appel chacun au
-       plus. On n'envoie jamais la requête à un générateur d'images ou à
-       un synthétiseur vocal : ils figurent dans la liste de l'API mais
-       ne peuvent pas répondre par une playlist. ── */
-    onProgress?.('Choix du moteur disponible…');
-    const candidates = (await engineQueue(apiKey)).slice(0, 3);
-
-    let quotaHit = false;
-    for (const currentModel of candidates) {
-      try {
-        onProgress?.('Composition du blend en cours…');
-        const rawText = await callModelResilient(currentModel, apiKey, prompt, 0.7, {
-          json: true, budgetMs: 24000,
-        });
-
-        const parsed: GeminiTrackSuggestion[] | null = firstJson(rawText || '');
-        if (!parsed || usableCount(parsed) < Math.min(3, targetCount)) {
-          /* réponse vide ou hors sujet : on ne la garde pas, on essaie le
-             modèle suivant — mais on ne fabriquera jamais une liste. Un
-             message clair vaut mieux qu'un objet d'erreur : c'est un cas
-             prévu, pas une panne. */
-          console.warn(`Réponse inexploitable de ${currentModel} (JSON vide ou incomplet)`);
-          continue;
+    const call: CallModel = async (prompt, temperature, budgetMs) => {
+      let last: any = null;
+      for (const m of models) {
+        try {
+          const raw = await callModelResilient(m, apiKey, prompt, temperature, { json: true, budgetMs });
+          if (raw) { rememberEngine(apiKey, m); return raw; }
+        } catch (e: any) {
+          last = e;
+          if (e?.status === 429 || e?.status === 403 || e?.status === 401) throw e;
         }
-        rememberEngine(apiKey, currentModel);
-        onProgress?.('Recherche des titres sur YouTube…');
-
-        // on résout tous les morceaux en parallèle : dix recherches YouTube
-        // en série coûtaient dix allers-retours, en parallèle c'est un seul
-        // temps d'attente
-        const tracks: Track[] = await Promise.all(parsed.map(async (item) => {
-          const matchingSeed = seedTracks.find(
-            s => s.title.toLowerCase().includes(item.title.toLowerCase()) ||
-                 item.title.toLowerCase().includes(s.title.toLowerCase())
-          );
-
-          if (matchingSeed) {
-            return {
-              ...matchingSeed,
-              category: item.category || 'anchor',
-              rationale: item.rationale || 'Morceau pilier sélectionné par vous',
-            } as Track;
-          }
-
-          const videoId = await youtubeService.resolveVideoId(item.title, item.artist);
-          return {
-            id: `gen-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-            videoId: videoId,
-            title: item.title,
-            artist: item.artist,
-            thumbnailUrl: videoId ? `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg` : '',
-            durationSeconds: 215,
-            durationFormatted: '3:35',
-            videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
-            category: item.category,
-            rationale: item.rationale,
-          } as Track;
-        }));
-
-        /* le modèle peut répéter un titre, ou proposer deux envois du même
-           morceau : on ne garde que le premier de chaque. Le garde-fou est
-           ici, au dernier moment, parce que c'est le seul endroit où l'on
-           connaît l'identifiant vidéo — le critère le plus sûr. */
-        return uniqueByVideo(dedupeTracks(tracks));
-      } catch (e: any) {
-        /* 429 : la clé est en quota pour TOUS les modèles. Insister sur les
-           suivants ne fait qu'ajouter des requêtes refusées dans la
-           console et retarder l'auditeur — on sort, et on le dit. */
-        if (e?.status === 429) {
-          quotaHit = true;
-          break;
-        }
-        if (e?.status === 403 || e?.status === 401) break;
-        console.warn(`Modèle ${currentModel} indisponible :`, e?.message || e);
-        // continue to next model
       }
-    }
-
-    if (quotaHit) {
-      onProgress?.('Quota de la clé atteint — composition locale en attendant.');
-    }
-
-    // If all online models exhausted or failed, gracefully use smart generator
-    onProgress?.("Utilisation du moteur génératif haute fidélité de secours...");
-    return this.generateMockBlend(seedTracks, anchorTarget, deepDiveTarget, freshTarget, tasteMemory);
-  }
-
-  /**
-   * Smart fallback generator for instant demo or offline mode
-   */
-  private generateMockBlend(
-    seedTracks: Track[],
-    anchorCount: number,
-    deepDiveCount: number,
-    freshCount: number,
-    tasteMemory: TasteMemory
-  ): Track[] {
-    const results: Track[] = [];
-    /* le registre des clés déjà prises, tenu à mesure qu'on empile */
-    const trackKeys2 = new Set<string>();
-    const note = (t: { videoId?: string; title?: string; artist?: string }) =>
-      trackKeys(t).forEach((k) => trackKeys2.add(k));
-
-    // 1. ANCHOR: Take from seed tracks
-    const selectedAnchors = seedTracks.slice(0, anchorCount);
-    selectedAnchors.forEach(t => {
-      note(t);
-      results.push({
-        ...t,
-        category: 'anchor',
-        rationale: 'Pilier amorce de votre sélection personnelle',
-      });
-    });
-
-    // 2. DEEP DIVES: curated catalog of B-sides / rare tracks based on artists
-    const seedArtists = Array.from(new Set(seedTracks.map(t => t.artist)));
-    const deepDiveLibrary: Record<string, Array<{ title: string; videoId: string; rationale: string }>> = {
-      'Daft Punk': [
-        { title: 'Make Love', videoId: 'UeZG0viNAjM', rationale: 'Face B contemplative et méconnue de l\'album Human After All' },
-        { title: 'Something About Us (Love Theme)', videoId: 'em0MknB6wFo', rationale: 'Groove downtempo feutré et intime' },
-        { title: 'Voyager', videoId: 'INbgG9M0WYE', rationale: 'Ligne de basse funk analogique ultra-efficace' },
-      ],
-      'Kavinsky': [
-        { title: 'Testarossa Autodrive', videoId: 'ErQNRwH-Hmk', rationale: 'Titre brut des débuts synthwave avec synthé analogique tranchant' },
-        { title: 'Pacific Coast Highway', videoId: '-5FKNViujeM', rationale: 'Course nocturne cinématique et sombre' },
-      ],
-      'Justice': [
-        { title: 'Planisphère', videoId: 'GU21qYFmrcY', rationale: 'Épopée électro symphonique de 15 minutes en 4 parties' },
-        { title: 'Pleasure', videoId: 'mwtffwcuFp0', rationale: 'Texture indie-électro lumineuse de l\'album Woman' },
-      ],
-      'Lomepal': [
-        { title: 'Beau la folie', videoId: 'W5WAvOXUh6M', rationale: 'Titre poignant et minimaliste de l\'album Mauvais Ordre' },
-        { title: 'Evidemment', videoId: 'fSWCo-eddJ8', rationale: 'Mélodie feutrée au piano électrique' },
-      ],
-      'Moderat': [
-        { title: 'Bad Kingdom (Instrumental VIP)', videoId: '3NPxqXMZq7o', rationale: 'Version alternative aux sub-basses plus profondes' },
-        { title: 'Reminder', videoId: 'cJwsNUoazUg', rationale: 'Rythmique percussive syncopée signature de Modeselektor & Apparat' },
-      ],
-      'Tame Impala': [
-        { title: 'Beverly Laurel', videoId: 'O4A6kWeUyA0', rationale: 'Face B psychédélique rare de l\'époque Lonerism' },
-        { title: 'Breathe Deeper', videoId: 'gs-MtItyOFc', rationale: 'Transition house/funk progressive inattendue' },
-      ]
+      if (last) throw last;
+      return null;
     };
 
-    /* des morceaux réels, choisis pour tenir le rôle de « face B » */
-    const genericDeepDives = [
-      { title: 'Something About Us', videoId: 'em0MknB6wFo', artist: 'Daft Punk', rationale: 'Version studio acoustique et intime' },
-      { title: 'Get Lucky', videoId: '5NV6Rdv1a3I', artist: 'Daft Punk', rationale: 'Face B rare enregistrée en prise directe' },
-      { title: 'Intro', videoId: 'yr_HIrfr7is', artist: 'M83', rationale: 'Morceau bonus d\'édition vinyle limitée' },
-    ];
+    /* ═══ 1. écouter ═══ */
+    onProgress?.('Écoute des morceaux sélectionnés : genre, textures, énergie…');
+    const known = portraitFor(tasteMemory);
+    let analysis = parseAnalysis(await call(analysisPrompt(seedTracks, tasteMemory, known), 0.4, 26000).catch(() => null));
 
-    let deepDivesAdded = 0;
-    for (const artist of seedArtists) {
-      if (deepDivesAdded >= deepDiveCount) break;
-      const artistDives = deepDiveLibrary[artist];
-      if (artistDives) {
-        for (const item of artistDives) {
-          if (deepDivesAdded >= deepDiveCount) break;
-          /* déjà proposé sous un autre nom ? on passe */
-          if (trackKeys({ videoId: item.videoId, title: item.title, artist }).some((k) => trackKeys2.has(k))) continue;
-          note({ videoId: item.videoId, title: item.title, artist });
-          results.push({
-            id: `dd-${Math.random().toString(36).substr(2, 7)}`,
-            videoId: item.videoId,
-            title: item.title,
-            artist: artist,
-            thumbnailUrl: item.videoId ? `https://i.ytimg.com/vi/${item.videoId}/mqdefault.jpg` : '',
-            durationSeconds: 220,
-            durationFormatted: '3:40',
-            videoUrl: `https://www.youtube.com/watch?v=${item.videoId}`,
-            category: 'deep_dive',
-            rationale: item.rationale,
-          });
-          deepDivesAdded++;
-        }
+    if (analysis) {
+      /* on montre ce que le moteur a compris : c'est la preuve visible que
+         la sélection part d'une écoute, pas d'un tirage */
+      onProgress?.(`Ton fil : ${analysis.fil}`);
+    } else {
+      /* le modèle n'a rien rendu d'exploitable : on le dit, et on se
+         rabat sur une description neutre pour ne pas bloquer la suite */
+      onProgress?.('Analyse indisponible — on continue avec le profil enregistré.');
+      analysis = known
+        ? { fil: known.style, genres: known.genres, textures: known.textures, epoques: [], energie: known.energy, gout: '', eviter: known.avoid }
+        : { fil: `Autour de ${seedTracks.map((t) => t.artist).slice(0, 3).join(', ')}`, genres: [], textures: [], epoques: [], energie: '', gout: '', eviter: [] };
+      rememberPortrait(toPortrait(analysis, tasteMemory));
+    }
+    /* les artistes que l'analyse elle-même conseille d'éviter */
+    analysis.eviter.forEach((a) => bannedArtists.add(a.toLowerCase().trim()));
+
+    /* ═══ 2. et 3. choisir — trois sélections distinctes ═══ */
+    const picked: { cat: TrackCategory; picks: Pick[] }[] = [];
+    const forbiddenList = () => Array.from(forbidden).slice(-80);
+
+    const ask = async (role: TrackCategory, count: number) => {
+      if (count <= 0) return [] as Pick[];
+      const label = role === 'anchor' ? 'piliers' : role === 'deep_dive' ? 'faces cachées' : 'découvertes';
+      onProgress?.(`Sélection des ${count} ${label}…`);
+      const raw = await call(listPrompt(role, count, seedTracks, analysis!, tasteMemory, forbiddenList()), role === 'fresh' ? 0.85 : 0.7, 26000)
+        .catch(() => null);
+      const { analyse, titres } = parsePicks(raw);
+      if (analyse) onProgress?.(analyse);
+      /* on écarte ce qui est interdit, doublon ou déjà proposé AVANT de
+         le présenter : le modèle ne décide pas de ce qui s'affiche */
+      const clean: Pick[] = [];
+      for (const p of titres) {
+        const keyA = `${p.artist} — ${p.title}`.toLowerCase().trim();
+        const keyB = p.title.toLowerCase().trim();
+        if (forbidden.has(keyA) || forbidden.has(keyB)) continue;
+        if (bannedArtists.has(p.artist.toLowerCase().trim())) continue;
+        /* anchor : uniquement des amorces ; fresh : jamais un artiste des amorces */
+        if (role === 'anchor' && !seedTracks.some((s) => s.title.toLowerCase().trim() === keyB)) continue;
+        if (role === 'fresh' && seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
+        if (role === 'deep_dive' && !seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
+        if (clean.some((c) => `${c.artist} — ${c.title}`.toLowerCase() === keyA)) continue;
+        clean.push(p);
+        forbidden.add(keyA);
+        forbidden.add(keyB);
+        rememberSeenTrack(p.title, p.artist);
+        if (clean.length >= count) break;
       }
-    }
+      console.debug(`[curateur] ${role} : ${titres.length} proposés, ${clean.length} retenus (demandé ${count})`,
+        titres.map((t) => `${t.title}/${t.artist}`));
+      if (!clean.length) {
+        onProgress?.(
+          role === 'deep_dive'
+            ? 'Le modèle n’a proposé aucune face cachée crédible — on ne remplit pas avec du connu.'
+            : role === 'fresh'
+              ? 'Le modèle n’a proposé aucune découverte crédible — on ne remplit pas avec du hasard.'
+              : 'Aucun pilier exploitable dans cette réponse.',
+        );
+      }
+      picked.push({ cat: role, picks: clean });
+      return clean;
+    };
 
-    while (deepDivesAdded < deepDiveCount) {
-      const fallback = genericDeepDives[deepDivesAdded % genericDeepDives.length];
-      const artist = fallback.artist || seedArtists[deepDivesAdded % seedArtists.length] || 'Artiste Similaire';
-      /* un morceau déjà présent ne revient pas : on saute, quitte à
-         rendre un titre de moins plutôt qu'un doublon */
-      if (trackKeys({ title: fallback.title, artist }).some((k) => trackKeys2.has(k))) { deepDivesAdded++; continue; }
-      results.push({
-        id: `dd-gen-${Math.random().toString(36).substr(2, 7)}`,
-        videoId: fallback.videoId,
-        title: fallback.title,
-        artist,
-        thumbnailUrl: fallback.videoId ? `https://i.ytimg.com/vi/${fallback.videoId}/mqdefault.jpg` : '',
-        durationSeconds: 210,
-        durationFormatted: '3:30',
-        videoUrl: `https://www.youtube.com/watch?v=${fallback.videoId}`,
-        category: 'deep_dive',
-        rationale: fallback.rationale,
-      });
-      deepDivesAdded++;
-    }
+    /* les piliers d'abord : ce sont des morceaux réels, déjà choisis par
+       la personne — ils ne dépendent pas du modèle */
+    const anchorPicks: Pick[] = seedTracks.slice(0, counts.anchor).map((t) => ({
+      title: t.title,
+      artist: t.artist,
+      rationale: 'Pilier : morceau de ta sélection.',
+    }));
+    anchorPicks.forEach((p) => { forbidden.add(`${p.artist} — ${p.title}`); forbidden.add(p.title.toLowerCase()); });
 
-    // 3. FRESH DISCOVERY: New artists in the same micro-genre
-    const freshLibrary = [
-      { title: 'French 79', song: 'Between the Buttons', videoId: 'lbb316gp78A', rationale: 'Même texture de synthétiseurs modulaires et mélodie enveloppante' },
-      { title: 'Parcels', song: 'Overnight', videoId: '2SUwOgmvzK4', rationale: 'Guitare funk sautillante produite par les mêmes ingénieurs du son' },
-      { title: 'Polo & Pan', song: 'Nanã', videoId: 'YPQIHpVdTzo', rationale: 'Groove électro tropical et basses chaleureuses' },
-      { title: 'The Blaze', song: 'Territory', videoId: 'Q82lz-ncN2Y', rationale: 'Montée émotionnelle progressive et voix pitchée' },
-      { title: 'Rone', song: 'Bye Bye Macadam', videoId: 'kfoJUeyMsOE', rationale: 'Atmosphère électronique onirique et complexe' },
-      { title: 'Kid Francescoli', song: 'Moon (And It Went Like)', videoId: 'fdixQDPA2h0', rationale: 'Rythmique down-tempo chill et voix aérienne' },
-      { title: 'Agar Agar', song: 'Prettiest Virgin', videoId: 'Yp257b5APOg', rationale: 'Électro-pop vintage avec un synthé analogique' }
+    /* deep dives et découvertes : en parallèle, ce sont deux requêtes
+       indépendantes — les faire en série doublerait l'attente */
+    const [dives, fresh] = await Promise.all([
+      ask('deep_dive', counts.deepDive),
+      ask('fresh', counts.fresh),
+    ]);
+
+    /* ═══ 4. vérifier sur YouTube, puis rassembler ═══ */
+    onProgress?.('Vérification des titres sur YouTube…');
+    const toTrack = async (p: Pick, cat: TrackCategory): Promise<Track | null> => {
+      const seed = seedTracks.find(
+        (s) => s.title.toLowerCase().trim() === p.title.toLowerCase().trim()
+          && s.artist.toLowerCase().trim() === p.artist.toLowerCase().trim(),
+      );
+      if (seed) return { ...seed, category: cat, rationale: p.rationale || seed.rationale };
+      const found = await youtubeService.findPlayable(p.title, p.artist).catch(() => null);
+      if (!found?.videoId) {
+        console.debug(`[curateur] ${p.title} / ${p.artist} : introuvable sur YouTube`);
+        return null;
+      }
+      /* Le titre rendu par YouTube doit être CELUI demandé : sans ce
+         contrôle, la recherche renvoyait le tube de l'artiste (« Genesis »
+         demandé, « D.A.N.C.E. » rendu) — donc un morceau déjà dans le
+         blend, écarté comme doublon, et une place perdue. */
+      const demande = norm(p.title);
+      const rendu = norm(found.title || '');
+      if (demande && rendu && !rendu.includes(demande) && !demande.includes(rendu)) {
+        console.debug(`[curateur] ${p.title} : YouTube a rendu « ${found.title} », écarté`);
+        return null;
+      }
+      if (seedTracks.some((s2) => s2.videoId && s2.videoId === found.videoId)) return null;
+      return {
+        id: `gen-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        videoId: found.videoId,
+        title: found.title || p.title,
+        artist: found.artist || p.artist,
+        thumbnailUrl: `https://i.ytimg.com/vi/${found.videoId}/mqdefault.jpg`,
+        durationSeconds: found.durationSeconds || 215,
+        durationFormatted: found.durationFormatted || '3:35',
+        videoUrl: `https://www.youtube.com/watch?v=${found.videoId}`,
+        category: cat,
+        rationale: p.rationale || 'Choisi par la sélection.',
+      } as Track;
+    };
+
+    const resolved = await Promise.all([
+      ...anchorPicks.map((p) => toTrack(p, 'anchor')),
+      ...dives.map((p) => toTrack(p, 'deep_dive')),
+      ...fresh.map((p) => toTrack(p, 'fresh')),
+    ]);
+
+    const rings = resolved.filter((t): t is Track => !!t);
+    /* l'ordre du blend : les piliers d'abord, puis les faces cachées, puis
+       les découvertes — un vrai enchaînement, pas un tirage */
+    const blend = [
+      ...rings.filter((t) => t.category === 'anchor'),
+      ...rings.filter((t) => t.category === 'deep_dive'),
+      ...rings.filter((t) => t.category === 'fresh'),
     ];
+    const unique = uniqueByVideo(dedupeTracks(blend));
 
-    const filteredFresh = freshLibrary.filter(f => !tasteMemory.dislikedArtists.includes(f.title));
-
-    for (let i = 0; i < freshCount; i++) {
-      const pick = filteredFresh[i % filteredFresh.length];
-      /* même règle : jamais deux fois le même morceau, même présenté
-         comme une « découverte » */
-      if (trackKeys({ videoId: pick.videoId, title: pick.song, artist: pick.title }).some((k) => trackKeys2.has(k))) continue;
-      note({ videoId: pick.videoId, title: pick.song, artist: pick.title });
-      results.push({
-        id: `fresh-${Math.random().toString(36).substr(2, 7)}`,
-        videoId: pick.videoId,
-        title: pick.song,
-        artist: pick.title,
-        thumbnailUrl: pick.videoId ? `https://i.ytimg.com/vi/${pick.videoId}/mqdefault.jpg` : '',
-        durationSeconds: 235,
-        durationFormatted: '3:55',
-        videoUrl: `https://www.youtube.com/watch?v=${pick.videoId}`,
-        category: 'fresh',
-        rationale: pick.rationale,
-      });
-    }
-
-    /* même règle hors ligne : le catalogue local peut proposer deux fois
-       « Something About Us » selon les artistes amorces. On garde l'ordre,
-       on jette les doublons. */
-    return uniqueByVideo(dedupeTracks(results));
+    /* les comptes sont ceux du résultat FINAL, pas des intentions */
+    const n = (c: TrackCategory) => unique.filter((t) => t.category === c).length;
+    const plur = (k: number, un: string, des: string) => `${k} ${k > 1 ? des : un}`;
+    const manque = targetCount - unique.length;
+    onProgress?.(
+      `${plur(unique.length, 'morceau retenu', 'morceaux retenus')} : `
+      + `${plur(n('anchor'), 'pilier', 'piliers')}, `
+      + `${plur(n('deep_dive'), 'face cachée', 'faces cachées')}, `
+      + `${plur(n('fresh'), 'découverte', 'découvertes')}.`
+      + (manque > 0
+        ? ` ${plur(manque, 'place reste vide', 'places restent vides')}, faute de titres crédibles.`
+        : ''),
+    );
+    return unique;
   }
 
-  /**
-   * Replace a single track with an alternative in 1 click
-   */
+  /** Sans modèle : on ne fabrique rien, on rend au moins les amorces. */
+  private anchorsOnly(seedTracks: Track[], anchorCount: number): Track[] {
+    return seedTracks.slice(0, Math.max(1, anchorCount)).map((t) => ({
+      ...t,
+      category: 'anchor' as TrackCategory,
+      rationale: 'Pilier : morceau de ta sélection.',
+    }));
+  }
+
   /**
    * Remplace un titre par une proposition réellement trouvée.
    *
@@ -691,91 +615,36 @@ Réponds STRICTEMENT avec un tableau JSON valide sans format markdown additionne
       bannedArtists.has(artist.toLowerCase().trim());
 
     /* ── ce qu'on sait du blend, pour que la proposition soit réfléchie ──
-       On ne demande pas « un morceau dans le genre » : on décrit la
-       place que ce morceau occupe dans la playlist (position, voisins,
-       rôle, artistes déjà là) et ce qui a déjà été proposé. Le modèle
-       raisonne sur ce contexte, pas sur un mot-clé. */
+       On ne demande pas « un morceau dans le genre » : on transmet au
+       modèle la place exacte que ce morceau occupe (position, voisins,
+       rôle), les amorces, les goûts, les interdits — tout ce que le
+       curateur a compris du blend (curator.ts, replacePrompt). */
     const idx = Math.max(0, allTracks.findIndex((t) => t.id === trackToReplace.id));
     const before = allTracks[idx - 1];
     const after = allTracks[idx + 1];
-    const seedList = (seedTracks.length ? seedTracks : allTracks.slice(0, 4))
-      .map((t) => `- "${t.title}" de ${t.artist}`)
-      .join('\n');
-
-    const alreadyIn = allTracks
-      .filter((t) => t.id !== trackToReplace.id)
-      .map((t) => `- "${t.title}" de ${t.artist}`)
-      .join('\n') || '- (aucun)';
-
-    /* ce qui a déjà été proposé à cet auditeur : on ne le repropose pas */
     const seen = getSeenTracks();
-    const alreadyProposed = seen.slice(-40).join(' · ') || '(rien pour l’instant)';
-
-    const artistsInBlend = Array.from(new Set(allTracks.map((t) => t.artist))).join(', ');
-    const counts = {
-      anchor: allTracks.filter((t) => t.category === 'anchor').length,
-      deepDive: allTracks.filter((t) => t.category === 'deep_dive').length,
-      fresh: allTracks.filter((t) => t.category === 'fresh').length,
-    };
-
-    const catLabel = category === 'anchor'
-      ? 'ANCHOR (morceau pilier, celui qui donne le cap)'
-      : category === 'deep_dive'
-        ? 'DEEP DIVE (pépite, face B, album track du même artiste)'
-        : 'DÉCOUVERTE (artiste différent, même famille sonore)';
 
     /* ── 1. le modèle de texte, s'il y en a un ── */
     if (apiKey) {
-      const prompt = `
-Tu es le curateur musical de SoundBlend AI. On te demande de remplacer UN morceau par un autre, et le choix doit se justifier musicalement.
-
-═══ LE MORCEAU À REMPLACER ═══
-- "${trackToReplace.title}" de ${trackToReplace.artist}
-- rôle dans le blend : ${catLabel}
-- raison de sa présence : ${trackToReplace.rationale || 'non précisée'}
-- place dans la playlist : ${idx + 1} sur ${allTracks.length}
-${before ? `- morceau juste avant : "${before.title}" de ${before.artist} (${before.category})` : '- c’est le premier morceau'}
-${after ? `- morceau juste après : "${after.title}" de ${after.artist} (${after.category})` : '- c’est le dernier morceau'}
-
-═══ LE BLEND AUTOUR ═══
-Amorces choisies par l’auditeur :
-${seedList}
-
-Déjà dans la playlist — INTERDIT de reproposer, ni le titre, ni le même morceau sous un autre nom :
-${alreadyIn}
-
-Répartition actuelle : ${counts.anchor} anchor · ${counts.deepDive} deep dives · ${counts.fresh} découvertes.
-Artistes déjà présents : ${artistsInBlend}
-
-Déjà proposé récemment à cet auditeur (INTERDIT de le reproposer) :
-${alreadyProposed}
-
-═══ SES GOÛTS ═══
-- artistes aimés : ${tasteMemory.likedArtists.join(', ') || 'non renseigné'}
-- morceaux aimés : ${tasteMemory.likedTracks.map((t) => `${t.title} — ${t.artist}`).join(', ') || 'aucun'}
-- à éviter absolument : ${[...tasteMemory.dislikedArtists, ...tasteMemory.dislikedTracks.map((t) => `${t.title} — ${t.artist}`)].join(', ') || 'aucun'}
-
-═══ CE QU’ON ATTEND ═══
-Réfléchis d’abord à ce que ce morceau apporte à cet endroit précis de la playlist :
-son énergie, son tempo ressenti, sa texture, son époque, la transition avec ses voisins.
-Puis propose CINQ morceaux différents qui pourraient le remplacer, du plus évident au plus audacieux.
-
-Chaque proposition doit :
-1. tenir le même rôle (${catLabel}) ;
-2. assurer une transition crédible avec le morceau d’avant et celui d’après ;
-3. être un VRAI morceau avec son vrai titre et son vrai artiste (pas d’invention, pas de remix imaginaire) ;
-4. ne figurer ni dans la playlist, ni dans les propositions récentes ;
-5. éviter les artistes déjà présents si le rôle est « découverte » ;
-6. exister en écoute sur YouTube.
-
-Donne à chaque fois une justification précise — pas « même ambiance », mais ce qui fait le lien : un instrument, un tempo, une couleur de production, une filiation.
-
-Réponds STRICTEMENT avec ce JSON, sans texte autour :
-{ "analyse": "une phrase sur ce que ce morceau apporte à cet endroit du blend",
-  "suggestions": [
-    { "title": "…", "artist": "…", "rationale": "une phrase de justification musicale en français" }
-  ] }
-`;
+      const forbiddenReplace: string[] = [
+        ...allTracks.map((t) => `${t.artist} — ${t.title}`),
+        ...tasteMemory.dislikedTracks.map((t) => `${t.artist} — ${t.title}`),
+        ...tasteMemory.dislikedArtists,
+        ...seen.slice(-40),
+      ];
+      const prompt = replacePrompt({
+        target: trackToReplace,
+        role: category,
+        index: idx,
+        total: allTracks.length,
+        before,
+        after,
+        seeds: seedTracks.length ? seedTracks : allTracks.slice(0, 4),
+        all: allTracks,
+        taste: tasteMemory,
+        portrait: getStoredPortrait(),
+        forbidden: forbiddenReplace,
+      });
 
       /* le modèle le plus puissant disponible en premier ; le second
          n'entre en jeu que si le premier ne rend rien d'exploitable */
@@ -810,6 +679,7 @@ Réponds STRICTEMENT avec ce JSON, sans texte autour :
              la preuve, à l'écran, qu'il a lu le contexte et pas seulement
              le titre à remplacer */
           const analysis = typeof data?.analyse === 'string' ? data.analyse.trim() : '';
+          console.debug(`[curateur] remplacement : ${ideas.length} idées pour « ${trackToReplace.title} »`, ideas.map((i) => `${i.title}/${i.artist}`));
           this.lastEngineNote = analysis
             ? `${analysis} · proposé par ${currentModel}`
             : `Proposition de ${currentModel}.`;
@@ -869,17 +739,28 @@ Réponds STRICTEMENT avec ce JSON, sans texte autour :
     const sameArtist = (seedTracks.length ? seedTracks : [trackToReplace])
       .map((t) => t.artist)
       .filter(Boolean);
+    /* Pour une découverte, on ne cherche plus une liste d'artistes écrite
+       en dur (c'était les mêmes noms à chaque fois) : on part du portrait
+       sonore établi par le modèle — ses genres, ses textures — et des
+       artistes aimés de la personne. La requête décrit le monde sonore,
+       pas un nom propre. */
+    const portrait = getStoredPortrait();
+    const styleWords = [...(portrait?.genres || []), ...(portrait?.textures || [])]
+      .filter((x) => x && x.length < 40)
+      .slice(0, 4);
+    const likedArtists = tasteMemory.likedArtists.filter((a) => !bannedArtists.has(a.toLowerCase()));
+
     const neighbours: Record<string, string[]> = {
-      anchor: [...sameArtist, 'live session', 'single'],
+      anchor: [...sameArtist, 'live session'],
       deep_dive: [...sameArtist, 'album track', 'b-side', 'instrumental'],
-      fresh: ['Parcels', 'The Blaze', 'French 79', 'Polo & Pan', 'Rone', "L'Impératrice", 'Kid Francescoli', 'M83'],
+      fresh: [...styleWords, ...likedArtists, 'similar'],
     };
 
     const queries: string[] = [];
     if (category === 'fresh') {
       const pool = (neighbours.fresh || []).filter((a) => !bannedArtists.has(a.toLowerCase()));
       const start = Math.floor(Math.random() * Math.max(1, pool.length));
-      for (let i = 0; i < pool.length; i++) queries.push(`${pool[(start + i) % pool.length]} audio`);
+      for (let i = 0; i < Math.min(6, pool.length); i++) queries.push(`${pool[(start + i) % pool.length]} mix`);
     } else {
       const artists = neighbours[category] || sameArtist;
       for (const a of artists.slice(0, 4)) queries.push(`${a} ${category === 'deep_dive' ? 'album track' : 'audio'}`);
@@ -915,60 +796,44 @@ Réponds STRICTEMENT avec ce JSON, sans texte autour :
       } catch { /* on passe à la requête suivante */ }
     }
 
-    /* ── 3. dernier recours : un catalogue local, mais qui tourne ──
-       On écarte ce qui est déjà pris, puis on prend la proposition
-       suivante — jamais la même deux fois de suite. */
+    /* ── 3. dernier recours : une recherche YouTube guidée par le style ──
+       On ne pioche plus dans un catalogue écrit à la main (c'était lui,
+       les « morceaux d'office » qu'on retrouvait à chaque fois). On
+       interroge YouTube avec des requêtes construites à partir du rôle,
+       du fil sonore du blend et des artistes déjà là — puis on prend le
+       premier résultat réellement écoutable qui n'est pas déjà pris.
+       Si rien ne sort, on rend `null` : mieux vaut dire « rien trouvé »
+       que d'afficher un titre qui n'a aucun rapport. */
     step('comparing');
-    const catalogue: Record<string, { title: string; artist: string; videoId: string; rationale: string }[]> = {
-      anchor: [
-        { title: 'Genesis', artist: 'Justice', videoId: 'VKzWLUQizz8', rationale: 'Même montée électro orchestrale.' },
-        { title: 'Digital Love', artist: 'Daft Punk', videoId: 'FxzBvqY5PP0', rationale: 'Synthés saturés et nostalgie disco-funk.' },
-        { title: 'Midnight City', artist: 'M83', videoId: 'dX3k_QDnzHE', rationale: 'Saxophone nocturne, énergie immédiate.' },
-        { title: 'Feel It All Around', artist: 'Washed Out', videoId: 'NzB6ds1iM9c', rationale: 'Nappe chillwave, même douceur vaporeuse.' },
-        { title: 'Wait', artist: 'M83', videoId: 'BLmh8o2QpYE', rationale: 'Montée lente et voix noyée, même climatométrie.' },
-      ],
-      deep_dive: [
-        { title: 'Nightcall', artist: 'Kavinsky', videoId: 'MV_3Dpw-BRY', rationale: 'Face nocturne analogue.' },
-        { title: 'Voyager', artist: 'Daft Punk', videoId: 'INbgG9M0WYE', rationale: 'Ligne de basse funk analogique.' },
-        { title: 'Your Name', artist: 'Little Dragon', videoId: 'HhzB1YlSx2Y', rationale: 'Électronique feutrée, voix aérienne.' },
-        { title: 'Beverly Laurel', artist: 'Tame Impala', videoId: 'O4A6kWeUyA0', rationale: 'Face B psychédélique rare.' },
-        { title: 'Pacific Coast Highway', artist: 'Kavinsky', videoId: '-5FKNViujeM', rationale: 'Course nocturne cinématique.' },
-      ],
-      fresh: [
-        { title: 'Overnight', artist: 'Parcels', videoId: 'BTdBc2Ba8ts', rationale: 'Groove funk lumineux.' },
-        { title: 'Territory', artist: 'The Blaze', videoId: 'Q82lz-ncN2Y', rationale: 'Montée émotionnelle progressive.' },
-        { title: 'Moon (And It Went Like)', artist: 'Kid Francescoli', videoId: 'fdixQDPA2h0', rationale: 'Down-tempo chill et voix aérienne.' },
-        { title: 'Nanã', artist: 'Polo & Pan', videoId: 'YPQIHpVdTzo', rationale: 'Groove électro tropical.' },
-        { title: 'Bye Bye Macadam', artist: 'Rone', videoId: 'kfoJUeyMsOE', rationale: 'Atmosphère onirique et complexe.' },
-        { title: 'Sunset Lover', artist: 'Petit Biscuit', videoId: '4fQeaM62mOY', rationale: 'Ambiance dorée et mélodie entêtante.' },
-      ],
-    };
-    const pool = (catalogue[category] || catalogue.fresh)
-      .filter((p) => !taken(p.title, p.artist) && !alreadyShown(p.title, p.artist));
-    if (!pool.length) return null;    // plus rien de crédible : on le dit
-    /* le nonce évite de retomber sur le même dès le deuxième essai */
-    /* quand tout le catalogue a déjà été proposé, on prend le moins
-       récemment montré plutôt que de rendre une erreur : mieux vaut un
-       vieux titre qu'aucune proposition */
-    const freshestFirst = [...(catalogue[category] || catalogue.fresh)]
-      .filter((p) => !taken(p.title, p.artist));
-    const pick = pool.length
-      ? pool[(opts?.nonce ?? 0) % pool.length]
-      : freshestFirst[(opts?.nonce ?? 0) % Math.max(1, freshestFirst.length)];
-    step('artwork');
-    rememberSeenTrack(pick.title, pick.artist);
-    return {
-      id: `rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      videoId: pick.videoId,
-      title: pick.title,
-      artist: pick.artist,
-      thumbnailUrl: `https://i.ytimg.com/vi/${pick.videoId}/mqdefault.jpg`,
-      durationSeconds: 220,
-      durationFormatted: '3:40',
-      videoUrl: `https://www.youtube.com/watch?v=${pick.videoId}`,
-      category,
-      rationale: pick.rationale,
-    };
+    const guides = [
+      ...(category === 'deep_dive' ? sameArtist : []),
+      ...styleWords,
+      ...likedArtists,
+    ].filter(Boolean);
+    for (const g of guides.slice(0, 4)) {
+      const query = `${g} ${category === 'deep_dive' ? 'album track' : 'similar artists'} mix`;
+      try {
+        const res = await withTimeout(youtubeService.searchTracks(query, 12), 9000, { tracks: [], error: null });
+        const hit = (res.tracks || []).find(
+          (t) => t.videoId
+            && !takenTitle(t.title)
+            && !bannedArtists.has((t.artist || '').toLowerCase())
+            && !alreadyShown(t.title, t.artist || ''),
+        );
+        if (hit) {
+          step('artwork');
+          rememberSeenTrack(hit.title, hit.artist || '');
+          return {
+            ...hit,
+            id: `rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            category,
+            rationale: `Trouvé dans la lignée de « ${trackToReplace.title} ».`,
+          };
+        }
+      } catch { /* requête suivante */ }
+    }
+
+    return null;
   }
 }
 

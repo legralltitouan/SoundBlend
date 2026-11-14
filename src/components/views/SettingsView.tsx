@@ -199,7 +199,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.9
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.10
         </span>
       </div>
     </div>
