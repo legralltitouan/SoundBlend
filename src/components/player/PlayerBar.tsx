@@ -245,7 +245,7 @@ export const PlayerBar: React.FC = () => {
 
             <div className="nowplaying-sheet" {...sheet.sheetHandlers}>
               <div className="nowplaying-top">
-                <button className="icon-btn" onClick={() => sheet.close()} aria-label="Réduire">
+                <button className="icon-btn nowplaying-reduce" onClick={() => sheet.close()} aria-label="Réduire">
                   <ChevronUp size={20} style={{ transform: 'rotate(180deg)' }} />
                 </button>
 
@@ -283,7 +283,7 @@ export const PlayerBar: React.FC = () => {
                   </button>
                 </div>
 
-                <span className="nowplaying-spacer" aria-hidden />
+                <span className="nowplaying-side" aria-hidden />
               </div>
 
               <div className="nowplaying-body">

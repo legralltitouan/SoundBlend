@@ -230,12 +230,20 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', className }) => {
       const w = vw();
       const h = vh();
       /* 1. la largeur visée du cœur, bornée courts écrans comme grands */
-      const voulu = Math.max(180, Math.min(700, w * 0.72));
+      /* ── la taille : exactement la 6.9.22 ──
+         66 % de la largeur, borné à 640. C'était 72 % / 700 depuis la
+         6.9.23, ce qui grossissait la tache d'environ 10 % — assez pour
+         que le dessin ne soit plus tout à fait celui dont tu étais
+         content. On ne touche plus à cette ligne. */
+      const voulu = Math.max(200, Math.min(640, w * 0.66));
       let s2 = Math.max(0.66, Math.min(1.75, voulu / 290));
-      /* 2. plus de plafond sur le halo : il a le droit de sortir, c'est
-         une tache de lumière. Seul le cœur est tenu dans l'écran. */
+      /* 2. le plafond du halo, comme en 6.9.22 : sur un écran étroit, il
+         ne doit pas devenir un aplat. C'est une constante de DESSIN —
+         elle influe sur la taille, donc sur le rendu. */
+      const HALO = 272;
+      s2 = Math.min(s2, (Math.max(w, h) * 0.9) / HALO);
       scale = s2;
-      reach = 272 * scale;              // pour information.
+      reach = HALO * scale;
       /* 3. on replace la boule si elle se retrouve dehors après un
          changement de taille (rotation du téléphone, fenêtre redimensionnée) */
       const { x0, x1, y0, y1 } = bounds();

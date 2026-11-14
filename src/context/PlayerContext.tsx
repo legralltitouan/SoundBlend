@@ -521,6 +521,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
   };
 
+  /* ── quelle vidéo on charge, et pour quel morceau ──
+     `clipCharge` retient l'identifiant déjà chargé, `clipChargePour` le
+     morceau auquel il appartenait. Les deux ensemble, sinon le lecteur
+     « croit » avoir déjà chargé le clip du nouveau morceau et garde
+     l'ancien — d'où le clip du premier titre de la playlist qui revenait
+     quand on passait au suivant. */
+  const clipChargePour = useRef<string | null>(null);
   const clipDemandes = useRef<Set<string>>(new Set());
 
   /* ── déplacer le lecteur YouTube dans le grand lecteur ──
@@ -584,15 +591,30 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      resynchro n'est nécessaire ensuite : le clip EST le lecteur, il n'y a
      qu'une horloge à bord. */
   useEffect(() => {
-    if (mode !== 'clip' || !clipId || !currentTrack) return;
-    if (clipId === currentTrack.videoId) return;   /* c'est déjà la vidéo qu'on écoute */
-    if (clipCharge.current === clipId) return;
+    if (mode !== 'clip' || !currentTrack) return;
+    if (!wantedPlay.current) return;
+    /* `clipId === null` avec l'état `aucun` veut dire « pas de clip » :
+       on laisse alors la vidéo du morceau, qui est déjà chargée. */
+    if (clipEtat === 'aucun') return;
+    poserImage(currentTrack, clipId, 'clip');
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [mode, clipId, clipEtat, currentTrack]);
+
+  /* ── charger l'image qui correspond au morceau COURANT ──
+     Un seul endroit qui décide, et qui vérifie toujours les deux choses :
+     quelle vidéo, et pour quel morceau. S'il y a un doute, on recharge. */
+  const poserImage = (t: Track | null, clip: string | null, m: 'audio' | 'clip') => {
     const p = playerRef.current;
-    if (!p?.loadVideoById || !wantedPlay.current) return;
+    if (!t || !p?.loadVideoById) return;
+    const voulu = m === 'clip' && clip ? clip : t.videoId;
+    if (!voulu) return;
+    /* même vidéo ET même morceau : rien à faire, on ne coupe pas le son */
+    if (p.getVideoData?.()?.video_id === voulu && clipChargePour.current === t.id) return;
     const ici = p.getCurrentTime?.() || progressRef.current || 0;
-    clipCharge.current = clipId;
-    try { p.loadVideoById({ videoId: clipId, startSeconds: Math.max(0, ici - 0.4) }); } catch { /* ignore */ }
-  }, [mode, clipId, currentTrack]);
+    clipCharge.current = voulu;
+    clipChargePour.current = t.id;
+    try { p.loadVideoById({ videoId: voulu, startSeconds: Math.max(0, ici - (m === 'clip' && clip ? 0.4 : 0)) }); } catch { /* ignore */ }
+  };
 
   const toggleMode = () => {
     setMode((m) => {
@@ -600,26 +622,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (suivant === 'clip') {
         /* on demande le clip au moment où on le montre, et pas avant :
            inutile d'interroger YouTube pour chaque morceau écouté */
-        if (clipId && currentTrack && clipId !== currentTrack.videoId) {
-          const p = playerRef.current;
-          try {
-            const ici = progressRef.current || 0;
-            clipCharge.current = clipId;
-            p?.loadVideoById?.({ videoId: clipId, startSeconds: Math.max(0, ici - 0.4) });
-          } catch { /* lecteur absent */ }
-        }
+        poserImage(currentTrack, clipId, 'clip');
         if (clipEtat === 'inconnu') chercherClip(currentTrack);
       } else {
         /* retour à la pochette : on remet la vidéo du morceau, au même
            endroit, et on rend le son au lecteur */
-        const p = playerRef.current;
-        try {
-          if (clipId && currentTrack && clipId !== currentTrack.videoId) {
-            const ici = progressRef.current || 0;
-            p?.loadVideoById?.({ videoId: currentTrack.videoId, startSeconds: Math.max(0, ici) });
-            clipCharge.current = null;
-          }
-        } catch { /* lecteur absent */ }
+        poserImage(currentTrack, clipId, 'audio');
       }
       return suivant;
     });
@@ -632,9 +640,12 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const id = currentTrack?.id ?? null;
     if (id === dernierMorceau.current) return;
     dernierMorceau.current = id;
+    /* on oublie l'image de l'ancien morceau — y compris l'identifiant
+       « déjà chargé », sinon le nouveau morceau hérite du clip précédent */
     setClipId(null);
     setClipEtat('inconnu');
     clipCharge.current = null;
+    clipChargePour.current = null;
     if (mode === 'clip') chercherClip(currentTrack);
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [currentTrack?.id, mode]);
