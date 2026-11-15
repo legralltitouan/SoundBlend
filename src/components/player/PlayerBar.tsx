@@ -309,23 +309,17 @@ export const PlayerBar: React.FC = () => {
                       <Art track={prevT || currentTrack} size="100%" radius={16} large />
                     </div>
                     <div key={currentTrack.id} className="nowplaying-art nowplaying-art--main" data-artmode={mode}>
-                      {/* le clip vit ICI, dans la boîte de la pochette :
-                          même place, même rayon, même ombre — l'écran ne
-                          se réorganise pas quand on bascule, seule
-                          l'image change. Le lecteur YouTube est déplacé
-                          dans cette boîte par `attachVideo` ; en pochette
-                          il est renvoyé hors de l'écran, et la musique ne
-                          s'interrompt jamais. */}
-                      {/* la vitre : une toile où l'on recopie l'image du
-                          lecteur. Le lecteur, lui, ne bouge JAMAIS de sa
-                          boîte — c'est ce qui garde le son et le lecteur
-                          en vie (voir `attachVideo`). */}
+                      {/* L'iframe du clip est créée dans la pochette ;
+                          le lecteur audio, lui, ne change jamais de place. */}
                       <div
                         className="nowplaying-clip"
                         data-on={mode === 'clip' && clip === 'pret' ? '1' : '0'}
                         ref={attachVideo}
                       />
-                      <div className="nowplaying-art__still" data-hidden={mode === 'clip' && clip === 'pret' ? '1' : '0'}>
+                      <div
+                        className="nowplaying-art__still"
+                        data-hidden={mode === 'clip' && clip === 'pret' ? '1' : '0'}
+                      >
                         <Art track={currentTrack} size="100%" radius={16} large />
                       </div>
                     </div>

@@ -99,13 +99,13 @@ tournent sur l'infrastructure de Cloudflare ou de GitHub.
    **Origines JavaScript autorisées**. Sinon la connexion YouTube sera
    refusée par Google avec une erreur `redirect_uri_mismatch` ou
    `origin_mismatch`.
-2. **Clé API YouTube** : si elle est restreinte par référent HTTP,
-   ajoute la nouvelle adresse dans la liste. Sinon les recherches
-   YouTube renverront 403.
+2. Aucune clé API YouTube n'est demandée. Si tu utilises Gemini, chaque
+   personne saisit sa propre clé facultative dans Réglages. Elle peut être
+   synchronisée dans l'espace privé `appDataFolder` du compte Google.
 
-Les clés Gemini et YouTube restent dans le navigateur (`localStorage`) :
-elles ne partent pas dans le code publié. Ne les écris jamais dans un
-fichier du dépôt.
+Ne place jamais une clé secrète dans un fichier du dépôt. La connexion
+SoundBlend et la session du lecteur YouTube intégré sont distinctes : pour
+Premium, vérifie aussi ton compte YouTube et ses cookies dans le navigateur.
 
 ---
 

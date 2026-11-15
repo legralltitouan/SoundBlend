@@ -1,5 +1,9 @@
 # Mettre SoundBlend sur GitHub — le tutoriel
 
+> **Version 6.9.30 :** pour mettre à jour un dépôt existant, suivre en priorité
+> `MISE-A-JOUR-GITHUB-v6-9-30.md` et le script fourni. L'identifiant OAuth
+> public est déjà dans `src/config/app.ts` ; aucune clé YouTube n'est demandée.
+
 *De zéro à une adresse https qui marche 24 h/24, sans PC allumé, sans
 PowerShell. Et **sans jamais publier tes clés**.*
 
@@ -14,11 +18,9 @@ Tu n'as besoin que d'un navigateur.
 
 Trois choses à savoir, et elles règlent la question pour de bon :
 
-1. **Le code que je te livre ne contient aucune clé.** Je l'ai retiré de
-   `src/services/storage.ts` : le fichier lisait deux vraies clés
-   (`AIza…`) et l'identifiant OAuth en dur. Un dépôt public les aurait
-   publiées, et une clé Gemini publiée est une clé à révoquer dans
-   l'heure.
+1. **Le code ne contient pas de clé Gemini ni de clé YouTube.** Une clé
+   secrète publiée doit être révoquée. L'identifiant OAuth de l'application
+   est présent dans `src/config/app.ts` ; cet identifiant est public.
 2. **Le fichier `.env` ne part jamais sur GitHub.** Il est listé dans
    `.gitignore` — vérifié : Git refuse `.env`, `.env.backup`,
    `.env.production.local` et n'accepte que `.env.example` (le modèle
@@ -140,11 +142,11 @@ Sur la page du dépôt :
 2. Dans la barre de recherche du dépôt (en haut), cherche `AIza`.
    Résultat attendu : **aucun fichier de code**. (Tu ne verras au mieux
    que ce tutoriel, qui en parle sans en contenir.)
-3. Cherche `449975100236` (le début de ton identifiant OAuth) :
-   il ne doit apparaître nulle part.
+3. L'identifiant client OAuth public peut apparaître dans `src/config/app.ts` :
+   ce n'est pas une clé secrète.
 
-Si l'une de ces recherches trouve quelque chose : ne publie pas, et
-**révoque la clé concernée** (voir la section « Si une clé a fuité »).
+Si une vraie clé API est trouvée : ne publie pas et **révoque-la** (voir la
+section « Si une clé a fuité »).
 
 ---
 
@@ -196,27 +198,13 @@ sous-dossier. Corrige en redéposant le fichier : GitHub relance seul.
 
 ---
 
-## Étape 7 — Saisir les clés, une fois, sur l'appareil
+## Étape 7 — Compte Google et clé Gemini
 
-À la première ouverture de l'app installée :
-
-1. Icône d'engrenage → **Réglages**.
-2. Carte **Clés & API** : un avertissement rouge indique ce qui manque.
-3. Colle :
-   - **Client ID OAuth Google** — `…apps.googleusercontent.com` ;
-   - **Clé API YouTube Data v3** — `AIza…` ;
-   - **Clé API Gemini** — `AIza…`.
-4. **Enregistrer**.
-
-Elles restent dans ce navigateur. Pour un second appareil, ressaisis-les
-(ou copie-les), c'est tout.
-
-> **Depuis la v6.9.8, l'app ne lit plus aucune clé au moment de la
-> compilation.** Avant, un `.env` présent sur le PC pendant `npm run
-> build` faisait entrer la clé dans le fichier JavaScript publié — donc
-> dans le dépôt public. C'est corrigé : le fichier `dist/` livré ne
-> contient aucun identifiant, vérifié au scan. Les clés n'existent que
-> dans la saisie de l'écran Réglages.
+L'identifiant client OAuth public est déjà configuré dans l'application.
+Connecte ton compte Google pour les playlists et la synchronisation. Une
+clé API YouTube n'est pas demandée. Si tu veux utiliser Gemini, chaque
+personne peut saisir sa propre clé dans **Réglages → Clés & API** ; elle
+peut suivre le compte via l'espace privé `appDataFolder` de Google Drive.
 
 ---
 
@@ -238,16 +226,10 @@ https://<ton-compte>.github.io
 ⚠️ **Sans le `/soundblend/`** : Google ne compare que le domaine.
 Enregistre. La prise en compte peut demander quelques minutes.
 
-### 8b. La restriction de la clé YouTube
+### 8b. Recherche YouTube
 
-**API et services** → **Identifiants** → ta **clé API** → *Restrictions
-relatives aux applications* → **Sites web** → ajoute :
-
-```
-https://<ton-compte>.github.io/*
-```
-
-Sans ça, les recherches YouTube renvoient `403`.
+Aucune clé YouTube n'est à renseigner pour la configuration actuelle :
+l'application utilise la connexion Google ou son repli de recherche.
 
 ---
 
@@ -262,11 +244,10 @@ la structure, on remplace seulement les fichiers.
 
 1. Sur GitHub, ouvre le dépôt `legralltitouan/SoundBlend`.
 2. **Add file** → **Upload files**.
-3. Ouvre le dossier `site-v6.9.9/` livré dans l'archive, sélectionne
+3. Ouvre le dossier `src-v6.9.30/` livré dans l'archive, sélectionne
    **tout ce qu'il contient** (`src`, `public`, `deploy`, les fichiers de
    la racine…) et dépose-le dans la page.
-4. En bas, écris le message (`v6.9.9 — gestes continus, retour natif, vrai logo, timeline réparée,
-   doublons verrouillés`), puis **Commit changes**.
+4. En bas, écris le message (`v6.9.30 — synchronisation du clip`), puis **Commit changes**.
 5. ⚠️ **Ne dépose jamais** `.github/workflows/pages.yml` : ton fichier
    actuel fonctionne. GitHub le remplacerait par une variante prévue
    pour un autre rangement (`soundblend-app/`), et le site casserait.
@@ -278,19 +259,19 @@ pastille passe au vert en une à deux minutes, et l'adresse est à jour.
 ### Méthode B — en ligne de commande (si tu as Git sur ton PC)
 
 ```bash
-# dans le dossier qui contient le contenu de site-v6.9.9/
+# dans le dossier qui contient le contenu de src-v6.9.30/
 git clone https://github.com/legralltitouan/SoundBlend.git
 cd SoundBlend
 
 # on remplace le contenu de l'app, sans toucher au workflow
-cp -r /chemin/vers/site-v6.9.9/src            .
-cp -r /chemin/vers/site-v6.9.9/public         .
-cp -r /chemin/vers/site-v6.9.9/deploy         .
-cp    /chemin/vers/site-v6.9.9/index.html     .
-cp    /chemin/vers/site-v6.9.9/package.json   .
-cp    /chemin/vers/site-v6.9.9/package-lock.json .
-cp    /chemin/vers/site-v6.9.9/*.js  .        # vite, tailwind, postcss
-cp    /chemin/vers/site-v6.9.9/tsconfig*.json .
+cp -r /chemin/vers/src-v6.9.30/src            .
+cp -r /chemin/vers/src-v6.9.30/public         .
+cp -r /chemin/vers/src-v6.9.30/deploy         .
+cp    /chemin/vers/src-v6.9.30/index.html     .
+cp    /chemin/vers/src-v6.9.30/package.json   .
+cp    /chemin/vers/src-v6.9.30/package-lock.json .
+cp    /chemin/vers/src-v6.9.30/*.js  .        # vite, tailwind, postcss
+cp    /chemin/vers/src-v6.9.30/tsconfig*.json .
 
 git add -A && git commit -m "v6.9.8" && git push
 ```
@@ -324,8 +305,7 @@ Une clé publiée est une clé perdue : GitHub est public, et des robots
 lisent les nouveaux dépôts en quelques minutes.
 
 1. **Révoque** : `aistudio.google.com` → *Get API key* → supprime la clé
-   (Gemini) ; `console.cloud.google.com` → *Identifiants* → supprime la
-   clé YouTube, puis crée-en une neuve.
+   (Gemini), puis crée une clé neuve.
 2. **Restreins** la nouvelle : sites web autorisés (ton adresse GitHub),
    et pour Gemini, la restriction par API.
 3. **Nettoie le dépôt** : supprime le fichier fautif, puis vérifie dans

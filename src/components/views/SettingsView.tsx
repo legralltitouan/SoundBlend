@@ -182,6 +182,20 @@ export const SettingsView: React.FC = () => {
         <p className="ink-3" style={{ margin: '10px 0 0', fontSize: 11.5 }}>
           Une playlist manque ? Vérifie que le compte choisi dans la fenêtre Google est bien celui où se trouvent tes playlists.
         </p>
+        <details className="sb-field-note" style={{ marginTop: 10 }}>
+          <summary style={{ cursor: 'pointer' }}>Des pubs malgré YouTube Premium ?</summary>
+          <p style={{ margin: '8px 0 0' }}>
+            La connexion à SoundBlend ne connecte pas automatiquement le lecteur YouTube intégré.
+            Dans le même navigateur, connecte-toi sur YouTube avec le compte qui possède
+            YouTube Premium, puis vérifie que les cookies YouTube ne sont pas bloqués et recharge SoundBlend.
+            YouTube Music Premium seul ne couvre pas forcément toutes les vidéos.
+          </p>
+          <p style={{ margin: '8px 0 0' }}>
+            <a href="https://www.youtube.com/paid_memberships" target="_blank" rel="noopener noreferrer">Vérifier mon abonnement</a>
+            {' · '}
+            <a href="https://support.google.com/youtube/answer/7437519?hl=fr" target="_blank" rel="noopener noreferrer">Aide YouTube</a>
+          </p>
+        </details>
       </Card>
 
       {/* clés */}
@@ -211,7 +225,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.29
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.30
         </span>
       </div>
     </div>

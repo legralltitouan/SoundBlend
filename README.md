@@ -10,7 +10,7 @@ pochettes, listes de titres nues, barre de lecture pleine largeur.
 
 ## 1. Essayer en localhost (2 minutes)
 
-Prérequis : **Node.js 18 ou plus** (https://nodejs.org).
+Prérequis : **Node.js 20.19 ou plus** (ou 22.12+) (https://nodejs.org).
 
 ```bash
 cd soundblend-app
@@ -20,10 +20,10 @@ npm run dev
 
 Ouvre ensuite **http://localhost:5173**.
 
-> Le port 5173 n'est pas décoratif : la clé YouTube fournie par défaut n'accepte
-> que cette origine. Sur un autre port, la recherche YouTube et les playlists
-> répondront « 403 » ; ajoute alors l'origine dans Google Cloud Console
-> (voir la section 4) ou change de clé.
+> La connexion Google demande que l'origine utilisée soit autorisée pour
+> l'identifiant OAuth de l'application. Sur un autre port, ajoute l'origine
+> dans Google Cloud Console (voir la section 4). Aucune clé YouTube n'est
+> demandée dans les réglages.
 
 > Le premier `npm install` télécharge ~250 Mo de dépendances ; c'est normal.
 
@@ -98,14 +98,16 @@ cocher comme les autres.
   suivant, volume, sourdine, progression, vue plein écran, clip.
 - **Génération Gemini** : on coche quelques amorces, on choisit la durée (20 min
   → 2 h) et les proportions (anchor / deep dive / découvertes), l'IA compose la
-  playlist et justifie chaque titre. **Aucun choix de modèle** : le moteur essaie
-  automatiquement Gemini 3.8 Flash, puis 3.7, 3.6, 3.5, 3, 2.5 et 2.0 jusqu'à ce
-  que l'un réponde.
+  playlist et justifie chaque titre. L'application demande à Google les modèles
+  disponibles et affiche le modèle effectivement utilisé ; sans IA, elle
+  propose une sélection de repli sans inventer de morceaux.
 - **Mémoire de goûts** : 👍 / 👎 mémorisés localement, réinjectés dans les
   consignes envoyées au modèle.
 - **Export** : création d'une vraie playlist dans le compte YouTube Music.
-- **Tout est stocké localement** (`localStorage`) : blends, goûts, réglages,
-  clés. Aucun serveur SoundBlend, aucun envoi de données personnelles.
+- **Stockage et synchronisation** : les données sont présentes dans le
+  navigateur. Une fois connecté et si l'autorisation est accordée, goûts,
+  réglages et blends peuvent être synchronisés dans l'espace privé
+  `appDataFolder` du Google Drive du compte, sans serveur SoundBlend.
 - **Accueil vivant** : « Bonjour Titouan. » reprend le prénom du compte
   connecté, et la question sous le titre tourne toutes les cinq secondes
   (« Qu'est-ce qu'on écoute ? », « Quel est ton mood musical ? », etc.).
@@ -118,37 +120,27 @@ cocher comme les autres.
 
 ---
 
-## 4. Clés & API
+## 4. Compte Google et clé Gemini
 
-**Aucune clé n'est écrite dans le code.** Le dépôt peut être public : il
-ne contient aucun identifiant. Les clés arrivent par deux chemins, au
-choix :
+L'identifiant client OAuth **public** est déjà configuré dans
+`src/config/app.ts` ; ce n'est pas un secret client. La connexion Google sert
+à accéder aux playlists et, avec l'autorisation appropriée, à synchroniser
+les données dans Google Drive. Aucune clé API YouTube n'est demandée.
 
-1. **Réglages → Clés & API** dans l'app (stockage navigateur, jamais envoyé).
-   C'est le chemin pour l'app en ligne : chaque appareil garde les siennes.
-2. Le fichier **`.env`** à la racine, pour le développement local
-   (copié depuis `.env.example`), puis relancer `npm run dev` :
+La clé Gemini est **personnelle et facultative** : chacun la saisit dans
+Réglages → Clés & API. Elle est envoyée à Google pour les appels Gemini et
+peut être synchronisée dans l'espace `appDataFolder` du compte connecté.
+Ne colle aucune clé secrète dans le code ou le dépôt. Les variables d'exemple
+historiques `VITE_*` ne sont pas utilisées pour cette configuration.
 
-```env
-VITE_GOOGLE_CLIENT_ID=….apps.googleusercontent.com
-VITE_YOUTUBE_API_KEY=…
-VITE_GEMINI_API_KEY=…
-```
+Pour que la connexion Google fonctionne, l'origine du site doit être
+renseignée dans Google Cloud Console → API et services → Identifiants →
+client OAuth → **Origines JavaScript autorisées**, par exemple
+`http://localhost:5173`, `http://localhost:4173` ou le domaine GitHub Pages.
 
-> `.env` est ignoré par Git (voir `.gitignore`) : il ne part jamais dans
-> le dépôt. Sur GitHub, la compilation n'en a pas besoin — l'app se
-> contente alors de demander les clés dans ses Réglages.
-
-Pour que la connexion Google fonctionne depuis ton poste, ajoute l'origine dans
-Google Cloud Console → *API et services* → *Identifiants* → ton client OAuth →
-**Origines JavaScript autorisées** :
-
-```
-http://localhost:5173
-http://localhost:4173
-```
-
-(Si tu sers le site sur un autre port, ajoute aussi cette origine.)
+La connexion Google à SoundBlend ne connecte pas forcément le lecteur YouTube
+intégré : pour Premium, ouvre YouTube avec le compte concerné dans le même
+navigateur et vérifie les cookies. [Aide YouTube](https://support.google.com/youtube/answer/7437519?hl=fr).
 
 ---
 
@@ -158,7 +150,7 @@ http://localhost:4173
 soundblend-app/
 ├── index.html
 ├── package.json
-├── vite.config.ts           # dev 5273 · preview 4273
+├── vite.config.ts           # dev 5173 · preview 4173
 ├── .env / .env.example
 ├── dist/                    # build prêt à servir
 └── src/
@@ -183,13 +175,13 @@ soundblend-app/
 | Symptôme | Cause / remède |
 |---|---|
 | « Connexion Google refusée » | l'origine `http://localhost:5173` n'est pas dans les origines autorisées du client OAuth |
-| Bibliothèque vide | aucune playlist sur le compte choisi, ou clé API YouTube absente → le mode démo prend le relais |
+| Bibliothèque vide | vérifie le compte Google choisi et que les playlists sont bien accessibles |
 | « Clé Gemini invalide » | clé expirée ou quota épuisé → Réglages → Clés & API, ou remplace la clé |
-| Un titre ne démarre pas | restrictions d'intégration YouTube sur cette vidéo ; « Clip » ouvre la page d'origine |
-| La recherche YouTube répond 403 | la clé n'autorise pas ton origine → mets à jour la restriction de référent ou change de clé |
+| Un titre ne démarre pas | restrictions d'intégration ou disponibilité de la vidéo YouTube |
+| La recherche YouTube répond 403 | vérifie le compte connecté, les autorisations et le quota côté Google |
 | Port déjà pris | `npm run dev -- --port 5300` |
 | Miniatures manquantes | YouTube bloque parfois `i.ytimg.com` (réseau/école) ; les textes restent lisibles |
 
 ---
 
-Version 4.0 — SoundBlend, peau YouTube Music.
+Version 6.9.30 — SoundBlend.
