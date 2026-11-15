@@ -687,7 +687,9 @@ export class YouTubeService {
    * on gardera alors la pochette, sans jamais rien inventer.
    */
   public async trouverClip(track: { title: string; artist: string; videoId: string; durationSeconds?: number }): Promise<string | null> {
-    const cle = `${track.artist}::${track.title}`.toLowerCase();
+    /* la clé comprend l'identifiant : deux morceaux homonymes (une version
+       studio, un live) ne doivent pas se partager la même réponse */
+    const cle = `${track.videoId}::${track.artist}::${track.title}`.toLowerCase();
     const memo = clipCache.get(cle);
     if (memo && Date.now() < memo.at) return memo.val;
     if (clipEnCours.has(cle)) return clipEnCours.get(cle)!;
@@ -721,7 +723,6 @@ export class YouTubeService {
       const duree = track.durationSeconds || 0;
       const dureeOk = (d?: number) => !duree || !d || Math.abs(d - duree) <= Math.max(25, duree * 0.22);
 
-      let candidat: string | null = null;
       for (const v of vus) {
         if (!v.videoId || v.videoId === track.videoId) continue;
         const titre = normaliser(v.title);
@@ -732,17 +733,20 @@ export class YouTubeService {
         if (!titre.includes(mots) && !mots.includes(titre.slice(0, Math.max(4, mots.length)))) continue;
         if (artiste && !titre.includes(artiste) && !auteur.includes(artiste)) continue;
         if (!dureeOk(v.durationSeconds)) continue;
-        candidat = v.videoId;
         /* `oembed` tranche : intégration acceptée, ou rien */
         const ok = await verifyVideo(v.videoId).catch(() => null);
         if (ok?.ok && ok.jouable !== false) return v.videoId;
-        candidat = null;
       }
 
-      /* rien de convaincant : si la vidéo d'origine est déjà un clip (un
-         vrai compte d'artiste, pas un « Topic »), on l'annonce comme tel */
+      /* ═══ ce qui ne compte PAS comme un clip ═══
+         Avant, on rendait `candidat` même quand `oembed` n'avait pas
+         confirmé : un identifiant jamais vérifié devenait « le clip » du
+         morceau. C'est exactement ce qui affichait une vidéo sans rapport.
+         Désormais : pas de confirmation, pas de clip. */
+      /* et si la vidéo qu'on écoute est DÉJÀ un clip (un vrai compte
+         d'artiste, pas un « - Topic »), on la renvoie telle quelle */
       if (dejaUnClip && propre?.ok) return track.videoId;
-      return candidat;
+      return null;
     })();
 
     clipEnCours.set(cle, travail);

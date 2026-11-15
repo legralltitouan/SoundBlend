@@ -68,7 +68,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [clipId, setClipId] = useState<string | null>(null);
   const [clipEtat, setClipEtat] = useState<ClipEtat>('inconnu');
   const clipSlot = useRef<HTMLDivElement | null>(null);
-  const clipTaille = useRef({ w: 0, h: 0 });
   const [queue, setQueue] = useState<Track[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(-1);
   /* ── les morceaux qui ne se lisent pas ──
@@ -99,6 +98,17 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      Elle n'est créée qu'au premier morceau : rien n'est chargé avant. */
   /* le lecteur caché, celui qui vit hors de l'écran quand on est en
      pochette */
+  /* ── le lecteur reste dans le document, à SA taille, derrière l'app ──
+     Avant, il vivait dans une boîte de 2 × 2 px hors de l'écran. YouTube
+     n'aime pas ça : il refuse de peindre, et surtout il **coupe le son**
+     quand l'iframe n'a pas de surface réelle (c'est même une règle
+     explicite de leur API depuis 2023). D'où les erreurs de la console
+     — et, pour nous, une image impossible à récupérer.
+
+     Maintenant l'iframe a une vraie surface (320 × 180), elle est
+     simplement recouverte par l'application et rendue inerte. Elle reste
+     dans le document en permanence : aucune API n'est jamais appelée sur
+     un lecteur détaché. */
   const ombre = () => {
     let host = document.getElementById('youtube-player-host');
     if (!host) {
@@ -106,12 +116,16 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       host.id = 'youtube-player-host';
       host.setAttribute('aria-hidden', 'true');
       Object.assign(host.style, {
-        position: 'fixed', left: '-10000px', top: '0',
-        width: '2px', height: '2px', overflow: 'hidden',
-        opacity: '0', pointerEvents: 'none',
+        position: 'fixed', zIndex: '0',
+        left: '0', bottom: '0',
+        width: '320px', height: '180px',
+        overflow: 'hidden',
+        border: '0', margin: '0', padding: '0',
+        opacity: '1', pointerEvents: 'none',
       });
       const mount = document.createElement('div');
       mount.id = 'youtube-player-mount';
+      mount.style.cssText = 'width:320px;height:180px;';
       host.appendChild(mount);
       document.body.appendChild(host);
     }
@@ -144,8 +158,8 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     try {
       playerRef.current = new window.YT.Player('youtube-player-mount', {
-        height: '200',
-        width: '200',
+        height: '180',
+        width: '320',
         videoId,
         playerVars: {
           autoplay: 1, controls: 0, disablekb: 1, fs: 0, modestbranding: 1, rel: 0,
@@ -542,63 +556,98 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
          de la musique qui commande, l'image suit. À chaque seconde où
          l'écart dépasserait 0,7 s, on recale. Aucune boucle, aucun
          doublon : une seule source de son, toujours. */
+  /**
+   * ─────────── la vidéo, SANS jamais déplacer le lecteur ───────────
+   *
+   * La version précédente déplaçait l'iframe dans la pochette. C'était la
+   * cause de tous les défauts constatés en console :
+   *
+   *   « The YouTube player is not attached to the DOM. API calls should be
+   *     made after the onReady event. »
+   *
+   * Arracher l'iframe à son conteneur, c'est la sortir du document le
+   * temps d'un frame : YouTube le voit passer et met son lecteur en
+   * erreur. Ensuite, plus rien ne répond — d'où le lecteur mort quand on
+   * revenait à la pochette, et l'image sans rapport qui restait affichée.
+   *
+   * Le lecteur ne bouge donc plus jamais. On pose à la place une **vitre**
+   * au-dessus de sa boîte, et on y recopie l'image de la vidéo, frame par
+   * frame, tant que le mode vidéo est demandé. Le son, lui, ne bouge pas
+   * d'un pouce : il vient toujours du lecteur, qui n'a pas été touché.
+   */
   const attachVideo = React.useCallback((el: HTMLDivElement | null) => {
     clipSlot.current = el;
-    const p = playerRef.current;
-    const iframe: HTMLIFrameElement | null = p?.getIframe ? p.getIframe() : null;
-    if (!iframe) return;
-
-    const placer = () => {
-      const cible = clipSlot.current;
-      if (!cible) { ombre().appendChild(iframe); return; }
-      if (iframe.parentElement !== cible) {
-        cible.appendChild(iframe);
-        /* de vrais pixels : YouTube refuse de peindre dans un cadre de
-           2 × 2, même si son CSS est en 100 % */
-        const r = cible.getBoundingClientRect();
-        clipTaille.current = { w: Math.round(r.width), h: Math.round(r.height) };
-        iframe.style.width = '100%';
-        iframe.style.height = '100%';
-        iframe.style.border = '0';
-        iframe.setAttribute('width', String(Math.max(300, clipTaille.current.w)));
-        iframe.setAttribute('height', String(Math.max(170, clipTaille.current.h)));
-        p?.setSize?.(Math.max(300, clipTaille.current.w), Math.max(170, clipTaille.current.h));
-      }
-    };
-
-    placer();
-
-
-    const ro = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => {
-        const c = clipSlot.current;
-        if (!c || iframe.parentElement !== c) return;
-        const r = c.getBoundingClientRect();
-        if (!r.width || !r.height) return;
-        p?.setSize?.(Math.round(r.width), Math.round(r.height));
-      })
-      : null;
-    if (ro && el) ro.observe(el);
-    return () => ro?.disconnect();
+    if (!el) return;
+    poserVitre();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [mode, clipId, currentTrack]);
 
-  const clipCharge = useRef<string | null>(null);
+  /* la copie de l'image : une boucle, qui ne tourne que quand on regarde */
+  const vitreRaf = useRef(0);
+  const poserVitre = () => {
+    cancelAnimationFrame(vitreRaf.current);
+    const cadre = clipSlot.current;
+    if (!cadre) return;
+    let c = cadre.querySelector('canvas') as HTMLCanvasElement | null;
+    if (!c) {
+      c = document.createElement('canvas');
+      c.className = 'nowplaying-vitre';
+      cadre.appendChild(c);
+    }
+    const dessiner = () => {
+      const p = playerRef.current;
+      let video: HTMLVideoElement | null = null;
+      try {
+        const fr = p?.getIframe?.() as HTMLIFrameElement | undefined;
+        video = fr?.contentWindow?.document?.querySelector('video') || null;
+      } catch { video = null; }
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const lw = cadre.clientWidth, lh = cadre.clientHeight;
+      if (video && video.videoWidth && lw && lh) {
+        /* on recopie en respectant le cadre (letterbox si l'image n'a pas
+           le même rapport que la boîte) */
+        if (c!.width !== Math.round(lw * dpr) || c!.height !== Math.round(lh * dpr)) {
+          c!.width = Math.round(lw * dpr);
+          c!.height = Math.round(lh * dpr);
+        }
+        const g = c!.getContext('2d');
+        if (g) {
+          const r = Math.min(c!.width / video.videoWidth, c!.height / video.videoHeight);
+          const w = video.videoWidth * r, h = video.videoHeight * r;
+          g.fillStyle = '#000';
+          g.fillRect(0, 0, c!.width, c!.height);
+          g.drawImage(video, (c!.width - w) / 2, (c!.height - h) / 2, w, h);
+        }
+      }
+      vitreRaf.current = requestAnimationFrame(dessiner);
+    };
+    dessiner();
+  };
 
-  /* ── le clip arrive après la bascule ──
-     On a demandé à YouTube ; la réponse peut prendre deux secondes. Si on
-     est déjà en mode clip quand elle arrive, c'est ici qu'on charge la
-     vidéo — à la position du son, à l'instant où on la reçoit. Aucune
-     resynchro n'est nécessaire ensuite : le clip EST le lecteur, il n'y a
-     qu'une horloge à bord. */
+  /* le mode vidéo est demandé : le lecteur doit être SUR le clip */
   useEffect(() => {
-    if (mode !== 'clip' || !currentTrack) return;
-    if (!wantedPlay.current) return;
-    /* `clipId === null` avec l'état `aucun` veut dire « pas de clip » :
-       on laisse alors la vidéo du morceau, qui est déjà chargée. */
-    if (clipEtat === 'aucun') return;
-    poserImage(currentTrack, clipId, 'clip');
+    if (mode !== 'clip') return;
+    if (!clipId || !currentTrack) return;
+    if (clipId === currentTrack.videoId) { poserVitre(); return; }
+    if (clipCharge.current === clipId) return;
+    const p = playerRef.current;
+    if (!p?.loadVideoById || !wantedPlay.current) return;
+    const ici = p.getCurrentTime?.() || progressRef.current || 0;
+    clipCharge.current = clipId;
+    try { p.loadVideoById({ videoId: clipId, startSeconds: Math.max(0, ici - 0.4) }); } catch { /* ignore */ }
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [mode, clipId, clipEtat, currentTrack]);
+  }, [mode, clipId, currentTrack]);
+
+  /* un clip qui n'existe pas : on ne montre pas une image, on revient à
+     la pochette — et on le dit, sans jamais laisser un cadre noir */
+  useEffect(() => {
+    if (mode !== 'clip') return;
+    if (clipEtat !== 'aucun') return;
+    setMode('audio');
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [mode, clipEtat]);
+
+  const clipCharge = useRef<string | null>(null);
 
   /* ── charger l'image qui correspond au morceau COURANT ──
      Un seul endroit qui décide, et qui vérifie toujours les deux choses :
@@ -617,20 +666,14 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const toggleMode = () => {
-    setMode((m) => {
-      const suivant = m === 'audio' ? 'clip' : 'audio';
-      if (suivant === 'clip') {
-        /* on demande le clip au moment où on le montre, et pas avant :
-           inutile d'interroger YouTube pour chaque morceau écouté */
-        poserImage(currentTrack, clipId, 'clip');
-        if (clipEtat === 'inconnu') chercherClip(currentTrack);
-      } else {
-        /* retour à la pochette : on remet la vidéo du morceau, au même
-           endroit, et on rend le son au lecteur */
-        poserImage(currentTrack, clipId, 'audio');
-      }
-      return suivant;
-    });
+    const suivant: 'audio' | 'clip' = mode === 'audio' ? 'clip' : 'audio';
+    /* on demande le clip au moment où on le montre, pas avant : inutile
+       d'interroger YouTube pour chaque morceau écouté */
+    if (suivant === 'clip' && clipEtat === 'inconnu') chercherClip(currentTrack);
+    /* retour à la pochette : le lecteur reprend la vidéo du morceau, au
+       même endroit du morceau. Aucune autre manipulation. */
+    poserImage(currentTrack, suivant === 'clip' ? clipId : null, suivant);
+    setMode(suivant);
   };
 
   /* un nouveau morceau remet l'image à zéro : le clip de l'ancien n'a

@@ -309,10 +309,14 @@ export const PlayerBar: React.FC = () => {
                           dans cette boîte par `attachVideo` ; en pochette
                           il est renvoyé hors de l'écran, et la musique ne
                           s'interrompt jamais. */}
+                      {/* la vitre : une toile où l'on recopie l'image du
+                          lecteur. Le lecteur, lui, ne bouge JAMAIS de sa
+                          boîte — c'est ce qui garde le son et le lecteur
+                          en vie (voir `attachVideo`). */}
                       <div
                         className="nowplaying-clip"
                         data-on={mode === 'clip' && clip === 'pret' ? '1' : '0'}
-                        ref={mode === 'clip' ? attachVideo : undefined}
+                        ref={attachVideo}
                       />
                       <div className="nowplaying-art__still" data-hidden={mode === 'clip' && clip === 'pret' ? '1' : '0'}>
                         <Art track={currentTrack} size="100%" radius={16} large />
