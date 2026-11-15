@@ -215,7 +215,14 @@ export const PlayerBar: React.FC = () => {
             className="nowplaying"
             data-drag={sheet.dragging ? '1' : '0'}
             data-anim={sheet.settling && !sheet.dragging ? '1' : '0'}
-            style={{ transform: `translate3d(0, ${sheet.y}px, 0)` }}
+            /* ── 2D, volontairement ──
+               Cette feuille contient le lecteur du clip (une iframe
+               YouTube). Un `translate3d` la promeut sur un plan de
+               composition à part, et le compositeur peint alors l'iframe
+               en noir — mesuré : 0 de luminosité en 3D, 30 en 2D, à code
+               identique. Le glissement est vertical, la profondeur ne
+               sert à rien : `translate` fait exactement le même geste. */
+            style={{ transform: `translate(0, ${sheet.y}px)` }}
             onTransitionEnd={(e) => { if (e.propertyName === 'transform') sheet.onSettled(); }}
           >
             <div className="nowplaying-ambience" aria-hidden>

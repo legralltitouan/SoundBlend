@@ -101,11 +101,28 @@ kbd {
 /* ─────────────────── coque : rail / barre basse ─────────────────── */
 .app-bg, .aura { display: none; }
 .sb-root, .min-h-dvh { min-height: 100dvh; background: var(--bg); }
-/* le lecteur YouTube vit dans le document, derrière l'application : il
-   garde une vraie surface (exigence de YouTube depuis 2023 — sans elle il
-   coupe le son), simplement il ne se voit pas */
-#youtube-player-host { z-index: -1 !important; }
-#root, .sb-root { position: relative; z-index: 0; }
+/* ═══ le lecteur YouTube, et pourquoi il ne doit JAMAIS se voir ═══
+   Il garde une vraie surface (320 × 180) — c'est l'exigence de YouTube
+   depuis 2023 : sans surface réelle, l'iframe coupe le son. Mais il vit
+   **derrière** tout : z-index −1, plus bas que la racine. Et pour qu'il
+   ne puisse pas non plus transparaître là où une feuille est
+   transparente (le grand lecteur l'est en haut à gauche, là où
+   précisément il montrait ses bords), on lui met `opacity: 0` : une
+   couche transparente **continue de peindre pour elle-même**, la vidéo
+   continue donc de jouer, mais plus une seule de ses images n'atteint
+   l'écran. Deux verrous indépendants (z-index et opacité) : si l'un
+   tombe, l'autre tient. `visibility: hidden` a été essayé et écarté —
+   un élément `visibility:hidden` ne peint plus du tout, et YouTube met
+   alors la vidéo en pause. */
+#youtube-player-host {
+  z-index: -1 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* et une racine opaque : rien ne doit pouvoir se glisser entre le fond
+   de la page et l'application */
+html, body { background: var(--bg); }
+#root, .sb-root { position: relative; z-index: 0; isolation: isolate; }
 
 /* La barre haute ne se voit plus du tout : ni plaque, ni filet, ni flou.
    Seul le champ de recherche flotte au-dessus de l'ambiance. */
@@ -957,16 +974,19 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
    les commandes sont celles de l'app, aucune barre YouTube ne doit
    apparaître ici (contrôles désactivés à la création, ceci est la ceinture
    en plus des bretelles) */
-.nowplaying-clip__frame {
-  position: absolute; inset: 0;
-  overflow: hidden;
-}
+.nowplaying-clip__frame,
 .nowplaying-clip__frame iframe {
+  position: absolute; inset: 0;
   width: 100% !important;
   height: 100% !important;
   border: 0;
   display: block;
+  overflow: hidden;
   pointer-events: none;
+  /* la vidéo est peinte par le lecteur ; ici on ne fait que la faire
+     tenir dans la boîte. `object-fit` n'existe pas sur une iframe : c'est
+     la taille passée à l'API (en pixels) qui décide du cadrage. */
+  background: #000;
 }
 
 /* ─── le sélecteur d'image, à la place de l'ancien mot « En lecture » ───
@@ -1582,8 +1602,11 @@ html[data-mode='light'] .welcome-glow i { opacity: .22; }
      `pan-y` laisserait le scroll vertical au navigateur et casserait la
      fermeture ; `none` sur la feuille, et chaque zone qui doit s'écarter
      en récupère ce qu'il lui faut (la file défile en `pan-x`). */
-  touch-action: none; will-change: transform;
-  backface-visibility: hidden;
+  touch-action: none;
+  /* ni `will-change: transform`, ni `backface-visibility: hidden` ici :
+     la feuille porte le lecteur du clip, et toute promotion de plan
+     autour d'une iframe la fait peindre en noir par le compositeur.
+     La position vient du `transform` inline, il suffit. */
 }
 /* ═══ la feuille ═══
    Le conteneur porte l'ouverture (framer-motion) ; la feuille intérieure
@@ -1654,21 +1677,31 @@ html[data-mode='light'] .welcome-glow i { opacity: .22; }
   border-radius: var(--art-r);
   overflow: hidden;
   box-shadow: none;
-  will-change: transform;
-  transform: translate3d(calc(-50% + var(--dx, 0px)), -50%, 0);
+  /* ── pas de translate3d ici, et c'est important ──
+     La pochette porte le lecteur du clip : son iframe. Or un ancêtre
+     promu sur un plan 3D (`translate3d`) casse le rendu de cette
+     iframe — le navigateur compose alors la vidéo sur son propre plan,
+     et tout ce qui est peint reste noir. Constaté et mesuré : 0 de
+     luminosité en 3D, 30 en 2D, à code identique.
+     Un `translate` en 2D suffit : le glissement est horizontal, il n'a
+     jamais eu besoin de profondeur. */
+  transform: translate(calc(-50% + var(--dx, 0px)), -50%);
   transition: transform .3s cubic-bezier(.22,.61,.36,1);
 }
 .nowplaying-track .nowplaying-art--left {
-  transform: translate3d(calc(-50% - var(--off) + var(--dx, 0px)), -50%, 0);
+  transform: translate(calc(-50% - var(--off) + var(--dx, 0px)), -50%);
 }
 .nowplaying-track .nowplaying-art--right {
-  transform: translate3d(calc(-50% + var(--off) + var(--dx, 0px)), -50%, 0);
+  transform: translate(calc(-50% + var(--off) + var(--dx, 0px)), -50%);
 }
 .nowplaying-track[data-dragging='1'] .nowplaying-art { transition: none; }
 .nowplaying-track .nowplaying-art--main {
   box-shadow: 0 30px 70px -30px rgba(0,0,0,.75);
 }
-.nowplaying-art { touch-action: none; will-change: transform; }
+/* la pochette n'a pas besoin d'être promue sur son propre plan : elle
+   contient le lecteur du clip (une iframe), et une couche 3D autour
+   d'une iframe la fait composer en noir. */
+.nowplaying-art { touch-action: none; }
 .nowplaying-queue { touch-action: pan-x; }
 .nowplaying .prail { touch-action: pan-x; }
 .nowplaying-ambience {

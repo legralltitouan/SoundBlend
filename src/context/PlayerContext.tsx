@@ -580,30 +580,62 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
    */
   const attachVideo = React.useCallback((el: HTMLDivElement | null) => {
     clipSlot.current = el;
-    if (el) monterClip();
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [mode, clipId, currentTrack]);
+    /* appelée par React à l'instant exact où la boîte de la pochette
+       entre dans le document : c'est le meilleur moment pour s'assurer
+       que le clip y est. Identité stable (aucune dépendance) et montage
+       idempotent, donc aucun risque de doublon. */
+    if (el) assurerClip();
+  }, []);
 
   const clipPlayer = useRef<any>(null);
   const clipPret = useRef(false);
+  /* l'identifiant réellement chargé dans le lecteur du clip */
+  const clipCode = useRef<string | null>(null);
+  /* l'état courant, lisible depuis les rappels à identité stable */
+  const modeRef = useRef(mode);
+  const clipIdRef = useRef(clipId);
+  modeRef.current = mode;
+  clipIdRef.current = clipId;
+  /* le cadre du clip = **l'iframe elle-même** : `new YT.Player(div)` ne
+     met pas une iframe DANS la div, il **remplace** la div par l'iframe */
+  const cadreClip = useRef<Element | null>(null);
 
-  /* crée (une seule fois) l'iframe du clip dans la boîte de la pochette */
+  /* on détruit le lecteur du clip et on retire son cadre */
+  const demontrerClip = () => {
+    try { clipPlayer.current?.pauseVideo?.(); } catch { /* ignore */ }
+    try { clipPlayer.current?.destroy?.(); } catch { /* ignore */ }
+    clipPlayer.current = null;
+    clipPret.current = false;
+    clipCode.current = null;
+    try { cadreClip.current?.parentNode?.removeChild(cadreClip.current); } catch { /* ignore */ }
+    cadreClip.current = null;
+    clipSlot.current?.querySelectorAll('.nowplaying-clip__frame').forEach((n) => n.remove());
+  };
+
+  /* ── créer le lecteur du clip, dans la pochette ──
+     Vérifié sur le vrai YouTube : créé directement dans la boîte de la
+     pochette, le lecteur démarre et peint normalement (`#movie_player`
+     monté, vidéo présente) — y compris quand la boîte est encore en
+     opacité 0. Il n'y a donc rien à déplacer, rien à contourner.
+     Deux pièges en revanche, tous deux mesurés :
+       · l'API n'accepte pas `100%` en largeur/hauteur → lecteur de
+         taille nulle, écran noir. On donne des pixels.
+       · l'API **remplace** la div par l'iframe : on retient l'iframe
+         (`getIframe()`), pas la div. */
   const monterClip = () => {
     const cadre = clipSlot.current;
-    if (!cadre) return;
-    const id = mode === 'clip' && clipId ? clipId : null;
+    if (!cadre || modeRef.current !== 'clip') return;
+    const id = clipIdRef.current;
     if (!id) return;
 
-    if (clipPlayer.current?.loadVideoById) {
-      /* il existe déjà : on lui donne simplement le nouveau morceau */
-      try {
-        const son = playerRef.current?.getCurrentTime?.() || 0;
-        clipPlayer.current.loadVideoById({ videoId: id, startSeconds: Math.max(0, son - 0.3) });
-        clipPlayer.current.mute?.();
-        if (wantedPlay.current) clipPlayer.current.playVideo?.();
-      } catch { /* ignore */ }
-      return;
-    }
+    /* un lecteur pour CE morceau : on ne le reconstruit pas */
+    if (clipPlayer.current && clipCode.current === id) return;
+
+    /* des cadres fantômes dans la pochette : ils sont noirs et couvrent
+       l'image, on les retire */
+    [...cadre.querySelectorAll('.nowplaying-clip__frame')].forEach((n) => n.remove());
+    if (clipPlayer.current) demontrerClip();
+
     if (!window.YT || !window.YT.Player) {
       /* l'API n'est pas encore là : on réessaie dans un instant */
       let n = 0;
@@ -615,18 +647,22 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
 
+    const l = Math.max(160, Math.round(cadre.clientWidth || 320));
+    const h = Math.max(160, Math.round(cadre.clientHeight || 320));
+
     const cible = document.createElement('div');
-    cible.style.cssText = 'width:100%;height:100%;';
-    const ancien = cadre.querySelector('.nowplaying-clip__frame');
-    if (ancien) ancien.remove();
     cible.className = 'nowplaying-clip__frame';
+    cible.style.cssText = `width:${l}px;height:${h}px;`;
     cadre.appendChild(cible);
+    cadreClip.current = cible;
+    clipCode.current = id;
+    clipPret.current = false;
 
     const son = playerRef.current?.getCurrentTime?.() || progressRef.current || 0;
     try {
       clipPlayer.current = new window.YT.Player(cible, {
-        width: '100%',
-        height: '100%',
+        width: String(l),
+        height: String(h),
         videoId: id,
         playerVars: {
           autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
@@ -637,47 +673,48 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         },
         events: {
           onReady: (e: any) => {
+            if (clipPlayer.current !== e.target) return;
             clipPret.current = true;
             try { e.target.mute?.(); } catch { /* ignore */ }
-            if (wantedPlay.current) e.target.playVideo?.();
+            /* le clip joue toujours, muet : il porte une image, pas un
+               son. Le lier à l'intention de la musique (pause, reprise)
+               faisait qu'une reprise le laissait figé sur une image
+               noire. Son état suit celui de la musique par le calage
+               ci-dessous, mais il démarre toujours. */
+            try { e.target.playVideo?.(); } catch { /* ignore */ }
+            /* on retient l'iframe : elle a remplacé notre div */
+            const ifr = e.target.getIframe?.();
+            if (ifr) {
+              cadreClip.current = ifr as Element;
+              Object.assign((ifr as HTMLElement).style, {
+                position: 'absolute', inset: '0',
+                width: '100%', height: '100%', border: '0',
+                pointerEvents: 'none',
+              });
+            }
           },
         },
       });
     } catch { /* lecteur absent */ }
   };
 
-  /* le clip suit la lecture : pause, reprise, et recalage discret */
-  useEffect(() => {
-    const t = window.setInterval(() => {
-      if (mode !== 'clip' || !clipPlayer.current?.getPlayerState) return;
-      const c = clipPlayer.current;
-      const son = playerRef.current;
-      if (!son?.getCurrentTime) return;
-      let etatC = 0;
-      try { etatC = c.getPlayerState?.() ?? 0; } catch { return; }
-      /* on ne cherche pas à synchroniser au dixième de seconde : au-delà
-         d'une demi-seconde d'écart, on recale. En deçà, l'œil ne voit rien
-         et le son est de toute façon celui du lecteur de musique. */
-      try {
-        const ecart = (c.getCurrentTime?.() || 0) - (son.getCurrentTime?.() || 0);
-        if (Math.abs(ecart) > 0.6) c.seekTo?.(son.getCurrentTime() || 0, true);
-        const enLecture = (son.getPlayerState?.() ?? 0) === 1;
-        if (enLecture && etatC !== 1) c.playVideo?.();
-        if (!enLecture && etatC === 1) c.pauseVideo?.();
-      } catch { /* ignore */ }
-    }, 700);
-    return () => window.clearInterval(t);
-  }, [mode]);
+  /* ── ce qui prouve qu'un lecteur de clip est vivant ──
+     Attention : PENDANT son démarrage, il n'a pas encore d'iframe —
+     `getIframe()` rend null. Le juger « mort » à ce moment-là, c'est le
+     détruire et le recréer en boucle, et il n'a jamais le temps de
+     charger : écran noir, document vide. C'est exactement ce qui est
+     arrivé. On considère donc comme vivant tout lecteur du bon morceau
+     qui n'a pas encore rendu l'âme. */
+  const assurerClip = () => {
+    const cadre = clipSlot.current;
+    if (!cadre) return;
+    const m = modeRef.current;
+    const cid = clipIdRef.current;
+    if (m !== 'clip' || !cid) return;
 
-  /* on quitte le mode vidéo : le clip se tait et disparaît */
-  useEffect(() => {
-    if (mode === 'clip') return;
-    try { clipPlayer.current?.pauseVideo?.(); } catch { /* ignore */ }
-    clipSlot.current?.querySelectorAll('.nowplaying-clip__frame').forEach((n) => {
-      const f = n as HTMLElement;
-      f.style.display = 'none';
-    });
-  }, [mode]);
+    if (clipPlayer.current && clipCode.current === cid) return;  /* en cours ou prêt : on n'y touche pas */
+    monterClip();
+  };
 
   /* un clip qui n'existe pas : on ne montre pas une image, on revient à
      la pochette — et on le dit, sans jamais laisser un cadre noir */
@@ -691,7 +728,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   /* le clip arrive après la bascule : on le monte à ce moment-là */
   useEffect(() => {
     if (mode !== 'clip' || clipEtat !== 'pret' || !clipId) return;
-    monterClip();
+    assurerClip();
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [mode, clipEtat, clipId, currentTrack?.id]);
 
@@ -703,13 +740,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const toggleMode = () => {
     const suivant: 'audio' | 'clip' = mode === 'audio' ? 'clip' : 'audio';
     setMode(suivant);
-    if (suivant === 'clip') {
-      if (clipEtat === 'inconnu') chercherClip(currentTrack);
-      /* le clip a déjà sa réponse : on le monte tout de suite */
-      if (clipEtat === 'pret' && clipId) monterClip();
-    } else {
-      try { clipPlayer.current?.pauseVideo?.(); } catch { /* ignore */ }
-    }
+    if (suivant === 'clip' && clipEtat === 'inconnu') chercherClip(currentTrack);
+    /* le montage (comme le démontage) ne se fait PAS ici : il appartient
+       aux effets ci-dessus, qui s'exécutent après le rendu — à l'instant
+       où la boîte de la pochette existe vraiment. Monter ici revenait à
+       poser l'iframe dans un cadre que React remplaçait juste après. */
   };
 
   /* un nouveau morceau remet l'image à zéro : le clip de l'ancien n'a
@@ -723,10 +758,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
        « déjà chargé », sinon le nouveau morceau hérite du clip précédent */
     setClipId(null);
     setClipEtat('inconnu');
-    try { clipPlayer.current?.pauseVideo?.(); } catch { /* ignore */ }
-    clipSlot.current?.querySelectorAll('.nowplaying-clip__frame').forEach((n) => (n as HTMLElement).remove());
-    clipPlayer.current = null;
-    clipPret.current = false;
+    demontrerClip();
     if (mode === 'clip') chercherClip(currentTrack);
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [currentTrack?.id, mode]);
