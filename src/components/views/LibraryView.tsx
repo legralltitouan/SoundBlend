@@ -22,7 +22,7 @@ export const LibraryView: React.FC = () => {
     currentBlend, recentBlends, refreshLibrary, isAuthenticated, login, userProfile,
     setCurrentBlend,
   } = useData();
-  const { openModal, setView } = useUI();
+  const { openModal, setView, showToast } = useUI();
   const { playTrack } = usePlayer();
 
   /* Le blend affiché est celui qu'on a ouvert ; à défaut, le plus récent
@@ -36,7 +36,8 @@ export const LibraryView: React.FC = () => {
     if (!pl?.tracks?.length) {
       /* pas encore de morceaux en mémoire : on les charge d'abord, sinon la
          modale s'ouvrirait sur une liste vide */
-      void loadPlaylistTracks(id).then(() => openModal('picker', { playlistId: id }));
+      void loadPlaylistTracks(id).then(() => openModal('picker', { playlistId: id }))
+        .catch((e: Error) => showToast(e.message || 'Impossible de lire cette playlist.'));
       return;
     }
     openModal('picker', { playlistId: id });
@@ -46,7 +47,7 @@ export const LibraryView: React.FC = () => {
     e.stopPropagation();
     void loadPlaylistTracks(id).then((tracks) => {
       if (tracks[0]) playTrack(tracks[0], tracks); // toute la playlist devient la file
-    });
+    }).catch((e: Error) => showToast(e.message || 'Impossible de lire cette playlist.'));
   };
 
   return (

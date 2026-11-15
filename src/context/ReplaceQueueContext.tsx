@@ -67,7 +67,7 @@ const KNOWN_STEPS = new Set(['taste', 'thinking', 'comparing', 'finding', 'artwo
 export const isEngineNote = (s: string) => !!s && !KNOWN_STEPS.has(s) && s.length > 24;
 
 const STEP_LABEL: Record<string, string> = {
-  taste: 'Lecture de tes goûts',
+  taste: 'Lecture des exclusions et du contexte',
   thinking: 'L’IA cherche une idée',
   comparing: 'Comparaison avec les morceaux du blend',
   finding: 'Vérification que le titre existe bien',

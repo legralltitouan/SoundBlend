@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Library, History, Brain, Plus, LogIn, LogOut, Search, Moon, Sun,
+  Library, History, MessageCircle, Plus, LogIn, LogOut, Search, Moon, Sun,
 } from 'lucide-react';
 import { useUI } from '../../context/UIContext';
 import { useData } from '../../context/DataContext';
@@ -10,7 +10,7 @@ import type { ViewName } from '../../context/UIContext';
 const NAV: { id: ViewName; label: string; icon: React.ElementType }[] = [
   { id: 'library', label: 'Bibliothèque', icon: Library },
   { id: 'history', label: 'Blends', icon: History },
-  { id: 'taste', label: 'Goûts', icon: Brain },
+  { id: 'assistant', label: 'Assistant', icon: MessageCircle },
 ];
 
 /* ═══════════════════════════════════════════════════════════════

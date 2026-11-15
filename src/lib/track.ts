@@ -51,39 +51,6 @@ export const fmtTime = (s: number) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   Registre des avis (pouce levé / baissé / aucun).
-
-   Un avis n'appartient pas à une ligne de liste : il appartient au
-   morceau. On le range donc sous sa clé stable, dans localStorage, et
-   tous les écrans lisent la même table. C'est ce qui fait qu'un vote
-   donné dans le blend se voit aussitôt dans la barre du lecteur — et
-   l'inverse.
-   ═══════════════════════════════════════════════════════════════ */
-
-export type TrackRating = 'liked' | 'disliked' | null;
-
-const RATINGS_KEY = 'soundblend_ratings_v1';
-
-export const ratingKey = (t: { videoId?: string; title?: string; artist?: string }) => trackKey(t);
-
-export const getStoredRatings = (): Record<string, TrackRating> => {
-  try {
-    const raw = JSON.parse(localStorage.getItem(RATINGS_KEY) || '{}');
-    const out: Record<string, TrackRating> = {};
-    Object.entries(raw || {}).forEach(([k, v]) => {
-      if (v === 'liked' || v === 'disliked') out[k] = v;
-    });
-    return out;
-  } catch {
-    return {};
-  }
-};
-
-export const writeStoredRatings = (r: Record<string, TrackRating>) => {
-  try { localStorage.setItem(RATINGS_KEY, JSON.stringify(r)); } catch { /* plein */ }
-};
-
-/* ═══════════════════════════════════════════════════════════════
    Nettoyer un titre venu de YouTube.
 
    « Lomepal - Evidemment (lyrics video) », « Daft Punk - Voyager

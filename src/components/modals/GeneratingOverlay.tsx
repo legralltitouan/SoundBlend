@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useUI } from '../../context/UIContext';
 import { useData } from '../../context/DataContext';
 import { OrganicBlob } from '../ui/OrganicBlob';
@@ -8,10 +8,9 @@ import { OrganicBlob } from '../ui/OrganicBlob';
    Écran de composition.
 
    Une sphère organique : six nappes de couleur qui avancent en file,
-   respirent chacune à son tour et nagent vers un point au hasard. Le
-   grain est cuit dans la forme par le filtre de pigment — les bords sont
-   déplacés par un bruit fractal, jamais lisses. Le texte est posé net
-   au milieu. Rien d'autre — ni anneau, ni barre, ni compteur.
+   respirent chacune à son tour et suivent la trajectoire en huit du mode
+   Chargement de la référence. Le grain est cuit dans la forme par le filtre
+   de pigment. Le texte reste lisible au bas de l’écran, sans anneau ni barre.
 
    Les phrases techniques du moteur (« quota », « basculement ») ne
    sortent jamais à l'écran : on raconte la composition, pas le réseau.
@@ -37,6 +36,7 @@ export const GeneratingOverlay: React.FC = () => {
      pendant que le moteur travaille réellement. */
   const open = generating;
   const dark = mode === 'dark';
+  const reduced = useReducedMotion();
   const [step, setStep] = useState(0);
 
   const friendly = useMemo(() => {
@@ -63,61 +63,22 @@ export const GeneratingOverlay: React.FC = () => {
         <motion.div
           className="sb-gen"
           data-mode={dark ? 'dark' : 'light'}
-          initial={{ opacity: 0 }}
+          initial={reduced ? false : { opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          transition={{ duration: reduced ? 0 : 0.5, ease: [0.22, 1, 0.36, 1] }}
         >
-          <OrganicBlob mode={dark ? 'dark' : 'light'} />
-          {/* le voile de lecture, entre la sphère et le texte */}
-          <span className="sb-gen-veil" aria-hidden />
-
-          <div className="sb-gen-content">
-            <motion.div
-              className="sb-gen-eyebrow"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.15, duration: 0.5 }}
-            >
-              <span className="sb-gen-dot" />
-              SoundBlend compose
-            </motion.div>
-
-            <motion.h2
-              className="sb-gen-title"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.22, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-            >
-              Composition en cours
-            </motion.h2>
-
-            <div className="sb-gen-line">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.p
-                  key={friendly}
-                  initial={{ opacity: 0, y: 7 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -7 }}
-                  transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  {friendly}
-                </motion.p>
-              </AnimatePresence>
-            </div>
-
-            {/* cinq traits : celui qu'on vit est plein */}
-            <div className="sb-gen-ticks" aria-hidden>
-              {STEPS.map((_, i) => (
-                <motion.span
-                  key={i}
-                  animate={{ opacity: i <= step ? 1 : 0.22, scaleX: i === step ? 1 : 0.5 }}
-                  transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                />
-              ))}
-            </div>
+          <OrganicBlob mode={dark ? 'dark' : 'light'} movement="chargement" />
+          <div className="sb-gen-caption" role="status" aria-live="polite">
+            <div className="sb-gen-caption-title">Composition en cours</div>
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.p key={friendly} initial={reduced ? false : { opacity: 0, y: 6 }} animate={{ opacity: .82, y: 0 }} exit={reduced ? { opacity: 0 } : { opacity: 0, y: -6 }} transition={{ duration: reduced ? 0 : .35 }}>
+                {friendly}
+              </motion.p>
+            </AnimatePresence>
           </div>
         </motion.div>
+
       )}
     </AnimatePresence>
   );

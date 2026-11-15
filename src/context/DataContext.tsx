@@ -1,23 +1,17 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile } from '../types';
-import { sameTrack, trackKey, ratingKey, getStoredRatings, writeStoredRatings, type TrackRating } from '../lib/track';
+import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile, Exclusions } from '../types';
+import { sameTrack, trackKey } from '../lib/track';
 import { clientIdGoogle } from '../config/app';
 import { youtubeService } from '../services/youtube';
 import { geminiService } from '../services/gemini';
 import { uniqueTracks } from '../lib/dedupe';
 import {
-  applyRatingToTaste,
-  getStoredSettings,
-  saveStoredSettings,
-  getStoredBlends,
-  saveBlendToStorage,
-  deleteStoredBlend,
-  getStoredTasteMemory,
-  saveStoredTasteMemory,
-  writeStoredBlends,
+  getStoredSettings, saveStoredSettings, getStoredBlends, saveBlendToStorage, deleteStoredBlend,
+  getExclusions, block, unblock, isExcluded, isRecentlyProposed, recordDiscoveries,
+  migrateLegacyData, learnDiscoveriesFromBlends,
 } from '../services/storage';
 import { MOCK_PLAYLISTS } from '../data/mockData';
-import { demarrerSync, oublierSync, planifierEnvoi, surEtatSync, type EtatSync } from '../services/drive';
+import { demarrerSync, oublierSync, planifierEnvoi, surveillerExpirations, surEtatSync, type EtatSync } from '../services/drive';
 
 interface DataContextType {
   settings: AppSettings;
@@ -51,20 +45,11 @@ interface DataContextType {
 
   generating: boolean;
   generatingStatus: string;
-  generate: (config: BlendConfig) => Promise<GeneratedBlend | null>;
+  generate: (config: BlendConfig, options?: { seeds?: Track[] }) => Promise<GeneratedBlend | null>;
 
-  tasteVersion: number;
-  bumpTaste: () => void;
-
-  /* ── le vote, partagé ──────────────────────────────────────────────
-     Un avis donné quelque part (liste du blend, barre du lecteur, plein
-     écran) doit apparaître partout immédiatement : c'est ce registre qui
-     s'en charge. La clé est celle du morceau (videoId), pas de la ligne. */
-  ratingOf: (t: { videoId?: string; title?: string; artist?: string }) => TrackRating;
-  setRating: (t: Track, rating: TrackRating) => void;
-  ratingsVersion: number;
-  /* efface d'un coup tous les avis, partout (mémoire + blends enregistrés) */
-  resetAllRatings: () => void;
+  exclusions: Exclusions;
+  blockTrack: (track: { title?: string; artist?: string; videoId?: string }, kind: 'track' | 'artist') => void;
+  unblockExclusion: (id: string) => void;
 
   /* ── la synchro (Drive du compte connecté) ──
      Elle ne demande rien : connecté, elle existe ; déconnecté, elle dort. */
@@ -75,6 +60,7 @@ interface DataContextType {
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  migrateLegacyData();
   const [settings, setSettings] = useState<AppSettings>(getStoredSettings);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => youtubeService.isAuthenticated());
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => youtubeService.getUserProfile());
@@ -89,37 +75,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [generating, setGenerating] = useState(false);
   const [generatingStatus, setGeneratingStatus] = useState('');
-  const [tasteVersion, setTasteVersion] = useState(0);
-
-  const bumpTaste = useCallback(() => setTasteVersion((v) => v + 1), []);
-
-  /* Le registre des avis : une seule vérité pour toute l'application.
-     Il est relu depuis le stockage au démarrage, puis mis à jour à chaque
-     vote — d'où qu'il vienne. */
-  const [ratings, setRatings] = useState<Record<string, TrackRating>>(() => getStoredRatings());
-  const [ratingsVersion, setRatingsVersion] = useState(0);
-
-  const ratingOf = useCallback(
-    (t: { videoId?: string; title?: string; artist?: string }) => ratings[ratingKey(t)] ?? null,
-    [ratings],
-  );
-
-  const setRating = useCallback((t: Track, rating: TrackRating) => {
-    setRatings((prev) => {
-      const next = { ...prev };
-      const k = ratingKey(t);
-      if (rating) next[k] = rating; else delete next[k];
-      writeStoredRatings(next);
-      return next;
-    });
-    setRatingsVersion((v) => v + 1);
-    /* la mémoire du goût suit le même mouvement — y compris quand on
-       retire un avis : le morceau quitte alors « Tes goûts ». */
-    applyRatingToTaste(t, rating);
-    bumpTaste();
-    /* un avis est la donnée la plus précieuse : il part vers le compte */
-    planifierEnvoi();
-  }, [bumpTaste]);
+  const [exclusions, setExclusions] = useState<Exclusions>(getExclusions);
+  const blockTrack = useCallback((track: { title?: string; artist?: string; videoId?: string }, kind: 'track' | 'artist') => {
+    block(track, kind);
+    setExclusions(getExclusions());
+    setSelectedTracks((prev) => prev.filter((t) => !isExcluded(t)));
+  }, []);
+  const unblockExclusion = useCallback((id: string) => {
+    unblock(id);
+    setExclusions(getExclusions());
+  }, []);
 
   /* ── la synchro ──
      Trois moments comptent : à la connexion (on récupère), après chaque
@@ -130,18 +95,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => surEtatSync(setSyncState), []);
 
-  const syncNow = useCallback(async () => {
-    const ok = await demarrerSync();
-    if (ok) {
-      /* ce qui vient d'arriver doit se voir tout de suite — y compris la
-         clé Gemini, si elle est arrivée avec le compte */
-      setRatings(getStoredRatings());
-      setRatingsVersion((v) => v + 1);
-      setRecentBlends(getStoredBlends());
+  const syncNow = useCallback(async () => { await demarrerSync(); }, []);
+
+  // Aussi pour les synchronisations en arrière-plan et les expirations.
+  useEffect(() => {
+    learnDiscoveriesFromBlends(getStoredBlends());
+    surveillerExpirations();
+    const onSync = () => {
+      const blends = getStoredBlends();
+      setRecentBlends(blends);
       setSettings(getStoredSettings());
-      bumpTaste();
-    }
-  }, [bumpTaste]);
+      setExclusions(getExclusions());
+      setSelectedTracks((prev) => prev.filter((t) => !isExcluded(t)));
+      setCurrentBlendState((current) => current ? (blends.find((b) => b.id === current.id) || null) : null);
+    };
+    window.addEventListener('sb:sync-applied', onSync);
+    return () => window.removeEventListener('sb:sync-applied', onSync);
+  }, []);
 
   const loadingRef = useRef(false);
 
@@ -186,6 +156,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e: any) {
       setLibraryError(e?.message || 'Impossible de lire la bibliothèque YouTube.');
       setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p })));
+      if (!youtubeService.isAuthenticated()) { setIsAuthenticated(false); setUserProfile(null); }
     } finally {
       loadingRef.current = false;
       setLoadingLibrary(false);
@@ -210,16 +181,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.googleClientId]);
 
-  /* les réglages et les blends profitent aussi du même envoi différé :
-     on écoute les gestes qui les modifient, où qu'ils soient dans l'app */
+  // Un seul canal pour exclusions, découvertes, blends et choix du thème.
   useEffect(() => {
     const onLocal = () => planifierEnvoi();
-    window.addEventListener('sb:settings-saved', onLocal);
-    window.addEventListener('sb:blend-saved', onLocal);
-    return () => {
-      window.removeEventListener('sb:settings-saved', onLocal);
-      window.removeEventListener('sb:blend-saved', onLocal);
-    };
+    window.addEventListener('sb:data-changed', onLocal);
+    return () => window.removeEventListener('sb:data-changed', onLocal);
   }, []);
 
   const refreshLibrary = useCallback(async () => {
@@ -227,53 +193,12 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [loadLibrary]);
 
   const loadPlaylistTracks = useCallback(async (playlistId: string): Promise<Track[]> => {
-    try {
-      const tracks = await youtubeService.fetchPlaylistTracks(playlistId);
-      setPlaylists((prev) => prev.map((pl) => (pl.id === playlistId ? { ...pl, tracks } : pl)));
-      return tracks;
-    } catch (e) {
-      console.warn('Failed to load tracks', playlistId, e);
-      return [];
-    }
+    // L'échec reste distinct d'une playlist réellement vide : chaque vue
+    // peut l'expliquer et proposer un nouvel essai.
+    const tracks = await youtubeService.fetchPlaylistTracks(playlistId);
+    setPlaylists((prev) => prev.map((pl) => (pl.id === playlistId ? { ...pl, tracks } : pl)));
+    return tracks;
   }, []);
-
-  /* Réinitialiser les goûts : ce n'est pas seulement vider une liste à
-     l'écran, il faut retirer les pouces de chaque morceau — le registre des
-     avis, les blends enregistrés, la file du lecteur et la mémoire. */
-  const resetAllRatings = useCallback(() => {
-    setRatings(() => {
-      writeStoredRatings({});
-      return {};
-    });
-    setRatingsVersion((v) => v + 1);
-
-    /* les blends gardent une copie de l'avis : on l'efface aussi */
-    setRecentBlends((prev) => {
-      const next = prev.map((b) => ({
-        ...b,
-        tracks: b.tracks.map((t) => ({ ...t, userRating: null })),
-        seedTracks: (b.seedTracks || []).map((t) => ({ ...t, userRating: null })),
-      }));
-      writeStoredBlends(next);
-      return next;
-    });
-    setCurrentBlendState((b) =>
-      b
-        ? {
-            ...b,
-            tracks: b.tracks.map((t) => ({ ...t, userRating: null })),
-            seedTracks: (b.seedTracks || []).map((t) => ({ ...t, userRating: null })),
-          }
-        : b,
-    );
-
-    /* la mémoire des goûts repart de zéro en même temps que les pouces :
-       deux listes vides valent mieux qu'une mémoire fantôme */
-    saveStoredTasteMemory({ likedTracks: [], dislikedTracks: [], likedArtists: [], dislikedArtists: [] });
-    bumpTaste();
-    window.dispatchEvent(new CustomEvent('sb:ratings-reset'));
-    planifierEnvoi();
-  }, [bumpTaste]);
 
   const login = useCallback(async () => {
     await youtubeService.login(clientIdGoogle(settings.googleClientId));
@@ -297,13 +222,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const saveSettings = useCallback((s: AppSettings) => {
     saveStoredSettings(s);
     setSettings(s);
-    window.dispatchEvent(new CustomEvent('sb:settings-saved'));
     planifierEnvoi();
   }, []);
 
   /* un morceau est identifié par son videoId, pas par son id : le même
      titre retrouvé dans une autre playlist reste coché */
   const toggleTrack = useCallback((track: Track) => {
+    if (isExcluded(track)) return;
     setSelectedTracks((prev) => {
       const exists = prev.some((t) => sameTrack(t, track));
       return exists ? prev.filter((t) => !sameTrack(t, track)) : [...prev, track];
@@ -327,79 +252,63 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const setCurrentBlend = useCallback((b: GeneratedBlend | null) => setCurrentBlendState(b), []);
 
   const updateBlend = useCallback((b: GeneratedBlend) => {
-    setCurrentBlendState(b);
-    saveBlendToStorage(b);
+    const saved = saveBlendToStorage(b);
+    setCurrentBlendState(saved);
     setRecentBlends(getStoredBlends());
-    window.dispatchEvent(new CustomEvent('sb:blend-saved'));
-    planifierEnvoi();
   }, []);
 
   const refreshBlends = useCallback(() => setRecentBlends(getStoredBlends()), []);
 
-  const searchCatalog = useCallback((q: string) => youtubeService.searchTracks(q, 20), []);
+  const searchCatalog = useCallback(async (q: string) => {
+    const result = await youtubeService.searchTracks(q, 20);
+    return { ...result, tracks: result.tracks.filter((t) => !isExcluded(t)) };
+  }, []);
 
   const removeBlend = useCallback((id: string) => {
     deleteStoredBlend(id);
     setRecentBlends(getStoredBlends());
+    setCurrentBlendState((current) => current?.id === id ? null : current);
   }, []);
 
   const generate = useCallback(
-    async (config: BlendConfig): Promise<GeneratedBlend | null> => {
-      if (!selectedTracks.length) return null;
+    async (config: BlendConfig, options?: { seeds?: Track[] }): Promise<GeneratedBlend | null> => {
+      const requested = options?.seeds ?? selectedTracks;
+      if (!requested.length) return null;
+      const seeds = uniqueTracks(requested.filter((t) => !isExcluded(t)));
+      if (!seeds.length) throw new Error('Toutes les amorces choisies sont bloquées. Modifie les exclusions dans Réglages.');
       setGenerating(true);
       setGeneratingStatus('Analyse de l’empreinte musicale des morceaux sélectionnés…');
-
       try {
-        const tasteMemory = getStoredTasteMemory();
         const generatedTracks = await geminiService.generateBlend(
-          selectedTracks,
-          config,
-          tasteMemory,
-          (msg) => setGeneratingStatus(msg),
+          seeds, config, getExclusions(), (msg) => setGeneratingStatus(msg),
         );
-
+        // Dernier verrou : l'utilisateur peut bloquer un titre pendant une recherche.
+        // Les amorces explicitement choisies restent possibles, même si récentes.
+        const tracks = uniqueTracks(generatedTracks).filter((t) => !isExcluded(t)
+          && (t.category === 'anchor' || !isRecentlyProposed(t)));
+        if (!tracks.length) throw new Error('Aucun titre disponible après application des exclusions et de l’historique.');
         const now = new Date();
         const expires = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-        const artists = Array.from(new Set(selectedTracks.map((t) => t.artist))).slice(0, 2);
-        const name =
-          artists.length >= 2
-            ? `${artists[0]}, ${artists[1]} & co.`
-            : artists[0]
-              ? `Autour de ${artists[0]}`
-              : 'Nouveau blend';
-
-        /* dernier filet : quel que soit le chemin qui a produit la liste
-           (modèle, repli local, remplacement), un blend ne part jamais
-           avec un morceau en double. */
+        const artists = Array.from(new Set(seeds.map((t) => t.artist))).slice(0, 2);
+        const name = artists.length >= 2 ? `${artists[0]}, ${artists[1]} & co.` : artists[0] ? `Autour de ${artists[0]}` : 'Nouveau blend';
         const blend: GeneratedBlend = {
-          id: `blend-${Date.now()}`,
+          id: `blend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           title: name,
-          description: `Blend généré à partir de ${selectedTracks.length} titre${selectedTracks.length > 1 ? 's' : ''} d’amorce`,
-          createdAt: now.toISOString(),
-          expiresAt: expires.toISOString(),
-          seedTracks: selectedTracks,
-          tracks: uniqueTracks(generatedTracks),
-          /* par quel moyen : la réponse reste attachée au blend, pas
-             seulement à l'écran qui l'a vu naître */
-          methode: {
-            kind: geminiService.derniereMethode,
-            model: geminiService.dernierModele || undefined,
-            detail: geminiService.derniereNote,
-          },
+          description: `Blend généré à partir de ${seeds.length} titre${seeds.length > 1 ? 's' : ''} d’amorce`,
+          createdAt: now.toISOString(), expiresAt: expires.toISOString(), seedTracks: seeds, tracks,
+          instruction: config.instruction?.trim() || undefined,
+          methode: { kind: geminiService.derniereMethode, model: geminiService.dernierModele || undefined, detail: geminiService.derniereNote },
         };
-
-        saveBlendToStorage(blend);
+        recordDiscoveries(tracks, now.getTime());
+        const saved = saveBlendToStorage(blend);
         setRecentBlends(getStoredBlends());
-        setCurrentBlendState(blend);
-        setSelectedTracks([]);
-        return blend;
+        setCurrentBlendState(saved);
+        if (!options?.seeds) setSelectedTracks([]);
+        return saved;
       } catch (e: any) {
         throw new Error(e?.message || 'La génération a échoué.');
-      } finally {
-        setGenerating(false);
-      }
-    },
-    [selectedTracks],
+      } finally { setGenerating(false); }
+    }, [selectedTracks],
   );
 
   const value = useMemo<DataContextType>(
@@ -424,10 +333,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       currentBlend,
       setCurrentBlend,
       updateBlend,
-      ratingOf,
-      setRating,
-      ratingsVersion,
-      resetAllRatings,
+      exclusions,
+      blockTrack,
+      unblockExclusion,
       recentBlends,
       refreshBlends,
       removeBlend,
@@ -435,8 +343,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       generating,
       generatingStatus,
       generate,
-      tasteVersion,
-      bumpTaste,
       syncState,
       syncNow,
     }),
@@ -444,7 +350,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       settings, saveSettings, isAuthenticated, userProfile, login, logout, playlists, loadingLibrary,
       libraryError, loadLibrary, loadPlaylistTracks, refreshLibrary, selectedTracks, toggleTrack,
       removeTrack, clearSelection, isSelected, currentBlend, setCurrentBlend, updateBlend,
-      recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generate, tasteVersion, bumpTaste, resetAllRatings,
+      recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generate, exclusions, blockTrack, unblockExclusion,
       syncState, syncNow,
     ],
   );

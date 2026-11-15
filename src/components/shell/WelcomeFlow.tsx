@@ -109,7 +109,7 @@ export const WelcomeFlow: React.FC = () => {
 
           {/* ─────────── 2. la clé Gemini ───────────
               Une seule clé, et c'est celle qui fait le travail : c'est
-              elle qui analyse les goûts et compose le blend. On la
+              elle qui analyse les amorces et compose le blend. On la
               demande ici, au moment où la personne comprend à quoi elle
               sert — pas dans un écran de réglages qu'on découvre trois
               jours plus tard. Facultatif : sans clé, l'app compose par
@@ -124,7 +124,7 @@ export const WelcomeFlow: React.FC = () => {
             >
               <h1 className="welcome-title">La clé qui compose.</h1>
               <p className="welcome-sub">
-                SoundBlend utilise Gemini pour lire tes goûts et choisir les morceaux.
+                SoundBlend utilise Gemini pour analyser tes amorces et choisir les morceaux.
                 Ta clé reste dans ce navigateur — elle n’est envoyée qu’à Google.
                 Facultative : sans elle, l’app compose par voisinage et le dit.
               </p>
@@ -172,7 +172,7 @@ export const WelcomeFlow: React.FC = () => {
               <h1 className="welcome-title">Ton compte Google.</h1>
               <p className="welcome-sub">
                 Il sert à lire tes playlists, à y exporter les blends, et à retrouver tes
-                goûts sur ton autre téléphone ou ton ordinateur.
+                exclusions et blends sur ton autre téléphone ou ton ordinateur.
               </p>
               <p className="welcome-note welcome-note--tight">
                 La synchro ne touche à rien de ton Drive : elle range un seul petit fichier

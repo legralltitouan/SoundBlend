@@ -1,7 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Track } from '../types';
-import { sameTrack } from '../lib/track';
-import { applyRatingToTaste, recordTrackRating } from '../services/storage';
 import { youtubeService } from '../services/youtube';
 
 interface PlayerContextType {
@@ -30,8 +28,6 @@ interface PlayerContextType {
   clip: ClipEtat;
   /** le lecteur vidéo vient de se déplacer dans le grand lecteur */
   attachVideo: (el: HTMLDivElement | null) => void;
-  rateTrack: (track: Track, rating?: 'liked' | 'disliked') => void;
-  clearRating: (track: Track) => void;
   /** reprendre la lecture d'un geste de la personne (toujours accepté) */
   reprendre: () => void;
   /** vrai quand le navigateur a refusé la reprise en arrière-plan */
@@ -895,40 +891,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
 
-  const clearRating = (track: Track) => {
-    setQueue((prevQueue) => prevQueue.map((t) => (sameTrack(t, track) ? { ...t, userRating: null } : t)));
-    if (sameTrack(currentTrack, track)) setCurrentTrack({ ...currentTrack!, userRating: null });
-    /* et la mémoire des goûts oublie le morceau, sinon il reste dans
-       « Tes goûts » alors que le pouce est retiré */
-    applyRatingToTaste(track, null);
-  };
-
-  const rateTrack = (track: Track, rating?: 'liked' | 'disliked') => {
-    /* sans note, ou sur le pouce déjà actif : on retire l'avis */
-    if (!rating || track.userRating === rating) { clearRating(track); return; }
-
-    // Record to storage
-    recordTrackRating(track, rating);
-
-    // Update track in current queue (par identité de morceau, pas d'id)
-    setQueue((prevQueue) =>
-      prevQueue.map((t) =>
-        sameTrack(t, track) ? { ...t, userRating: rating } : t
-      )
-    );
-
-    if (sameTrack(currentTrack, track)) {
-      setCurrentTrack({ ...currentTrack!, userRating: rating });
-
-      // If disliked while currently playing, skip to next song smoothly!
-      if (rating === 'disliked') {
-        setTimeout(() => {
-          nextTrack();
-        }, 300);
-      }
-    }
-  };
-
   return (
     <PlayerContext.Provider
       value={{
@@ -952,8 +914,6 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         toggleMode,
         clip: clipEtat,
         attachVideo,
-        rateTrack,
-        clearRating,
         reprendre,
         repriseRefusee,
         morceauxSautes,

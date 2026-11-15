@@ -14,7 +14,7 @@
    depuis un cache périmé serait pire qu'une absence de réponse.
    ═══════════════════════════════════════════════════════════════ */
 
-const VERSION = 'sb-v6-9-30';
+const VERSION = 'sb-v6-9-31';
 const SHELL = `${VERSION}-shell`;
 
 /* l'interface : la page, le manifeste, les icônes. Les fichiers hachés
@@ -23,8 +23,8 @@ const SHELL = `${VERSION}-shell`;
    domaine, /<dépôt>/ sur GitHub Pages. Tout est calculé à partir de là,
    jamais écrit en dur. */
 const BASE = new URL(self.registration.scope).pathname;
-const url = (path) => `${BASE}${path}`.replace(/\/{2,}/g, '/');
-const PRECACHE = [url('index.html'), url('manifest.webmanifest'), url('icon-192.png'), url('icon-512.png'), url('apple-touch-icon.png'), url('logo.png')];
+const appUrl = (path) => `${BASE}${path}`.replace(/\/{2,}/g, '/');
+const PRECACHE = [appUrl('index.html'), appUrl('manifest.webmanifest'), appUrl('icon-192.png'), appUrl('icon-512.png'), appUrl('apple-touch-icon.png'), appUrl('logo.png')];
 
 const isApi = (url) =>
   /(^|\.)googleapis\.com$/.test(url.hostname) ||
@@ -43,7 +43,7 @@ self.addEventListener('install', (e) => {
        compilation : on lit la page et on retient tout ce qu'elle appelle,
        pour que la première ouverture hors ligne fonctionne déjà */
     try {
-      const html = await (await fetch(url('index.html'), { cache: 'reload' })).text();
+      const html = await (await fetch(appUrl('index.html'), { cache: 'reload' })).text();
       /* les chemins de Vite sont absolus (/soundblend/assets/…) ou
          relatifs selon la compilation : on accepte les deux */
       const assets = [...html.matchAll(/(?:src|href)="([^"]*assets\/[^"]+)"/g)]
@@ -58,7 +58,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => /^sb-v[\d-]+-shell$/.test(k) && k !== SHELL).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -82,10 +82,10 @@ self.addEventListener('fetch', (e) => {
       fetch(req)
         .then((res) => {
           const copy = res.clone();
-          caches.open(SHELL).then((c) => c.put(url('index.html'), copy)).catch(() => undefined);
+          caches.open(SHELL).then((c) => c.put(appUrl('index.html'), copy)).catch(() => undefined);
           return res;
         })
-        .catch(() => caches.match(url('index.html')).then((r) => r || Response.error())),
+        .catch(() => caches.match(appUrl('index.html')).then((r) => r || Response.error())),
     );
     return;
   }

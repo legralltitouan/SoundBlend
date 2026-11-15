@@ -1,390 +1,277 @@
-/* ═══════════════════════════════════════════════════════════════
-   La synchro par le Drive de la personne.
-
-   Un seul petit fichier JSON, rangé dans l'espace de données de
-   l'application (`appDataFolder`) : un dossier caché que Drive réserve
-   à SoundBlend. La personne ne le voit pas dans son Drive, personne
-   d'autre n'y a accès, et il suit son compte d'un appareil à l'autre.
-
-   Ce qui voyage : les goûts, les avis, le portrait sonore, les blends
-   récents, le mode clair/sombre et la clé Gemini si elle en a une.
-   Ce qui ne voyage pas : les jetons, l'historique de navigation, rien
-   d'autre.
-
-   Pourquoi `appDataFolder` et pas un dossier visible : le scope
-   `drive.appdata` est classé **non sensible** par Google. Il ne demande
-   donc ni vérification de l'application, ni écran d'alerte, et il ne
-   donne accès à rien d'autre qu'à ce fichier. C'est le plus petit
-   droit possible pour faire ce travail.
-   ═══════════════════════════════════════════════════════════════ */
-
+/* Synchronisation privée dans Google Drive appDataFolder.
+   Chaque envoi relit puis fusionne le fichier : exclusions et suppressions
+   ont une date/tombstone, les blends expirés disparaissent réellement du JSON.
+   Google Drive v3 ne documente pas de verrou atomique pour un remplacement
+   média : deux écritures exactement simultanées restent un cas de concurrence
+   « best effort », récupéré au prochain échange tant que les deux appareils
+   conservent leurs données locales. */
 import { youtubeService } from './youtube';
 import {
-  getStoredSettings, saveStoredSettings,
-  getStoredTasteMemory, saveStoredTasteMemory,
-  getStoredPortrait, saveStoredPortrait,
-  getStoredBlends, writeStoredBlends,
+  getStoredSettings, saveStoredSettings, getSettingsAt,
+  getStoredPortrait, saveStoredPortrait, getStoredBlends, writeStoredBlends, cleanBlend,
+  getExclusionRecords, writeExclusionRecords, mergeExclusionRecords,
+  getDiscoveryHistory, writeDiscoveryHistory, mergeDiscoveryHistory, learnDiscoveriesFromBlends,
+  getBlendTombstones, writeBlendTombstones, mergeBlendTombstones,
   type SoundPortrait,
 } from './storage';
-import { getStoredRatings, writeStoredRatings, type TrackRating } from '../lib/track';
 import { getMode, getModeAt, appliquerModeDistant } from '../context/prefs';
-import type { TasteMemory, GeneratedBlend } from '../types';
+import type { BlendTombstone, DiscoveryRecord, ExclusionRecord, GeneratedBlend } from '../types';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
-const NOM_FICHIER = 'soundblend.json';
+const FILE_NAME = 'soundblend.json';
 const ID_KEY = 'soundblend_drive_id';
 const APPAREIL_KEY = 'soundblend_appareil';
+const DIRTY_KEY = 'soundblend_sync_pending_v2';
 
-/* ── l'identité de cet appareil ──
-   Elle ne sert qu'à raconter, dans le fichier, qui a écrit en dernier.
-   Rien de personnel : un numéro tiré au hasard à la première ouverture. */
 const appareil = (): string => {
   try {
-    const v = localStorage.getItem(APPAREIL_KEY);
-    if (v) return v;
-    const id = `app-${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem(APPAREIL_KEY, id);
-    return id;
+    const old = localStorage.getItem(APPAREIL_KEY);
+    if (old) return old;
+    const id = `app-${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(APPAREIL_KEY, id); return id;
   } catch { return 'app-inconnu'; }
 };
 
-/* ── ce que contient le fichier ── */
 export type DonneesSync = {
-  schema: 1;
+  schema: 2;
   modifie: string;
   appareil: string;
   apparence?: { mode: 'light' | 'dark'; at: number };
-  reglages?: { geminiApiKey?: string };
-  gouts?: TasteMemory;
-  avis?: Record<string, TrackRating>;
+  reglages?: { geminiApiKey?: string; at?: number };
+  exclusions?: ExclusionRecord[];
+  decouvertes?: DiscoveryRecord[];
+  suppressionsBlends?: Record<string, BlendTombstone>;
   portrait?: SoundPortrait | null;
   blends?: GeneratedBlend[];
 };
-
-/* ── l'état, pour l'écran Réglages ── */
 export type EtatSync = {
   phase: 'inactif' | 'sans-portee' | 'pret' | 'envoi' | 'erreur';
   dernierEnvoi?: string;
   message?: string;
 };
-
 let etat: EtatSync = { phase: 'inactif' };
-/* y a-t-il eu un changement depuis le dernier envoi ? C'est ce drapeau
-   qui rend la synchro gratuite quand rien ne bouge : le contrôle
-   périodique regarde ici, et n'appelle le réseau que s'il le faut. */
-let aEnvoyer = false;
 const abonnes = new Set<(e: EtatSync) => void>();
-
 export const surEtatSync = (cb: (e: EtatSync) => void): (() => void) => {
-  abonnes.add(cb);
-  cb(etat);
-  return () => { abonnes.delete(cb); };
+  abonnes.add(cb); cb(etat); return () => { abonnes.delete(cb); };
 };
-
-const poserEtat = (e: Partial<EtatSync>) => {
-  etat = { ...etat, ...e };
-  abonnes.forEach((f) => f(etat));
-};
-
+const poserEtat = (e: Partial<EtatSync>) => { etat = { ...etat, ...e }; abonnes.forEach((f) => f(etat)); };
 export const etatSync = (): EtatSync => etat;
-
-/* ── l'identifiant du fichier, gardé en mémoire et sur l'appareil ── */
 let fichierId: string | null = null;
-try { fichierId = localStorage.getItem(ID_KEY); } catch { /* ignore */ }
-
+try { fichierId = localStorage.getItem(ID_KEY); } catch { /* mode privé */ }
 const garderId = (id: string | null) => {
   fichierId = id;
-  try {
-    if (id) localStorage.setItem(ID_KEY, id);
-    else localStorage.removeItem(ID_KEY);
-  } catch { /* ignore */ }
+  try { if (id) localStorage.setItem(ID_KEY, id); else localStorage.removeItem(ID_KEY); } catch { /* ignore */ }
 };
-
-const jeton = async (): Promise<string | null> => {
-  try { return await youtubeService.jeton(); } catch { return null; }
+const echec = (r: Response): never => { throw new Error(`Drive ${r.status}`); };
+/** Re-listage à chaque cycle : deux premières connexions simultanées
+    peuvent créer deux fichiers du même nom ; on les réunit ensuite. */
+const listerFichiers = async (t: string): Promise<string[]> => {
+  let token = ''; const ids: string[] = [];
+  do {
+    const url = `${API}/files?spaces=appDataFolder&pageSize=100&fields=${encodeURIComponent('nextPageToken,files(id,name,modifiedTime)')}&q=${encodeURIComponent(`name='${FILE_NAME}' and trashed=false`)}${token ? `&pageToken=${encodeURIComponent(token)}` : ''}`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${t}` }, cache: 'no-store' });
+    if (!r.ok) echec(r);
+    const data = await r.json();
+    for (const f of data.files || []) if (f?.id && !ids.includes(String(f.id))) ids.push(String(f.id));
+    token = data.nextPageToken || '';
+  } while (token);
+  ids.sort(); garderId(ids[0] || null); return ids;
 };
-
-const echec = (r: Response): never => {
-  throw new Error(`Drive ${r.status}`);
-};
-
-/* ── le fichier : le trouver, le lire, l'écrire ── */
-
-const trouverFichier = async (t: string): Promise<string | null> => {
-  if (fichierId) return fichierId;
-  const url =
-    `${API}/files?spaces=appDataFolder&pageSize=10` +
-    `&fields=${encodeURIComponent('files(id,name,modifiedTime)')}` +
-    `&q=${encodeURIComponent(`name='${NOM_FICHIER}' and trashed=false`)}`;
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${t}` } });
+const lireFichier = async (t: string, id: string): Promise<DonneesSync | null> => {
+  const r = await fetch(`${API}/files/${encodeURIComponent(id)}?alt=media`, { headers: { Authorization: `Bearer ${t}` }, cache: 'no-store' });
+  if (r.status === 404) return null;
   if (!r.ok) echec(r);
-  const data = await r.json();
-  const f = (data.files || [])[0];
-  if (!f) return null;
-  garderId(f.id);
-  return f.id as string;
-};
-
-const lireDistant = async (t: string): Promise<DonneesSync | null> => {
-  const id = await trouverFichier(t);
-  if (!id) return null;
-  const r = await fetch(`${API}/files/${id}?alt=media`, {
-    headers: { Authorization: `Bearer ${t}` },
-  });
-  if (r.status === 404) { garderId(null); return null; }
-  if (!r.ok) echec(r);
-  const texte = await r.text();
   try {
-    const d = JSON.parse(texte) as DonneesSync;
-    return d && typeof d === 'object' ? d : null;
-  } catch { return null; }
+    const d = JSON.parse(await r.text());
+    if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('format');
+    return d as DonneesSync;
+  } catch { throw new Error('Le fichier Drive est illisible ; il n’a pas été écrasé.'); }
 };
-
-const ecrireDistant = async (t: string, donnees: DonneesSync): Promise<void> => {
-  const id = await trouverFichier(t);
-  const json = JSON.stringify(donnees);
-
+const supprimerFichier = async (t: string, id: string): Promise<void> => {
+  const r = await fetch(`${API}/files/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${t}` } });
+  if (!r.ok && r.status !== 404) echec(r);
+};
+const ecrireDistant = async (t: string, data: DonneesSync): Promise<void> => {
+  const id = fichierId;
+  const json = JSON.stringify(data);
   if (id) {
     const r = await fetch(`${UPLOAD}/files/${id}?uploadType=media&fields=id,modifiedTime`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
-      body: json,
+      method: 'PATCH', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' }, body: json,
     });
-    if (r.status === 404) { garderId(null); return ecrireDistant(t, donnees); }
+    if (r.status === 404) { garderId(null); return ecrireDistant(t, data); }
     if (!r.ok) echec(r);
     return;
   }
-
-  /* première écriture : un envoi en deux parties, la fiche et le
-     contenu. C'est la forme que Drive attend pour créer un fichier
-     dans son espace d'application. */
-  const limite = `sb${Math.random().toString(36).slice(2)}`;
-  const fiche = JSON.stringify({
-    name: NOM_FICHIER,
-    parents: ['appDataFolder'],
-    mimeType: 'application/json',
-  });
-  const corps =
-    `--${limite}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${fiche}\r\n` +
-    `--${limite}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${json}\r\n` +
-    `--${limite}--`;
-
+  const boundary = `sb${Math.random().toString(36).slice(2)}`;
+  const fiche = JSON.stringify({ name: FILE_NAME, parents: ['appDataFolder'], mimeType: 'application/json' });
+  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${fiche}\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${json}\r\n--${boundary}--`;
   const r = await fetch(`${UPLOAD}/files?uploadType=multipart&fields=id,modifiedTime`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${t}`,
-      'Content-Type': `multipart/related; boundary=${limite}`,
-    },
-    body: corps,
+    method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
   });
   if (!r.ok) echec(r);
-  const data = await r.json();
-  if (data?.id) garderId(data.id);
+  const d = await r.json(); if (d?.id) garderId(d.id);
 };
 
-/* ── la fusion ──
-   Deux appareils ne doivent jamais s'effacer l'un l'autre. Les goûts
-   s'additionnent, les avis se cumulent (celui d'ici gagne en cas de
-   contradiction), les blends se rangent par date, le portrait le plus
-   récent l'emporte, et le mode suit le dernier choix explicite. */
-
-const cleMorceau = (t: { id?: string; title?: string; artist?: string }) =>
-  `${(t.title || '').trim().toLowerCase()}|${(t.artist || '').trim().toLowerCase()}`;
-
-const fusionnerGouts = (local: TasteMemory, distant?: TasteMemory | null): TasteMemory => {
-  if (!distant) return local;
-  const union = (a: any[] = [], b: any[] = []) => {
-    const vus = new Set<string>();
-    const out: any[] = [];
-    [...a, ...b].forEach((t) => {
-      if (!t || typeof t !== 'object') return;
-      const k = cleMorceau(t);
-      if (k === '|' || vus.has(k)) return;
-      vus.add(k);
-      out.push(t);
-    });
-    return out.slice(0, 100);
-  };
-  const artistes = (a: string[] = [], b: string[] = []) => {
-    const vus = new Set<string>();
-    const out: string[] = [];
-    [...a, ...b].forEach((x) => {
-      const k = (x || '').trim().toLowerCase();
-      if (!k || vus.has(k)) return;
-      vus.add(k);
-      out.push(x);
-    });
-    return out.slice(0, 50);
-  };
-  return {
-    likedTracks: union(local.likedTracks, distant.likedTracks),
-    dislikedTracks: union(local.dislikedTracks, distant.dislikedTracks),
-    likedArtists: artistes(local.likedArtists, distant.likedArtists),
-    dislikedArtists: artistes(local.dislikedArtists, distant.dislikedArtists),
-    seenTracks: union(
-      (local.seenTracks || []).map((x) => ({ title: x, artist: '' })),
-      (distant.seenTracks || []).map((x) => ({ title: x, artist: '' })),
-    ).map((t: any) => t.title),
-  };
+/** Exporté aussi pour les essais de fusion, sans requête réseau. */
+export const fusionnerBlends = (a: GeneratedBlend[] = [], b: GeneratedBlend[] = [], deleted: Record<string, BlendTombstone> = {}): GeneratedBlend[] => {
+  const map = new Map<string, GeneratedBlend>();
+  for (const raw of [...a, ...b]) {
+    if (!raw?.id || deleted[raw.id] || !Number.isFinite(Date.parse(raw.expiresAt)) || Date.parse(raw.expiresAt) <= Date.now()) continue;
+    const x = cleanBlend(raw);
+    const prev = map.get(x.id);
+    const at = x.updatedAt || Date.parse(x.createdAt) || 0;
+    const prevAt = prev?.updatedAt || Date.parse(prev?.createdAt || '') || 0;
+    if (!prev || at > prevAt) map.set(x.id, x);
+  }
+  return [...map.values()].sort((x, y) => (y.createdAt || '').localeCompare(x.createdAt || ''));
 };
-
-const fusionnerBlends = (a: GeneratedBlend[] = [], b: GeneratedBlend[] = []): GeneratedBlend[] => {
-  const parId = new Map<string, GeneratedBlend>();
-  [...a, ...b].forEach((x) => {
-    if (!x || !x.id) return;
-    const deja = parId.get(x.id);
-    /* à identifiant égal, la version qui a le plus de morceaux est la
-       plus complète : c'est celle-là qu'on garde */
-    if (!deja || (x.tracks?.length || 0) > (deja.tracks?.length || 0)) parId.set(x.id, x);
-  });
-  return [...parId.values()]
-    .sort((x, y) => (y.createdAt || '').localeCompare(x.createdAt || ''))
-    .slice(0, 20);
-};
-
-/* ── les deux gestes : recevoir, envoyer ── */
-
-const composer = (): DonneesSync => {
-  const gouts = getStoredTasteMemory();
-  const portrait = getStoredPortrait();
-  return {
-    schema: 1,
-    modifie: new Date().toISOString(),
-    appareil: appareil(),
-    apparence: { mode: getMode(), at: getModeAt() },
-    reglages: { geminiApiKey: getStoredSettings().geminiApiKey || '' },
-    gouts,
-    avis: getStoredRatings(),
-    portrait,
-    blends: getStoredBlends().slice(0, 20),
-  };
-};
-
+const composer = (): DonneesSync => ({
+  schema: 2, modifie: new Date().toISOString(), appareil: appareil(),
+  apparence: { mode: getMode(), at: getModeAt() },
+  reglages: { geminiApiKey: getStoredSettings().geminiApiKey || '', at: getSettingsAt() },
+  exclusions: getExclusionRecords(), decouvertes: getDiscoveryHistory(),
+  suppressionsBlends: getBlendTombstones(), portrait: getStoredPortrait(), blends: getStoredBlends(),
+});
 const appliquerDistant = (d: DonneesSync): void => {
-  /* 1. les goûts s'additionnent */
-  saveStoredTasteMemory(fusionnerGouts(getStoredTasteMemory(), d.gouts));
-
-  /* 2. les avis : les deux registres se cumulent, celui d'ici gagne */
-  writeStoredRatings({ ...(d.avis || {}), ...getStoredRatings() });
-
-  /* 3. les blends : les deux histoires se rejoignent */
-  writeStoredBlends(fusionnerBlends(getStoredBlends(), d.blends));
-
-  /* 4. le portrait : le plus récent gagne */
-  const ici = getStoredPortrait();
-  if (d.portrait && (!ici || (d.portrait.at || '') > (ici.at || ''))) saveStoredPortrait(d.portrait);
-
-  /* 5. la clé Gemini : elle suit le compte, mais une clé saisie ici
-        n'est jamais écrasée par une absence */
-  const reglages = getStoredSettings();
-  const cleDistante = d.reglages?.geminiApiKey || '';
-  if (!reglages.geminiApiKey && cleDistante) {
-    saveStoredSettings({ ...reglages, geminiApiKey: cleDistante });
+  writeExclusionRecords(mergeExclusionRecords(getExclusionRecords(), Array.isArray(d.exclusions) ? d.exclusions : []));
+  writeDiscoveryHistory(mergeDiscoveryHistory(getDiscoveryHistory(), Array.isArray(d.decouvertes) ? d.decouvertes : []));
+  const deleted = mergeBlendTombstones(getBlendTombstones(), d.suppressionsBlends || {});
+  writeBlendTombstones(deleted);
+  const blends = fusionnerBlends(getStoredBlends(), Array.isArray(d.blends) ? d.blends : [], deleted);
+  writeStoredBlends(blends);
+  learnDiscoveriesFromBlends(blends);
+  const here = getStoredPortrait();
+  // Un ancien portrait peut contenir des goûts déduits des pouces : ne pas le migrer.
+  if (Number(d.schema) >= 2 && d.portrait && (!here || (d.portrait.at || '') > (here.at || ''))) saveStoredPortrait(d.portrait);
+  const settings = getStoredSettings();
+  const remoteAt = Number(d.reglages?.at || 0);
+  const remoteKey = d.reglages?.geminiApiKey;
+  if (typeof remoteKey === 'string' && (remoteAt > getSettingsAt() || (!getSettingsAt() && !settings.geminiApiKey && remoteKey))) {
+    saveStoredSettings({ ...settings, geminiApiKey: remoteKey }, remoteAt);
   }
-
-  /* 6. l'apparence : seulement si l'autre appareil a choisi plus
-        récemment que moi */
-  if (d.apparence?.mode && (d.apparence.at || 0) > getModeAt()) {
-    appliquerModeDistant(d.apparence.mode, d.apparence.at);
-  }
-
-  /* les écrans relisent ce qui vient d'arriver */
+  if (d.apparence?.mode && (d.apparence.at || 0) > getModeAt()) appliquerModeDistant(d.apparence.mode, d.apparence.at);
   window.dispatchEvent(new CustomEvent('sb:sync-applied'));
 };
-
 const signalerErreur = (e: any) => {
   const msg = String(e?.message || e || '');
   const sansDroit = msg.includes('401') || msg.includes('403');
-  poserEtat({
-    phase: sansDroit ? 'sans-portee' : 'erreur',
-    message: sansDroit
-      ? 'La connexion Google actuelle ne couvre pas le Drive. Reconnecte-toi pour activer la synchro.'
-      : 'La synchro n’a pas abouti. Les données restent sur cet appareil.',
-  });
+  poserEtat({ phase: sansDroit ? 'sans-portee' : 'erreur', message: sansDroit
+    ? 'La connexion Google actuelle ne couvre pas le Drive. Reconnecte-toi pour activer la synchro.'
+    : (msg.includes('illisible') ? msg : 'La synchro n’a pas abouti. Les données restent sur cet appareil et seront réessayées.') });
 };
 
-/** reçoit ce qui existe, fusionne, puis renvoie le tout */
-export const demarrerSync = async (): Promise<boolean> => {
-  if (!youtubeService.isAuthenticated()) { poserEtat({ phase: 'inactif' }); return false; }
-  const t = await jeton();
-  if (!t) { poserEtat({ phase: 'inactif' }); return false; }
-
-  poserEtat({ phase: 'envoi', message: undefined });
-  try {
-    const distant = await lireDistant(t);
-    if (distant) appliquerDistant(distant);
-    await ecrireDistant(t, composer());
-    aEnvoyer = false;
-    poserEtat({ phase: 'pret', dernierEnvoi: new Date().toISOString(), message: undefined });
-    return true;
-  } catch (e) {
-    signalerErreur(e);
-    return false;
-  }
+let aEnvoyer = false;
+try { aEnvoyer = localStorage.getItem(DIRTY_KEY) === '1'; } catch { /* ignore */ }
+let generation = 0;
+let minuteur: ReturnType<typeof setTimeout> | null = null;
+let expiration: ReturnType<typeof setTimeout> | null = null;
+let veille: ReturnType<typeof setInterval> | null = null;
+let enCours: Promise<boolean> | null = null;
+let session = 0;
+const dirty = (on: boolean) => {
+  aEnvoyer = on;
+  try { if (on) localStorage.setItem(DIRTY_KEY, '1'); else localStorage.removeItem(DIRTY_KEY); } catch { /* ignore */ }
+};
+const armerExpiration = () => {
+  if (expiration) clearTimeout(expiration);
+  const dates = getStoredBlends().map((b) => Date.parse(b.expiresAt)).filter((n) => n > Date.now());
+  if (!dates.length) { expiration = null; return; }
+  const delay = Math.max(20, Math.min(...dates) - Date.now() + 30);
+  expiration = setTimeout(() => {
+    getStoredBlends();
+    window.dispatchEvent(new CustomEvent('sb:sync-applied'));
+    planifierEnvoi();
+  }, Math.min(delay, 2147483000));
+};
+const armerVeille = () => {
+  if (!veille) veille = setInterval(() => {
+    if (!youtubeService.isAuthenticated()) return;
+    // Relire aussi lorsque cet appareil est inchangé : un autre a pu écrire.
+    void demarrerSync();
+  }, 3 * 60 * 1000);
+  armerExpiration();
 };
 
-/** envoie l'état courant (après une modification locale) */
-export const envoyerSync = async (): Promise<boolean> => {
-  if (!youtubeService.isAuthenticated()) return false;   /* le drapeau reste : il partira à la connexion */
-  const t = await jeton();
-  if (!t) return false;
-  try {
+/** Relit AVANT tout envoi. Une écriture locale arrivée pendant la requête
+    reste marquée comme à envoyer et n'est pas perdue. */
+const cycle = (): Promise<boolean> => {
+  if (enCours) return enCours;
+  if (!youtubeService.isAuthenticated()) { poserEtat({ phase: 'inactif' }); return Promise.resolve(false); }
+  const thisSession = session;
+  enCours = (async () => {
+    const t = await youtubeService.jeton();
+    if (!t || thisSession !== session) return false;
     poserEtat({ phase: 'envoi', message: undefined });
-    await ecrireDistant(t, composer());
-    aEnvoyer = false;
-    poserEtat({ phase: 'pret', dernierEnvoi: new Date().toISOString(), message: undefined });
-    return true;
-  } catch (e) {
-    signalerErreur(e);
-    return false;
-  }
+    try {
+      const initialIds = await listerFichiers(t);
+      for (const id of initialIds) {
+        const d = await lireFichier(t, id);
+        if (thisSession !== session) return false;
+        if (d) appliquerDistant(d);
+      }
+      const before = generation;
+      await ecrireDistant(t, composer());
+      if (thisSession !== session) return false;
+      // Relecture après écriture : si un autre appareil vient d'écrire, on
+      // fusionne à nouveau. Cela réduit la fenêtre de course, sans promettre
+      // de verrou atomique que Drive v3 ne documente pas.
+      const ids = await listerFichiers(t);
+      let canonical: DonneesSync | null = null;
+      const duplicatesRead: { id: string; snapshot: string }[] = [];
+      for (const id of ids) {
+        const d = await lireFichier(t, id);
+        if (thisSession !== session) return false;
+        if (!d) continue;
+        if (id === ids[0]) canonical = d; else duplicatesRead.push({ id, snapshot: JSON.stringify(d) });
+        appliquerDistant(d);
+      }
+      const fingerprint = (d: DonneesSync | null) => d ? JSON.stringify({
+        schema: d.schema, apparence: d.apparence, reglages: d.reglages,
+        exclusions: d.exclusions, decouvertes: d.decouvertes, suppressionsBlends: d.suppressionsBlends,
+        portrait: d.portrait, blends: d.blends,
+      }) : '';
+      const merged = composer();
+      let retryNeeded = false;
+      if (fingerprint(canonical) !== fingerprint(merged) || duplicatesRead.length) {
+        await ecrireDistant(t, merged);
+        // Revoir chaque copie juste avant de la supprimer : si un autre
+        // appareil y a écrit entre-temps, ne pas effacer sa modification.
+        // Ce contrôle réduit la fenêtre de course, sans être un verrou
+        // atomique entre la dernière lecture et DELETE dans Drive v3.
+        for (const copy of duplicatesRead) {
+          const latest = await lireFichier(t, copy.id);
+          if (thisSession !== session) return false;
+          if (latest && JSON.stringify(latest) === copy.snapshot) await supprimerFichier(t, copy.id);
+          else if (latest) retryNeeded = true;
+        }
+      }
+      if (thisSession !== session) return false;
+      if (generation === before && !retryNeeded) dirty(false);
+      else { dirty(true); if (minuteur) clearTimeout(minuteur); minuteur = setTimeout(() => { void envoyerSync(); }, 1200); }
+      armerVeille();
+      poserEtat({ phase: 'pret', dernierEnvoi: new Date().toISOString(), message: undefined });
+      return true;
+    } catch (e) { dirty(true); signalerErreur(e); return false; }
+  })().finally(() => { enCours = null; });
+  return enCours;
 };
-
-/* ── l'envoi différé ──
-   Un pouce par-ci, un réglage par-là : on ne fait pas un aller-retour
-   par clic. Quatre secondes après le dernier geste, un seul envoi part.
-   Sans compte connecté, il ne se passe rien du tout. */
-let minuteur: any = null;
-
+export const surveillerExpirations = (): void => armerExpiration();
+export const demarrerSync = (): Promise<boolean> => { armerVeille(); return cycle(); };
+export const envoyerSync = (): Promise<boolean> => cycle();
 export const planifierEnvoi = (): void => {
-  aEnvoyer = true;
+  generation += 1; dirty(true); armerExpiration();
   if (!youtubeService.isAuthenticated()) return;
-  clearTimeout(minuteur);
+  if (minuteur) clearTimeout(minuteur);
   minuteur = setTimeout(() => { void envoyerSync(); }, 2500);
 };
-
-/* ═══ le filet de sécurité ═══
-   Les gestes sont déjà couverts (un avis, un réglage, un blend partent
-   2,5 s plus tard). Ce contrôle-là rattrape ce qui n'a pas de geste :
-   un onglet resté ouvert, une coupure réseau au mauvais moment. Il ne
-   coûte rien tant que rien n'a changé — c'est un simple test de drapeau,
-   sans réseau. Toutes les trois minutes, comme demandé. */
-const PERIODE = 3 * 60 * 1000;
-let veille: any = null;
-
-const armerVeille = () => {
-  if (veille) return;
-  veille = setInterval(() => {
-    if (!aEnvoyer) return;
-    if (!youtubeService.isAuthenticated()) return;
-    void envoyerSync();
-  }, PERIODE);
-};
-
-const desarmerVeille = () => {
-  clearInterval(veille);
-  veille = null;
-};
-
-/** coupe la synchro quand la personne se déconnecte */
 export const oublierSync = (): void => {
-  clearTimeout(minuteur);
-  desarmerVeille();
-  aEnvoyer = false;
+  session += 1;
+  if (minuteur) clearTimeout(minuteur);
+  if (veille) clearInterval(veille);
+  if (expiration) clearTimeout(expiration);
+  minuteur = null; veille = null; expiration = null;
   garderId(null);
   poserEtat({ phase: 'inactif', dernierEnvoi: undefined, message: undefined });
 };
-
-/** y a-t-il quelque chose en attente d'envoi ? (pour les tests et le diag) */
 export const enAttente = (): boolean => aEnvoyer;

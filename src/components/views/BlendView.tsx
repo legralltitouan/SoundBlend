@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import {
-  Play, Pause, ThumbsUp, ThumbsDown, Trash2, RefreshCw, Share2, ExternalLink,
+  Play, Pause, Trash2, RefreshCw, Share2, ExternalLink,
   ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass,
   MoreHorizontal, ArrowRight, Download, Radio,
 } from 'lucide-react';
@@ -12,12 +12,12 @@ import { usePlayer } from '../../context/PlayerContext';
 import { geminiService } from '../../services/gemini';
 import { dedupeTracks } from '../../lib/dedupe';
 import { youtubeService } from '../../services/youtube';
-import { getStoredTasteMemory } from '../../services/storage';
+import { getExclusions, isExcluded, isRecentlyProposed, recordDiscoveries } from '../../services/storage';
+import { BlockButton } from '../ui/BlockButton';
 import { useReplaceQueue } from '../../context/ReplaceQueueContext';
 import { Button, Equalizer } from '../ui';
 import { Art } from '../ui/Art';
-import type { Track, TrackCategory } from '../../types';
-import { trackKey } from '../../lib/track';
+import type { Track, TrackCategory, GeneratedBlend } from '../../types';
 
 const CAT: Record<TrackCategory, { label: string; color: string }> = {
   anchor: { label: 'Pilier', color: 'var(--anchor)' },
@@ -31,26 +31,30 @@ const CAT: Record<TrackCategory, { label: string; color: string }> = {
    ═══════════════════════════════════════════════════════════════ */
 
 export const BlendView: React.FC = () => {
-  const { currentBlend, updateBlend, settings, isAuthenticated, ratingOf, setRating } = useData();
+  const { currentBlend } = useData();
+  const { setView } = useUI();
+  if (!currentBlend) return <div style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', textAlign: 'center', padding: 24 }}><div><p className="ink-2">Ce blend a expiré ou n’est plus disponible.</p><Button variant="tonal" onClick={() => setView('library')}>Retour à la bibliothèque</Button></div></div>;
+  return <BlendViewContent key={currentBlend.id} blend={currentBlend} />;
+};
+
+const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
+  const { updateBlend, settings, isAuthenticated } = useData();
   const { design, showToast, setView } = useUI();
   const { playTrack, currentTrack, isPlaying } = usePlayer();
 
   const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(currentBlend?.title || '');
+  const [title, setTitle] = useState(blend.title || '');
   /* la visibilité suit ce qui a réellement été envoyé : un blend exporté
      en public ne doit pas afficher « Privée » au rechargement */
-  const [priv, setPriv] = useState(() => (currentBlend?.exportedMeta?.privacy || 'private') === 'private');
+  const [priv, setPriv] = useState(() => (blend.exportedMeta?.privacy || 'private') === 'private');
   useEffect(() => {
-    if (currentBlend?.exportedMeta?.privacy) setPriv(currentBlend.exportedMeta.privacy === 'private');
-  }, [currentBlend?.exportedPlaylistId, currentBlend?.exportedMeta?.privacy]);
+    if (blend.exportedMeta?.privacy) setPriv(blend.exportedMeta.privacy === 'private');
+  }, [blend.exportedPlaylistId, blend.exportedMeta?.privacy]);
   const [exporting, setExporting] = useState(false);
-  const [exported, setExported] = useState<string | null>(currentBlend?.exportedUrl || null);
+  const [exported, setExported] = useState<string | null>(blend.exportedUrl || null);
   const queue = useReplaceQueue();
 
-  const blend = currentBlend;
-
   const stats = useMemo(() => {
-    if (!blend) return null;
     const seconds = blend.tracks.reduce((a, t) => a + (t.durationSeconds || 200), 0);
     return {
       minutes: Math.round(seconds / 60),
@@ -59,17 +63,6 @@ export const BlendView: React.FC = () => {
       fresh: blend.tracks.filter((t) => t.category === 'fresh').length,
     };
   }, [blend]);
-
-  if (!blend || !stats) {
-    return (
-      <div style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', textAlign: 'center', padding: 24 }}>
-        <div>
-          <p className="ink-2">Aucun blend affiché pour l’instant.</p>
-          <Button variant="tonal" onClick={() => setView('library')}>Retour à la bibliothèque</Button>
-        </div>
-      </div>
-    );
-  }
 
   /* ── playlist déjà exportée : la garder au diapason ────────────────
      Dès qu'un titre est ajouté, retiré ou remplacé dans le blend, la
@@ -174,25 +167,6 @@ export const BlendView: React.FC = () => {
 
   const remove = (id: string) => updateBlend({ ...blend, tracks: blend.tracks.filter((t) => t.id !== id) });
 
-  /* Noter un titre : le lecteur, le blend et le registre partagé avancent
-     ensemble. C'est ce registre — et non la ligne de liste — qui alimente
-     l'affichage : un vote posé ici se voit donc aussitôt dans la barre du
-     lecteur, et réciproquement. */
-  const myRating = (t: Track) => ratingOf(t) ?? t.userRating ?? null;
-  const rate = (t: Track, rating: 'liked' | 'disliked') => {
-    const next: 'liked' | 'disliked' | null = myRating(t) === rating ? null : rating;
-    /* `setRating` est la seule vérité : il écrit la note *et* tient la
-       mémoire des goûts. Un second appui sur le même pouce envoie
-       `null` — le morceau quitte alors « Tes goûts », ici comme dans le
-       lecteur. (Passer par `rateTrack` en plus faisait écrire la mémoire
-       deux fois, avec un état intermédiaire faux.) */
-    setRating(t, next);
-    updateBlend({
-      ...blend,
-      tracks: blend.tracks.map((x) => (trackKey(x) === trackKey(t) ? { ...x, userRating: next } : x)),
-    });
-  };
-
   /* ── remplacer un morceau ──────────────────────────────────────
      Le travail ne se fait plus ici : on l'empile dans la file, qui
      s'occupe de tout, un morceau à la fois. On peut donc en lancer
@@ -214,8 +188,8 @@ export const BlendView: React.FC = () => {
            rendre un échec à l'auditeur */
         for (let attempt = 0; attempt < 2; attempt++) {
           const fresh = await geminiService.replaceSingleTrack(
-            track, blend.tracks, blend.seedTracks, getStoredTasteMemory(),
-            { onStep: relay, nonce: Date.now() + attempt },
+            track, blend.tracks, blend.seedTracks, getExclusions(),
+            { onStep: relay, nonce: Date.now() + attempt, instruction: blend.instruction },
           );
           const note = geminiService.takeEngineNote();
           if (note) onStep(note as any);
@@ -223,7 +197,7 @@ export const BlendView: React.FC = () => {
           /* la proposition ne doit être ni le morceau remplacé, ni un autre
              morceau du blend — ni le même en double, sous un autre titre */
           const others = blend.tracks.filter((t) => t.id !== track.id);
-          if (!fresh.videoId) continue;
+          if (!fresh.videoId || isExcluded(fresh) || isRecentlyProposed(fresh)) continue;
           if (others.some((t) => (t.videoId && t.videoId === fresh.videoId)
             || t.title.trim().toLowerCase() === fresh.title.trim().toLowerCase())) continue;
           return { title: fresh.title, artist: fresh.artist, track: fresh };
@@ -240,7 +214,9 @@ export const BlendView: React.FC = () => {
     const ready = queue.readyFor(blend.id);
     if (!ready?.result) return;
     const target = blend.tracks.find((t) => t.id === ready.trackId);
-    if (target) {
+    if (target && !isExcluded(ready.result.track) && !isRecentlyProposed(ready.result.track)
+      && !blend.tracks.some((t) => t.id !== target.id && (t.videoId === ready.result!.track.videoId || t.title.trim().toLowerCase() === ready.result!.track.title.trim().toLowerCase()))) {
+      recordDiscoveries([ready.result.track]);
       updateBlend({
         ...blend,
         /* et on vérifie une dernière fois l'unicité : la liste publiée ne
@@ -451,26 +427,7 @@ export const BlendView: React.FC = () => {
               </button>
 
               <div className="sb-track-actions">
-                <button
-                  className="icon-btn rate-btn"
-                  data-on={myRating(t) === 'liked' ? 'true' : 'false'}
-                  onClick={() => rate(t, 'liked')}
-                  title={myRating(t) === 'liked' ? 'Retirer mon avis' : 'J’aime'}
-                  aria-label="J’aime"
-                  aria-pressed={myRating(t) === 'liked'}
-                >
-                  <ThumbsUp size={15} strokeWidth={1.9} fill={myRating(t) === 'liked' ? 'currentColor' : 'none'} />
-                </button>
-                <button
-                  className="icon-btn rate-btn"
-                  data-on={myRating(t) === 'disliked' ? 'true' : 'false'}
-                  onClick={() => rate(t, 'disliked')}
-                  title={myRating(t) === 'disliked' ? 'Retirer mon avis' : 'Pas pour moi'}
-                  aria-label="Pas pour moi"
-                  aria-pressed={myRating(t) === 'disliked'}
-                >
-                  <ThumbsDown size={15} strokeWidth={1.9} fill={myRating(t) === 'disliked' ? 'currentColor' : 'none'} />
-                </button>
+                <BlockButton track={t} size={15} />
                 <button
                   className="icon-btn"
                   onClick={() => replace(t)}

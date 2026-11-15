@@ -128,7 +128,11 @@ export const verifyVideo = async (
     oembedCache.set(videoId, { at: Date.now(), ...out });
     return out;
   }
-  const out = { ok: true, title: String(res.title || ''), author: String(res.author_name || ''), jouable: true };
+  // Une réponse vide ou mal formée ne prouve ni l'identité ni la lecture.
+  if (typeof res.title !== 'string' || !res.title.trim() || typeof res.author_name !== 'string' || !res.author_name.trim()) return null;
+  // Métadonnées disponibles : ceci ne prouve pas qu'une iframe pourra lire
+  // la vidéo pour tous les comptes et dans tous les pays.
+  const out = { ok: true, title: res.title, author: res.author_name, jouable: true };
   oembedCache.set(videoId, { at: Date.now(), ...out });
   return out;
 };

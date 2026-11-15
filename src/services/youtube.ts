@@ -1,6 +1,6 @@
 import { Playlist, Track, UserProfile } from '../types';
 import { MOCK_PLAYLISTS } from '../data/mockData';
-import { getStoredSettings } from './storage';
+import { artistMatches, getStoredSettings, isExcluded } from './storage';
 import { cleanTitle, matchesAsked, norm } from '../lib/track';
 import type { Video } from './search';
 import { pipedSearch, verifyVideo } from './search';
@@ -17,6 +17,26 @@ export const withTimeout = async <T,>(p: Promise<T>, ms = 10000, fallback: T): P
   } finally {
     clearTimeout(timer);
   }
+};
+
+/** Limiter toute la lecture, corps JSON compris : recevoir les en-têtes
+    ne doit pas laisser l’assistant attendre indéfiniment une page bloquée. */
+const fetchLibrary = async (url: string, init: RequestInit): Promise<{ resp: Response; data: any }> => {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new DOMException('Délai YouTube dépassé', 'AbortError'));
+    }, 12000);
+  });
+  try {
+    const read = (async () => {
+      const resp = await fetch(url, { ...init, signal: controller.signal });
+      return { resp, data: resp.ok ? await resp.json() : null };
+    })();
+    return await Promise.race([read, deadline]);
+  } finally { clearTimeout(timer!); }
 };
 
 const decodeEntities = (s: string) =>
@@ -61,8 +81,27 @@ const normaliser = (t: string): string =>
     .replace(/\s+/g, ' ')
     .trim();
 
-// Cache search queries to prevent burning YouTube API quota (100 units per search)
+// Cache des recherches libres, distinct de celui des morceaux résolus.
 const searchCache = new Map<string, string>();
+export type PlayableVideo = {
+  videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string; verifie?: boolean;
+  /** Identité renvoyée par YouTube, à contrôler aussi après résolution. */
+  sourceTitle?: string; sourceArtist?: string;
+};
+const findCache = new Map<string, { at: number; val: PlayableVideo | null }>();
+const FIND_TTL = 60 * 60 * 1000;
+
+/** Le titre doit correspondre et, quand la vidéo nomme explicitement un
+    artiste ou une chaîne « Topic », celui-ci ne doit pas être différent.
+    Une chaîne de label, moins précise, ne suffit pas à conclure. */
+export const matchesVideoIdentity = (askedTitle: string, askedArtist: string, videoTitle: string, videoAuthor = ''): boolean => {
+  if (!videoTitle.trim() || !matchesAsked(askedTitle, askedArtist, videoTitle, videoAuthor)) return false;
+  if (!askedArtist.trim()) return true;
+  const namedArtist = cleanTitle(videoTitle).artist || '';
+  const topic = /[-–—]\s*topic$/i.test(videoAuthor) ? videoAuthor : '';
+  const agrees = (candidate: string) => artistMatches(candidate, askedArtist) || artistMatches(askedArtist, candidate);
+  return [namedArtist, topic].filter(Boolean).every(agrees);
+};
 // Cache playlist tracks
 const playlistTracksCache = new Map<string, Track[]>();
 
@@ -263,30 +302,32 @@ export class YouTubeService {
       return MOCK_PLAYLISTS;
     }
 
+    const token = this.accessToken;
     try {
       const allPlaylists: Playlist[] = [];
       let nextPageToken = '';
+      let pageCount = 0;
+      const seenPages = new Set<string>();
 
       do {
-        const tokenQuery = nextPageToken ? `&pageToken=${nextPageToken}` : '';
+        pageCount++;
+        const tokenQuery = nextPageToken ? `&pageToken=${encodeURIComponent(nextPageToken)}` : '';
         const url = `${YOUTUBE_API_BASE}/playlists?part=snippet,contentDetails&mine=true&maxResults=50${tokenQuery}`;
-        const resp = await fetch(url, {
+        const { resp, data } = await fetchLibrary(url, {
           headers: {
-            Authorization: `Bearer ${this.accessToken}`,
+            Authorization: `Bearer ${token}`,
             Accept: 'application/json',
           },
         });
 
         if (!resp.ok) {
           if (resp.status === 401) {
-            this.logout();
+            if (this.accessToken === token) this.logout();
             throw new Error("Session YouTube expirée. Veuillez vous reconnecter.");
           }
-          const err = await resp.json();
-          throw new Error(err.error?.message || "Erreur lors de la récupération des playlists");
+          throw new Error(`Impossible de lire la bibliothèque YouTube (HTTP ${resp.status}). Vérifie les autorisations du compte, puis réessaie.`);
         }
 
-        const data = await resp.json();
         const pageItems: Playlist[] = (data.items || []).map((item: any) => ({
           id: item.id,
           title: item.snippet.title,
@@ -298,13 +339,22 @@ export class YouTubeService {
         }));
 
         allPlaylists.push(...pageItems);
+        if (data.nextPageToken != null && typeof data.nextPageToken !== 'string') {
+          throw new Error('Impossible de lire la bibliothèque YouTube en entier : pagination invalide. Réessaie.');
+        }
         nextPageToken = data.nextPageToken || '';
-      } while (nextPageToken && allPlaylists.length < 150);
+        if (nextPageToken && (seenPages.has(nextPageToken) || pageCount >= 150)) {
+          throw new Error('Impossible de lire la bibliothèque YouTube en entier : pagination invalide ou trop longue. Réessaie.');
+        }
+        if (nextPageToken) seenPages.add(nextPageToken);
+      } while (nextPageToken);
 
+      if (this.accessToken !== token || !this.isAuthenticated()) throw new Error('La session Google a changé pendant la lecture de la bibliothèque. Reconnecte-toi et réessaie.');
       return allPlaylists;
     } catch (e) {
-      console.warn("YouTube API error, fallback to mock data:", e);
-      return MOCK_PLAYLISTS;
+      console.warn('Impossible de charger les playlists YouTube :', e);
+      if (e instanceof Error && /Impossible de lire la bibliothèque|Session YouTube expirée|La session Google/.test(e.message)) throw e;
+      throw new Error('Impossible de lire la bibliothèque YouTube. Vérifie la connexion, puis réessaie.');
     }
   }
 
@@ -325,32 +375,38 @@ export class YouTubeService {
     }
 
     if (!this.isAuthenticated()) {
-      return demo?.tracks || [];
+      throw new Error('Connecte ton compte Google pour lire cette playlist YouTube.');
     }
 
+    const token = this.accessToken;
     try {
       const allTracks: Track[] = [];
       let nextPageToken = '';
       let pageCount = 0;
+      const seenPages = new Set<string>();
 
       do {
         pageCount++;
-        const tokenQuery = nextPageToken ? `&pageToken=${nextPageToken}` : '';
-        const url = `${YOUTUBE_API_BASE}/playlistItems?part=snippet,contentDetails&playlistId=${playlistId}&maxResults=50${tokenQuery}`;
-        
-        const resp = await fetch(url, {
+        const tokenQuery = nextPageToken ? `&pageToken=${encodeURIComponent(nextPageToken)}` : '';
+        const url = `${YOUTUBE_API_BASE}/playlistItems?part=snippet,contentDetails&playlistId=${encodeURIComponent(playlistId)}&maxResults=50${tokenQuery}`;
+
+        const { resp, data } = await fetchLibrary(url, {
           headers: {
-            Authorization: `Bearer ${this.accessToken}`,
+            Authorization: `Bearer ${token}`,
             Accept: 'application/json',
           },
         });
 
         if (!resp.ok) {
-          console.warn(`Error on page ${pageCount} of playlist ${playlistId}:`, await resp.text());
-          break;
+          // Une page refusée ne doit pas être mémorisée comme playlist vide
+          // ou complète : l’assistant doit pouvoir signaler l’échec et réessayer.
+          if (resp.status === 401) {
+            if (this.accessToken === token) this.logout();
+            throw new Error('Session YouTube expirée. Veuillez vous reconnecter.');
+          }
+          throw new Error(`Impossible de lire la playlist YouTube (page ${pageCount}, HTTP ${resp.status}). Vérifie la connexion et les autorisations, puis réessaie.`);
         }
 
-        const data = await resp.json();
         const pageTracks: Track[] = (data.items || [])
           .filter((item: any) => item.snippet?.title !== 'Deleted video' && item.snippet?.title !== 'Private video')
           .map((item: any) => {
@@ -378,14 +434,25 @@ export class YouTubeService {
 
         allTracks.push(...pageTracks);
         onProgress?.(allTracks.length);
+        if (data.nextPageToken != null && typeof data.nextPageToken !== 'string') {
+          throw new Error('Impossible de lire la playlist YouTube en entier : pagination invalide. Réessaie.');
+        }
         nextPageToken = data.nextPageToken || '';
-      } while (nextPageToken && allTracks.length < 500);
+        if (nextPageToken && (seenPages.has(nextPageToken) || pageCount >= 150)) {
+          throw new Error('Impossible de lire la playlist YouTube en entier : pagination invalide ou trop longue. Réessaie.');
+        }
+        if (nextPageToken) seenPages.add(nextPageToken);
+      } while (nextPageToken);
 
+      // Une déconnexion pendant la lecture ne doit pas réintroduire dans
+      // le cache les morceaux du compte précédent.
+      if (this.accessToken !== token || !this.isAuthenticated()) throw new Error('La session Google a changé pendant la lecture de la playlist. Reconnecte-toi et réessaie.');
       playlistTracksCache.set(playlistId, allTracks);
       return allTracks;
     } catch (e) {
-      console.warn("Error fetching playlist tracks with pagination:", e);
-      return [];
+      console.warn('Impossible de lire les morceaux de la playlist :', e);
+      if (e instanceof Error && /Impossible de lire la playlist|Session YouTube expirée|La session Google/.test(e.message)) throw e;
+      throw new Error('Impossible de lire la playlist YouTube. Vérifie la connexion, puis réessaie.');
     }
   }
 
@@ -419,7 +486,12 @@ export class YouTubeService {
    */
   public async reparerVideoId(title: string, artist: string): Promise<string | null> {
     const found = await this.findPlayable(title, artist).catch(() => null);
-    return found?.videoId ?? null;
+    if (!found || isExcluded(found) || isExcluded({
+      videoId: found.videoId,
+      title: found.sourceTitle || found.title,
+      artist: found.sourceArtist || found.artist,
+    })) return null;
+    return found.videoId;
   }
 
   /**
@@ -430,13 +502,16 @@ export class YouTubeService {
   public async findPlayable(
     title: string,
     artist: string,
-  ): Promise<{ videoId: string; title: string; artist: string; durationSeconds?: number; durationFormatted?: string; verifie?: boolean } | null> {
+  ): Promise<PlayableVideo | null> {
     const cacheKey = `find::${artist} - ${title}`.toLowerCase().trim();
-    const cached = searchCache.get(cacheKey);
-    if (cached !== undefined) {
-      if (!cached) return null;
-      return { videoId: cached, title, artist, verifie: true };
-    }
+    const cached = findCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < FIND_TTL) return cached.val ? { ...cached.val } : null;
+    const remember = (val: PlayableVideo | null): PlayableVideo | null => {
+      // Un réseau muet ou une recherche vide ne doit pas empoisonner les
+      // prochains essais ; ne mémoriser qu'une identité confirmée.
+      if (val?.verifie) findCache.set(cacheKey, { at: Date.now(), val });
+      return val;
+    };
 
     const settings = getStoredSettings();
     const apiKey = settings.youtubeApiKey;
@@ -451,17 +526,17 @@ export class YouTubeService {
         : undefined,
     });
 
-    /* ── le dernier verrou : le morceau se lit-il vraiment ? ──
-       Un identifiant trouvé n'est pas un morceau écoutable. Avant de le
-       rendre, on demande au lecteur — sans clé, sans quota — s'il peut
-       jouer cette vidéo depuis ce pays. Une réponse claire « non » (vidéo
-       réservée, bloquée, retirée, direct) écarte le candidat et on
-       cherche le suivant. C'est ce qui remplit la file du lecteur de
-       morceaux qui sonnent au lieu de morceaux qu'on saute. */
+    /* oEmbed aide à reconnaître le titre et à écarter une vidéo signalée
+       comme indisponible. Il ne garantit pas la lecture réelle : les
+       restrictions, le pays et le compte restent décidés par YouTube. */
     const jouable = async (v: { videoId: string; title?: string; artist?: string; durationSeconds?: number }) => {
       const test = await this.estJouable(v.videoId).catch(() => null);
       if (test && test.ok === false) {
         console.debug(`[YouTube] ${title} / ${artist} : « ${test.raison} » — écarté`);
+        return null;
+      }
+      if (test?.titre && !matchesVideoIdentity(title, artist, test.titre, test.artiste)) {
+        console.debug(`[YouTube] ${title} / ${artist} : identité officielle différente — écarté`);
         return null;
       }
       /* la durée réelle, quand on l'apprend là : le blend compte juste */
@@ -473,7 +548,9 @@ export class YouTubeService {
         durationFormatted: (v.durationSeconds || test?.duree)
           ? `${Math.floor((v.durationSeconds || test!.duree!) / 60)}:${String((v.durationSeconds || test!.duree!) % 60).padStart(2, '0')}`
           : undefined,
-        verifie: true,
+        sourceTitle: test?.titre || undefined,
+        sourceArtist: test?.artiste || undefined,
+        verifie: test?.ok === true,
       };
     };
 
@@ -510,7 +587,9 @@ export class YouTubeService {
           /* plusieurs résultats : on garde celui qui correspond au titre
              demandé, pas forcément le premier de la liste */
           for (const item of items) {
-            const rawTitle = decodeEntities(item.snippet?.title || title);
+            const rawTitle = decodeEntities(item.snippet?.title || '');
+            const author = decodeEntities(item.snippet?.videoOwnerChannelTitle || item.snippet?.channelTitle || '');
+            if (!matchesVideoIdentity(title, artist, rawTitle, author)) continue;
             const cleaned = cleanTitle(rawTitle);
             const cand = {
               videoId: item.id.videoId as string,
@@ -528,8 +607,7 @@ export class YouTubeService {
             if (matchesAsked(title, artist, cand.title, cand.artist)) {
               const ok = await jouable(cand);
               if (ok) {
-                searchCache.set(cacheKey, ok.videoId);
-                return ok;
+                return remember(ok);
               }
             }
           }
@@ -551,17 +629,19 @@ export class YouTubeService {
         if (resp.ok) {
           const items: any[] = ((await resp.json()).items || []).filter((i: any) => i?.id?.videoId);
           for (const item of items) {
-            const cleaned = cleanTitle(decodeEntities(item.snippet?.title || title));
+            const rawTitle = decodeEntities(item.snippet?.title || '');
+            const author = decodeEntities(item.snippet?.videoOwnerChannelTitle || item.snippet?.channelTitle || '');
+            if (!matchesVideoIdentity(title, artist, rawTitle, author)) continue;
+            const cleaned = cleanTitle(rawTitle);
             const cand = {
               videoId: item.id.videoId as string,
               title: cleaned.title || title,
-              artist: cleaned.artist || artist,
+              artist: cleaned.artist || author.replace(/\s*-\s*Topic$/i, '') || artist,
             };
             if (matchesAsked(title, artist, cand.title, cand.artist)) {
               const ok = await jouable(cand);
               if (ok) {
-                searchCache.set(cacheKey, ok.videoId);
-                return ok;
+                return remember(ok);
               }
             }
           }
@@ -580,10 +660,9 @@ export class YouTubeService {
       const vids = await pipedSearch(q, 'music_songs');
       /* on essaie les candidats dans l'ordre : le premier n'est pas
          toujours le bon, et le bon n'est pas toujours lisible ici */
-      const hits = [
-        ...vids.filter((v) => matchesAsked(title, artist, v.title, v.artist)),
-        ...(q === title && vids[0] ? [vids[0]] : []),
-      ];
+      // Ne jamais accepter le premier résultat par défaut : il peut être
+      // un autre titre ou le même titre d'un artiste clairement différent.
+      const hits = vids.filter((v) => matchesVideoIdentity(title, artist, v.title, v.artist));
       for (const hit of hits.slice(0, 4)) {
         const cleaned = cleanTitle(hit.title || title);
         const ok = await jouable({
@@ -593,8 +672,7 @@ export class YouTubeService {
           durationSeconds: hit.durationSeconds,
         });
         if (ok) {
-          searchCache.set(cacheKey, ok.videoId);
-          return ok;
+          return remember(ok);
         }
       }
     }
@@ -607,13 +685,11 @@ export class YouTubeService {
     if (fromLists) {
       const ok = await jouable(fromLists);
       if (ok) {
-        searchCache.set(cacheKey, ok.videoId);
-        return ok;
+        return remember(ok);
       }
     }
 
-    searchCache.set(cacheKey, '');
-    return null;
+    return remember(null);
   }
 
   /**
@@ -626,17 +702,12 @@ export class YouTubeService {
    * exactement ce que montrait la console de l'auditeur, une liste
    * entière traversée sans qu'une seule note ne sorte.
    *
-   * Deux contrôles, sans clé et sans quota :
-   *   1. `oembed` dit que la vidéo existe et *peut être intégrée* ;
-   *   2. `player` (la page publique de YouTube) dit si elle est lisible
-   *      depuis ce pays : `playabilityStatus.status !== 'OK'` → le
-   *      lecteur affichera un message, pas de la musique.
-   *
-   * `null` = on ne sait pas (réseau muet, page illisible). On ne jette
-   * jamais un morceau sur un doute : seule une réponse claire « non »
-   * l'écarte. Les deux réponses sont mises en cache une heure : une
-   * vidéo qui bloque aujourd'hui ne bloquera pas forcément demain, mais
-   * pas besoin de la redemander vingt fois pendant un blend.
+   * Le contrôle utilisable ici est `oembed` : il renseigne le titre et
+   * la chaîne, et peut signaler une vidéo supprimée ou privée. Il ne dit
+   * pas si elle sera effectivement lisible dans ce pays ou ce compte.
+   * `null` = on ne sait pas (réseau muet, page illisible) ; seul un refus
+   * clair est écarté. Les réponses concluantes sont mises en cache une
+   * heure, pas les échecs réseau temporaires.
    */
   public async estJouable(videoId: string): Promise<{
     ok: boolean | null; raison: string; duree?: number; titre?: string; artiste?: string;
@@ -650,11 +721,9 @@ export class YouTubeService {
        statut de lecture, blocage pays, refus d'intégration — mais il
        répond 403 à un navigateur et n'envoie aucun en-tête CORS : c'est
        une voie morte, on ne la prend pas. `oembed`, lui, répond avec
-       CORS, sans clé et sans quota, et rend exactement ce qui nous
-       intéresse : 200 = la vidéo existe **et** accepte l'intégration
-       (c'est sa raison d'être) ; 400/401/404 = elle a disparu, elle est
-       privée, ou son propriétaire refuse l'iframe — dans les trois cas
-       notre lecteur affichera un cadre vide.
+       CORS, sans clé et sans quota : une réponse 200 fournit l'identité,
+       tandis qu'un 400/401/404 peut signaler une vidéo inaccessible.
+       Même avec 200, la lecture intégrée peut échouer pour d'autres raisons.
        403/5xx/réseau muet = on ne sait pas : on ne condamne pas. */
     const meta = await verifyVideo(videoId).catch(() => null);
     const val: { ok: boolean | null; raison: string; duree?: number; titre?: string; artiste?: string } = meta
@@ -663,7 +732,8 @@ export class YouTubeService {
         : { ok: true, raison: '', titre: meta.title, artiste: meta.author })
       : { ok: null, raison: 'vérification impossible' };
 
-    jouableCache.set(videoId, { at: Date.now() + JOUABLE_TTL, val });
+    // Un réseau muet est un état temporaire, pas un avis d'une heure.
+    if (val.ok !== null) jouableCache.set(videoId, { at: Date.now() + JOUABLE_TTL, val });
     return val;
   }
 
@@ -768,7 +838,8 @@ export class YouTubeService {
     for (const tracks of playlistTracksCache.values()) {
       for (const t of tracks) {
         if (!t.videoId) continue;
-        if (matchesAsked(title, artist, t.title, t.artist)) {
+        if (matchesAsked(title, artist, t.title, t.artist)
+          && (!artist || artistMatches(t.artist, artist) || artistMatches(artist, t.artist))) {
           return {
             videoId: t.videoId,
             title: t.title,

@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   KeyRound, ShieldCheck, Check, ExternalLink, Palette, MonitorSmartphone,
-  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, Cloud,
+  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, Cloud, Ban, X,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
@@ -9,11 +9,12 @@ import { Button, ModeSwitch } from '../ui';
 import { inspectModels } from '../../services/gemini';
 import { useInstall, InstallHint, installPossible } from '../../lib/pwa';
 import { clientIdGoogle, GEMINI_API_KEY } from '../../config/app';
+import { getExclusionRecords } from '../../services/storage';
 
 /* Réglages : apparence (clair / sombre), compte YouTube, clés & API.
    Le modèle Gemini n'est plus un choix : la cascade est automatique. */
 export const SettingsView: React.FC = () => {
-  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState } = useData();
+  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState, exclusions, blockTrack, unblockExclusion } = useData();
   const { mode, toggleMode, showToast, restartOnboarding } = useUI();
   const pwa = useInstall();
   /* aucune clé par défaut : si elles manquent, on le dit ici, en clair,
@@ -30,6 +31,17 @@ export const SettingsView: React.FC = () => {
   ].filter(Boolean);
 
   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
+  const [banArtist, setBanArtist] = useState('');
+  const [banTitle, setBanTitle] = useState('');
+  useEffect(() => setGeminiKey(settings.geminiApiKey || ''), [settings.geminiApiKey]);
+  const records = getExclusionRecords().filter((r) => !r.deleted);
+  const addBan = (kind: 'track' | 'artist') => {
+    try {
+      blockTrack({ artist: banArtist, title: banTitle }, kind);
+      setBanTitle(''); if (kind === 'artist') setBanArtist('');
+      showToast(kind === 'artist' ? 'Artiste bloqué.' : 'Musique bloquée.');
+    } catch (e: any) { showToast(e?.message || 'Impossible de bloquer.'); }
+  };
 
   /* ── le diagnostic du moteur ──
      On demande à l'API, avec la clé saisie, ce qu'elle sait faire. Ce
@@ -171,14 +183,19 @@ export const SettingsView: React.FC = () => {
               {syncState.phase === 'sans-portee'
                 ? 'La synchro demande un accès Drive qui manque à cette connexion.'
                 : syncState.phase === 'erreur'
-                  ? 'Synchro en attente — tes données restent sur cet appareil, elles repartiront d’elles-mêmes.'
-                  : 'Synchronisation active : tes goûts, tes avis, ton mode et ton blend te suivent sur tous tes appareils.'}
+                  ? 'Synchro en attente — tes données restent sur cet appareil ; un nouvel essai sera fait quand l’app sera ouverte et connectée.'
+                  : syncState.phase === 'envoi'
+                    ? 'Synchronisation en cours…'
+                    : 'Synchronisation active : exclusions, historique récent, mode, clé Gemini et blends sont échangés avec ton compte.'}
             </span>
             {syncState.phase === 'sans-portee' && (
               <button className="btn-ghost" onClick={login}>Réactiver</button>
             )}
           </p>
         )}
+        {isAuthenticated && <p className="ink-3" style={{ margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.45 }}>
+          Après des changements simultanés, laisse les appareils connectés quelques minutes pour qu’ils se relisent. Drive ne garantit pas une fusion atomique ; hors ligne, l’envoi et le nettoyage attendent la connexion.
+        </p>}
         <p className="ink-3" style={{ margin: '10px 0 0', fontSize: 11.5 }}>
           Une playlist manque ? Vérifie que le compte choisi dans la fenêtre Google est bien celui où se trouvent tes playlists.
         </p>
@@ -198,13 +215,36 @@ export const SettingsView: React.FC = () => {
         </details>
       </Card>
 
+      <div id="exclusions">
+        <Card icon={<Ban size={17} />} title="Exclusions" sub="Ces musiques et artistes ne seront plus proposés. Synchronisés avec ton compte Google quand tu es connecté.">
+          <p className="sb-field-note" style={{ marginTop: 0 }}>
+            {exclusions.tracks.length} musique(s) · {exclusions.artists.length} artiste(s). Bloquer une musique ne bloque pas automatiquement son artiste.
+            Les anciens pouces ne sont pas convertis en blocages.
+          </p>
+          {records.length ? <div className="sb-exclusion-list">
+            {records.map((r) => <div className="sb-exclusion-row" key={r.id}>
+              <span><strong>{r.kind === 'artist' ? r.artist : r.title}</strong><small>{r.kind === 'artist' ? 'Artiste' : `Musique · ${r.artist}`}</small></span>
+              <button className="chip" aria-label={`Débloquer ${r.kind === 'artist' ? r.artist : r.title}`} onClick={() => { unblockExclusion(r.id); showToast('Exclusion retirée.'); }}><X size={14} /> Débloquer</button>
+            </div>)}
+          </div> : <p className="sb-field-note">Aucune exclusion pour le moment.</p>}
+          <div className="sb-exclusion-add">
+            <label>Artiste<input value={banArtist} onChange={(e) => setBanArtist(e.target.value)} placeholder="Nom de l’artiste" /></label>
+            <label>Musique <span className="ink-3">(pour bloquer un titre)</span><input value={banTitle} onChange={(e) => setBanTitle(e.target.value)} placeholder="Titre du morceau" /></label>
+            <div className="sb-exclusion-buttons">
+              <button className="chip" disabled={!banArtist.trim() || !banTitle.trim()} onClick={() => addBan('track')}>Bloquer cette musique</button>
+              <button className="chip" disabled={!banArtist.trim()} onClick={() => addBan('artist')}>Bloquer cet artiste</button>
+            </div>
+          </div>
+        </Card>
+      </div>
+
       {/* clés */}
       <Card
         icon={<KeyRound size={17} />}
         title="Clés & API"
         sub={
           isAuthenticated
-            ? 'Ta clé reste dans l’app — et suit ton compte sur tes autres appareils.'
+            ? 'La clé est enregistrée en clair dans les données privées de l’application sur ton Drive et suit ton compte sur tes autres appareils.'
             : 'Stockée uniquement dans ce navigateur.'
         }
       >
@@ -217,7 +257,7 @@ export const SettingsView: React.FC = () => {
         <p className="sb-field-note">
           La seule clé de toute l’application. Gratuite sur{' '}
           <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">aistudio.google.com/app/apikey</a>.
-          Facultative : sans clé, l’app compose par voisinage YouTube et l’écrit sur le blend.
+          Facultative pour un blend classique ; l’assistant et ses consignes ont besoin de Gemini. Sans clé, le blend classique utilise le voisinage YouTube.
         </p>
       </Card>
 
@@ -225,7 +265,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.30
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.31
         </span>
       </div>
     </div>

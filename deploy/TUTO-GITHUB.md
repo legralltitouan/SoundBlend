@@ -1,7 +1,7 @@
 # Mettre SoundBlend sur GitHub — le tutoriel
 
-> **Version 6.9.30 :** pour mettre à jour un dépôt existant, suivre en priorité
-> `MISE-A-JOUR-GITHUB-v6-9-30.md` et le script fourni. L'identifiant OAuth
+> **Version 6.9.31 :** pour mettre à jour un dépôt existant, suivre en priorité
+> `MISE-A-JOUR-GITHUB-v6-9-31.md` et le script fourni. L'identifiant OAuth
 > public est déjà dans `src/config/app.ts` ; aucune clé YouTube n'est demandée.
 
 *De zéro à une adresse https qui marche 24 h/24, sans PC allumé, sans
@@ -25,10 +25,11 @@ Trois choses à savoir, et elles règlent la question pour de bon :
    `.gitignore` — vérifié : Git refuse `.env`, `.env.backup`,
    `.env.production.local` et n'accepte que `.env.example` (le modèle
    vide).
-3. **En ligne, les clés se saisissent dans l'app**, écran
-   *Réglages → Clés & API*. Elles restent dans **ton** navigateur
-   (`localStorage`), sur **ton** téléphone. Elles ne sont envoyées à
-   aucun serveur — sauf directement à Google, qui les vérifie.
+3. **En ligne, la clé Gemini personnelle se saisit dans l'app**, écran
+   *Réglages → Clés & API*. Elle est conservée dans le navigateur et envoyée
+   à Google pour les appels Gemini. Si la synchronisation Drive est active,
+   elle est aussi enregistrée en clair dans l'espace privé `appDataFolder`
+   du compte. Les recherches de titres peuvent passer par des instances Piped.
 
 Résultat : ton dépôt peut être **public**, il ne contient aucun secret.
 C'est d'ailleurs obligatoire pour un dépôt privé.
@@ -83,9 +84,9 @@ dossier) :
 
 | Dossier à déposer | Contenu |
 | --- | --- |
-| `src/` | tout le code de l'app (44 fichiers) |
-| `public/` | icônes, manifeste, service worker (11 fichiers) |
-| `deploy/` | le mode d'emploi de l'hébergement (1 fichier) |
+| `src/` | tout le code de l'app |
+| `public/` | icônes, manifeste, service worker |
+| `deploy/` | le mode d'emploi de l'hébergement |
 
 À chaque dépôt, en bas de page, clique sur **Commit changes**.
 
@@ -233,56 +234,18 @@ l'application utilise la connexion Google ou son repli de recherche.
 
 ---
 
-## Mettre à jour l'app plus tard (la méthode qui marche)
+## Mettre à jour un dépôt existant
 
-Ton dépôt a une particularité : **le contenu de l'app est à la racine**
-(`src/`, `public/`, `index.html`, `package.json`, `.github/workflows/`)
-— et c'est ce que ton `pages.yml` attend. On ne change donc **jamais**
-la structure, on remplace seulement les fichiers.
+Suis `MISE-A-JOUR-GITHUB-v6-9-31.md`, fourni dans l'archive. Sur Windows,
+le script `MAJ-SoundBlend-v6.9.31.bat`, placé à la racine du dépôt, copie les fichiers depuis le dossier
+`src-v6.9.31` extrait, vérifie les modifications locales, puis crée un
+commit si nécessaire et envoie sur `main`. Lis la notice avant de l'exécuter : le script
+n'a pas été testé sous Windows dans l'environnement de préparation. Il ne
+modifie pas ton workflow `.github/workflows/pages.yml`.
 
-### Méthode A — glisser-déposer (la plus simple)
-
-1. Sur GitHub, ouvre le dépôt `legralltitouan/SoundBlend`.
-2. **Add file** → **Upload files**.
-3. Ouvre le dossier `src-v6.9.30/` livré dans l'archive, sélectionne
-   **tout ce qu'il contient** (`src`, `public`, `deploy`, les fichiers de
-   la racine…) et dépose-le dans la page.
-4. En bas, écris le message (`v6.9.30 — synchronisation du clip`), puis **Commit changes**.
-5. ⚠️ **Ne dépose jamais** `.github/workflows/pages.yml` : ton fichier
-   actuel fonctionne. GitHub le remplacerait par une variante prévue
-   pour un autre rangement (`soundblend-app/`), et le site casserait.
-   Si tu dois le modifier, fais-le au crayon, directement dans GitHub.
-
-GitHub lance alors *Publier sur GitHub Pages* : onglet **Actions**, la
-pastille passe au vert en une à deux minutes, et l'adresse est à jour.
-
-### Méthode B — en ligne de commande (si tu as Git sur ton PC)
-
-```bash
-# dans le dossier qui contient le contenu de src-v6.9.30/
-git clone https://github.com/legralltitouan/SoundBlend.git
-cd SoundBlend
-
-# on remplace le contenu de l'app, sans toucher au workflow
-cp -r /chemin/vers/src-v6.9.30/src            .
-cp -r /chemin/vers/src-v6.9.30/public         .
-cp -r /chemin/vers/src-v6.9.30/deploy         .
-cp    /chemin/vers/src-v6.9.30/index.html     .
-cp    /chemin/vers/src-v6.9.30/package.json   .
-cp    /chemin/vers/src-v6.9.30/package-lock.json .
-cp    /chemin/vers/src-v6.9.30/*.js  .        # vite, tailwind, postcss
-cp    /chemin/vers/src-v6.9.30/tsconfig*.json .
-
-git add -A && git commit -m "v6.9.8" && git push
-```
-
-### Vérifier que la mise à jour est bien en ligne
-
-1. **Actions** → le dernier *Publier sur GitHub Pages* est vert.
-2. Ouvre le site, puis **Réglages** en bas de l'écran : la version
-   affichée doit être **v6.9.8**.
-3. Si le téléphone montre encore l'ancienne version : ferme l'onglet,
-   rouvre-le (le service worker met le site en cache).
+Après publication, vérifie l'onglet **Actions**, puis **Réglages →
+SoundBlend AI · v6.9.31**. Si l'ancienne version reste visible, ferme et
+rouvre tous les onglets de l'application.
 
 ---
 
@@ -332,5 +295,5 @@ dépose jamais.
 | 4 | Settings → Pages | Source : **GitHub Actions** |
 | 5 | Actions | attendre le vert |
 | 6 | téléphone | installer depuis la carte |
-| 7 | app → Réglages | saisir les 3 clés |
-| 8 | console.cloud.google.com | origine autorisée + restriction de clé |
+| 7 | app → Réglages | connexion Google ; clé Gemini personnelle pour l’assistant |
+| 8 | console.cloud.google.com | origine OAuth autorisée et API nécessaires |

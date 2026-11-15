@@ -9,7 +9,7 @@ import { BlendView } from './components/views/BlendView';
 import { HistoryView } from './components/views/HistoryView';
 import { TaskTicker } from './components/ui/TaskTicker';
 import { ReplaceQueueProvider } from './context/ReplaceQueueContext';
-import { TasteView } from './components/views/TasteView';
+import { AssistantView } from './components/views/AssistantView';
 import { SettingsView } from './components/views/SettingsView';
 import { PickerModal } from './components/modals/PickerModal';
 import { ConfigModal } from './components/modals/ConfigModal';
@@ -25,7 +25,7 @@ const Router: React.FC = () => {
   const { view } = useUI();
   if (view === 'blend') return <BlendView />;
   if (view === 'history') return <HistoryView />;
-  if (view === 'taste') return <TasteView />;
+  if (view === 'assistant') return <AssistantView />;
   if (view === 'settings') return <SettingsView />;
   return <LibraryView />;
 };

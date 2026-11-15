@@ -1,187 +1,72 @@
-# SoundBlend — site complet (YouTube Music)
+# SoundBlend AI · 6.9.31
 
-Application web de création de playlists par IA sur ta bibliothèque YouTube.
-Une seule peau : **YouTube Music** — noir ou blanc pur, un seul accent rouge
-(`#ff0033`), typographie fine, pochettes dominantes, aucune ombre, aucun flou
-décoratif. L'agencement est celui de l'app mobile : hero + puces, grille de
-pochettes, listes de titres nues, barre de lecture pleine largeur.
+Application web pour écouter sa bibliothèque YouTube et composer des blends. Cette version remplace l'ancien écran **Goûts** par un **Assistant** conversationnel ; elle conserve le lecteur et l'export vers YouTube.
 
----
+## Utiliser l'application
 
-## 1. Essayer en localhost (2 minutes)
+- **Bibliothèque** : parcours les playlists du compte connecté, sélectionne des titres et crée un blend. Sans compte, les playlists affichées sont des exemples.
+- **Assistant** : décris ton idée, par exemple « Reprends ma playlist Chill Voiture, ajoute du jazz et rends-la plus énergique ». Gemini répond et peut proposer une source et une consigne modifiables. **Rien n'est généré tant que tu ne presses pas “Générer ce blend”.** Une clé Gemini est nécessaire pour dialoguer et suivre une consigne ; si elle manque ou si le service refuse l'appel, l'application le signale.
+- **Blend / Mes blends** : écoute, remplace ou retire des titres, exporte une playlist, retrouve les blends encore valides. Un blend expire après 14 jours.
+- **Bloquer** : le bouton associé au titre propose deux choix séparés : ne plus proposer **cette musique**, ou ne plus proposer **cet artiste**. Les deux se débloquent séparément dans **Réglages**. Bloquer un morceau ne bannit pas automatiquement son artiste. Les anciens pouces ne sont pas convertis en blocages.
+- **Réglages** : compte, clé Gemini, apparence, état de synchronisation et exclusions. Sur téléphone, ils s'ouvrent par l'avatar de la barre inférieure.
 
-Prérequis : **Node.js 20.19 ou plus** (ou 22.12+) (https://nodejs.org).
+Les découvertes et faces cachées réellement affichées sont mémorisées 14 jours pour éviter de les reproposer. Les amorces explicitement choisies peuvent revenir même si elles sont récentes. L'identification dépend des métadonnées disponibles : des variantes mal étiquetées ou des informations absentes peuvent échapper au rapprochement. Une réponse oEmbed n'est pas une garantie que la vidéo sera lisible dans tous les pays ou pour tous les comptes.
 
-```bash
-cd soundblend-app
+Pendant la composition, une sphère organique animée apparaît en plein écran. Le mouvement réduit du système la fige, y compris lorsqu'on modifie ce réglage en cours d'utilisation.
+
+## Données et confidentialité
+
+Pour répondre, Gemini reçoit la conversation récente, les noms et identifiants des playlists, leurs titres déjà chargés, les blends valides et leurs consignes, ainsi que les exclusions. Une playlist reconnue mais pas encore chargée est lue avant la proposition finale. Lors de la composition, la source sélectionnée et la consigne sont transmises au modèle. Ne saisis pas d'informations que tu ne souhaites pas envoyer à Google.
+
+Les réglages, exclusions, blends et l'historique récent sont d'abord enregistrés dans le navigateur. Après connexion et autorisation, ils peuvent aussi être synchronisés dans l'espace privé **appDataFolder** de Google Drive. **La clé Gemini y est enregistrée en clair** pour suivre le compte sur les autres appareils ; ne partage pas un compte Drive auquel tu ne souhaites pas donner accès à cette clé. Les recherches de morceaux peuvent également passer par des instances Piped publiques ; elles reçoivent la recherche, pas ta clé Gemini.
+
+La synchronisation fusionne les changements, marque les suppressions et prévoit un nouvel essai après une panne. Elle ne dispose pas d'un verrou atomique sur Drive : après des changements simultanés, garde les appareils ouverts et connectés pour qu'ils se relisent. Un blend expiré est retiré localement ; le nettoyage distant attend une connexion. Les tests fournis simulent Drive et deux appareils ; ils ne remplacent pas un essai sur un vrai compte.
+
+## Essayer localement
+
+Prérequis : Node.js 20.19 ou plus, ou 22.12+. Dans le dossier extrait contenant `package.json` :
+
+```sh
 npm install
 npm run dev
 ```
 
-Ouvre ensuite **http://localhost:5173**.
+Ouvre <http://localhost:5173/>. Le client OAuth public figure dans `src/config/app.ts` ; l'origine du site doit être autorisée dans Google Cloud Console. Aucune clé YouTube n'est demandée dans l'interface ; la clé Gemini personnelle se saisit dans **Réglages**. Ne place jamais de clé secrète dans le dépôt, `.env.example` ou le code.
 
-> La connexion Google demande que l'origine utilisée soit autorisée pour
-> l'identifiant OAuth de l'application. Sur un autre port, ajoute l'origine
-> dans Google Cloud Console (voir la section 4). Aucune clé YouTube n'est
-> demandée dans les réglages.
+Pour produire et prévisualiser le site :
 
-> Le premier `npm install` télécharge ~250 Mo de dépendances ; c'est normal.
-
-### Voir la version déjà compilée, sans rien installer
-
-Le dossier `dist/` contient le site prêt à servir :
-
-```bash
-npx serve dist          # ou :  python3 -m http.server --directory dist 8080
+```sh
+npm run build
+npm run preview
 ```
 
-Puis http://localhost:3000 (ou http://localhost:8080).
+La compilation crée `dist/`, servi sur <http://localhost:4173/>. L'archive source ne contient pas les dépendances ni `dist/` ; le site déjà compilé pour la racine `/` est fourni séparément dans `soundblend-dist.zip`.
 
-### Recompiler après une modification
+La PWA peut rouvrir son **interface** hors ligne après une première visite et l'activation de son service worker. La lecture YouTube, la recherche, Gemini et Drive restent des services réseau ; la musique n'est pas téléchargée pour une lecture hors ligne.
 
-```bash
-npm run build           # types + bundle → dist/
-npm run preview         # sert dist/ sur http://localhost:4173
+## GitHub Pages
+
+Pour un dépôt existant, voir `MISE-A-JOUR-GITHUB-v6-9-31.md` et le script accompagnant l'archive. Le workflow `.github/workflows/pages.yml` est conservé : il choisit la base adaptée au nom du dépôt. Pour tester manuellement une compilation en sous-dossier :
+
+```sh
+BASE_PATH=/SoundBlend/ npm run build
 ```
 
----
+Sous PowerShell : `$env:BASE_PATH='/SoundBlend/'; npm run build`. Le paquet `soundblend-dist.zip` utilise au contraire la racine `/` ; GitHub Actions recompile avec sa propre base.
 
-## 2. Les cinq écrans
+## Vérifications et limites
 
-| Écran | Ce qu'on y fait |
+Les tests facultatifs et leurs commandes se trouvent dans `verification/README.md`. Ils couvrent notamment les exclusions, l'historique, la synchronisation Drive simulée, le parcours Assistant, la pagination, la sphère, le lecteur simulé et le rechargement PWA hors ligne. Les appels Gemini, Drive et la plupart des réponses YouTube sont simulés. La connexion et la synchronisation avec un compte réel, l'abonnement Premium et tous les navigateurs/appareils ne sont pas garantis par ces tests.
+
+La connexion Google à SoundBlend n'ouvre pas automatiquement une session YouTube dans l'iframe. Si des publicités apparaissent malgré Premium, connecte le compte abonné sur YouTube dans le même navigateur et vérifie les cookies ; consulte aussi [l'aide YouTube](https://support.google.com/youtube/answer/7437519?hl=fr). Le lecteur muet et le son sont synchronisés au mieux, mais YouTube et les images-clés ne permettent pas de promettre un calage parfait.
+
+## Dépannage rapide
+
+| Situation | À vérifier |
 |---|---|
-| **Bienvenue** | au tout premier lancement : choix du thème (deux cartes cliquables), connexion du compte Google, puis trois puces qui expliquent le principe. Une fois passée, l'app s'ouvre directement |
-| **Bibliothèque** | accueil : « Bonjour <prénom> » + question qui tourne, un seul bouton **Nouveau blend**, grille des sources dont la première tuile reprend le dernier blend, dernier blend détaillé |
-| **Blend** | mosaïque 2×2 des amorces, titre renommable, durée, boutons Écouter / Exporter / Privée-Publique, liste des titres avec catégorie (anchor, deep dive, découverte), 👍 👎, remplacer, retirer, réordonner |
-| **Mes blends** | blends conservés 14 jours sur l'appareil, « n titres · m min », « expire dans X j », écouter / supprimer (2ᵉ clic = confirmation) |
-| **Goûts** | mémoire de l'IA : aimés, écartés, artistes, évités ; onglets en puces ; réinitialiser |
-| **Réglages** | mode clair/sombre, compte YouTube, clés & API. Accessible par **l'avatar du compte**, sous le « + » du rail à gauche sur ordinateur, à droite de la barre basse sur téléphone |
-
-Sur téléphone la navigation passe en barre basse (Bibliothèque, Blends, Goûts,
-puis l'avatar qui ouvre les réglages) ; sur bureau en rail de 76 px à gauche, où
-l'avatar du compte se trouve **sous le bouton « + »**, en bas du rail. La barre
-de lecture reste collée en bas dans les deux cas.
-
-**Ambiance** : trois halos de couleur très diffus dérivent lentement derrière
-les pages (teinte tirée du morceau en cours), recouverts d'un grain fin. Rien
-n'est chargé depuis le réseau : c'est du CSS et une texture SVG inline. Le mode
-« mouvement réduit » du système coupe les animations. La barre de lecture, elle,
-affiche une **vague** : la silhouette du morceau se dessine en entier, la partie
-écoutée se remplit dans la couleur du thème, un halo accompagne la crête. Elle
-bat au rythme de la lecture et s'ouvre au survol.
-
-**Première visite** : l'app s'ouvre sur un écran de bienvenue en trois temps —
-l'ambiance (sombre ou clair, avec aperçu en direct), le compte Google, puis le
-principe en trois lignes. Rien n'est imposé : « Plus tard » laisse entrer sans
-compte (les données de démo prennent le relais). Pour revoir l'intro, supprime
-la clé `soundblend_onboarded` du stockage du navigateur.
-
-**Lecteur** : une seule barre de progression, celle du bord haut de la barre.
-Elle s'épaissit au survol et se manipule au clic, au clic maintenu ou au
-glissement, sur téléphone comme sur ordinateur. À droite, le volume remplace
-l'ancienne seconde barre. Quand un morceau se termine, le suivant de la file
-(playlist ou blend) démarre tout seul.
-
-**Chercher hors de ses playlists** : dans la modale de sélection, tape au moins
-deux lettres — les résultats de tout le catalogue YouTube apparaissent sous
-« Ailleurs sur YouTube », au-dessus des morceaux de la playlist. Tu peux les
-cocher comme les autres.
-
----
-
-## 3. Ce qui fonctionne
-
-- **Connexion Google** (Google Identity Services) → lecture des playlists du
-  compte via YouTube Data API v3. Sans compte, un jeu de **données de démo**
-  identique en structure s'affiche, donc tout est visitable hors connexion.
-- **Lecture audio/vidéo** par l'IFrame API YouTube : file d'attente, précédent /
-  suivant, volume, sourdine, progression, vue plein écran, clip.
-- **Génération Gemini** : on coche quelques amorces, on choisit la durée (20 min
-  → 2 h) et les proportions (anchor / deep dive / découvertes), l'IA compose la
-  playlist et justifie chaque titre. L'application demande à Google les modèles
-  disponibles et affiche le modèle effectivement utilisé ; sans IA, elle
-  propose une sélection de repli sans inventer de morceaux.
-- **Mémoire de goûts** : 👍 / 👎 mémorisés localement, réinjectés dans les
-  consignes envoyées au modèle.
-- **Export** : création d'une vraie playlist dans le compte YouTube Music.
-- **Stockage et synchronisation** : les données sont présentes dans le
-  navigateur. Une fois connecté et si l'autorisation est accordée, goûts,
-  réglages et blends peuvent être synchronisés dans l'espace privé
-  `appDataFolder` du Google Drive du compte, sans serveur SoundBlend.
-- **Accueil vivant** : « Bonjour Titouan. » reprend le prénom du compte
-  connecté, et la question sous le titre tourne toutes les cinq secondes
-  (« Qu'est-ce qu'on écoute ? », « Quel est ton mood musical ? », etc.).
-- **Plein écran habillé** : la pochette du morceau sert de fond d'ambiance
-  flouté (teinte tirée de l'illustration, voile dégradé vers le fond), sur
-  ordinateur comme sur téléphone.
-- **Lecteur invisible** : la vidéo YouTube est jouée dans une iframe placée hors
-  de l'écran (aucune vignette parasite), et rien n'est chargé tant que tu n'as
-  pas lancé un morceau.
-
----
-
-## 4. Compte Google et clé Gemini
-
-L'identifiant client OAuth **public** est déjà configuré dans
-`src/config/app.ts` ; ce n'est pas un secret client. La connexion Google sert
-à accéder aux playlists et, avec l'autorisation appropriée, à synchroniser
-les données dans Google Drive. Aucune clé API YouTube n'est demandée.
-
-La clé Gemini est **personnelle et facultative** : chacun la saisit dans
-Réglages → Clés & API. Elle est envoyée à Google pour les appels Gemini et
-peut être synchronisée dans l'espace `appDataFolder` du compte connecté.
-Ne colle aucune clé secrète dans le code ou le dépôt. Les variables d'exemple
-historiques `VITE_*` ne sont pas utilisées pour cette configuration.
-
-Pour que la connexion Google fonctionne, l'origine du site doit être
-renseignée dans Google Cloud Console → API et services → Identifiants →
-client OAuth → **Origines JavaScript autorisées**, par exemple
-`http://localhost:5173`, `http://localhost:4173` ou le domaine GitHub Pages.
-
-La connexion Google à SoundBlend ne connecte pas forcément le lecteur YouTube
-intégré : pour Premium, ouvre YouTube avec le compte concerné dans le même
-navigateur et vérifie les cookies. [Aide YouTube](https://support.google.com/youtube/answer/7437519?hl=fr).
-
----
-
-## 5. Structure
-
-```
-soundblend-app/
-├── index.html
-├── package.json
-├── vite.config.ts           # dev 5173 · preview 4173
-├── .env / .env.example
-├── dist/                    # build prêt à servir
-└── src/
-    ├── index.css            # feuille unique : tokens, coque, grille, listes, lecteur
-    ├── App.tsx
-    ├── components/
-    │   ├── shell/Shell.tsx          # rail (bureau) / barre basse (téléphone)
-    │   ├── views/                   # Library · Blend · History · Taste · Settings
-    │   ├── modals/                  # Picker (choix des morceaux) · Config · Compte · Export
-    │   ├── player/PlayerBar.tsx     # barre de lecture + plein écran + clip
-    │   └── ui/                      # Modal, boutons, toasts
-    ├── context/                     # Data (bibliothèque, blends) · Player · UI
-    ├── services/                    # youtube.ts · gemini.ts · storage.ts
-    ├── data/mockData.ts             # jeu de démonstration
-    └── types/
-```
-
----
-
-## 6. Dépannage
-
-| Symptôme | Cause / remède |
-|---|---|
-| « Connexion Google refusée » | l'origine `http://localhost:5173` n'est pas dans les origines autorisées du client OAuth |
-| Bibliothèque vide | vérifie le compte Google choisi et que les playlists sont bien accessibles |
-| « Clé Gemini invalide » | clé expirée ou quota épuisé → Réglages → Clés & API, ou remplace la clé |
-| Un titre ne démarre pas | restrictions d'intégration ou disponibilité de la vidéo YouTube |
-| La recherche YouTube répond 403 | vérifie le compte connecté, les autorisations et le quota côté Google |
-| Port déjà pris | `npm run dev -- --port 5300` |
-| Miniatures manquantes | YouTube bloque parfois `i.ytimg.com` (réseau/école) ; les textes restent lisibles |
-
----
-
-Version 6.9.30 — SoundBlend.
+| Connexion Google refusée | Origine autorisée du client OAuth, compte et autorisations. |
+| Bibliothèque ou playlist indisponible | Message affiché, connexion, autorisations et quota YouTube ; réessayer. Une page partielle n'est pas conservée comme une playlist complète. |
+| Assistant indisponible | Clé Gemini personnelle, quota, accès au modèle et réseau ; aucune source inventée n'est lancée. |
+| Exclusion inattendue | Réglages → exclusions ; titre et artiste peuvent être débloqués indépendamment. |
+| Ancienne version visible | Attendre GitHub Actions, fermer les onglets SoundBlend et rouvrir le site. |
+| Lecture impossible | Restrictions YouTube, connexion ou intégration ; une vérification de métadonnées ne garantit pas la lecture. |

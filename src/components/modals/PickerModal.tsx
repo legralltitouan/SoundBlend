@@ -10,6 +10,7 @@ import { Modal, ModalHeader, ModalFooter } from '../ui/Modal';
 import { Button } from '../ui';
 import type { Playlist, Track } from '../../types';
 import { Art, PlaylistArt } from '../ui/Art';
+import { isExcluded } from '../../services/storage';
 
 const fmt = (s: number) => {
   const m = Math.floor((s || 0) / 60);
@@ -28,7 +29,7 @@ export const PickerModal: React.FC = () => {
   const { modal, modalData, closeModal, openModal, design } = useUI();
   const {
     playlists, loadingLibrary, loadPlaylistTracks, libraryError, refreshLibrary,
-    toggleTrack, isSelected, selectedTracks, clearSelection, searchCatalog,
+    toggleTrack, isSelected, selectedTracks, clearSelection, searchCatalog, exclusions,
   } = useData();
   const { playTrack, currentTrack, isPlaying } = usePlayer();
 
@@ -37,6 +38,8 @@ export const PickerModal: React.FC = () => {
   const [mobileTracks, setMobileTracks] = useState(false);
   const [query, setQuery] = useState('');
   const [loadingTracks, setLoadingTracks] = useState(false);
+  const [tracksError, setTracksError] = useState('');
+  const [tracksAttempt, setTracksAttempt] = useState(0);
   /* résultats venus du catalogue YouTube, en plus des playlists */
   const [catalog, setCatalog] = useState<Track[]>([]);
   const [searching, setSearching] = useState(false);
@@ -70,13 +73,18 @@ export const PickerModal: React.FC = () => {
   // charge les morceaux de la playlist active
   useEffect(() => {
     if (!open || !activeId) return;
+    let cancelled = false;
+    setTracksError('');
     const pl = playlists.find((p) => p.id === activeId);
     if (pl && (!pl.tracks || pl.tracks.length === 0)) {
       setLoadingTracks(true);
-      loadPlaylistTracks(activeId).finally(() => setLoadingTracks(false));
-    }
+      void loadPlaylistTracks(activeId)
+        .catch((e: Error) => { if (!cancelled) setTracksError(e.message || 'Impossible de lire cette playlist.'); })
+        .finally(() => { if (!cancelled) setLoadingTracks(false); });
+    } else setLoadingTracks(false);
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, activeId]);
+  }, [open, activeId, tracksAttempt]);
 
   /* requête tapée : on interroge le catalogue après une courte pause */
   useEffect(() => {
@@ -103,10 +111,10 @@ export const PickerModal: React.FC = () => {
   const active = useMemo(() => playlists.find((p) => p.id === activeId) || null, [playlists, activeId]);
   const tracks = active?.tracks || [];
   const inPlaylist = tracks.filter(
-    (t) => t.title.toLowerCase().includes(query.toLowerCase()) || t.artist.toLowerCase().includes(query.toLowerCase()),
+    (t) => !isExcluded(t, exclusions) && (t.title.toLowerCase().includes(query.toLowerCase()) || t.artist.toLowerCase().includes(query.toLowerCase())),
   );
   const seen = new Set(inPlaylist.map((t) => t.videoId));
-  const extra = catalog.filter((t) => !seen.has(t.videoId));
+  const extra = catalog.filter((t) => !seen.has(t.videoId) && !isExcluded(t, exclusions));
   /* en haut : ce que la recherche trouve ailleurs sur YouTube */
   const filtered = [...extra, ...inPlaylist];
   const hasQuery = query.trim().length >= 2;
@@ -175,6 +183,9 @@ export const PickerModal: React.FC = () => {
                   {Array.from({ length: 8 }).map((_, i) => <div key={i} className="skeleton" style={{ height: 54, borderRadius: 10 }} />)}
                 </div>
               )}
+              {active && !loadingTracks && tracksError && <p className="ink-2" role="alert" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                {tracksError} <button className="chip" onClick={() => setTracksAttempt((n) => n + 1)}>Réessayer</button>
+              </p>}
               {!active && !hasQuery && <p className="ink-3" style={{ padding: 30, fontSize: 13 }}>Choisis une playlist à gauche.</p>}
               {searching && (
                 <p className="ink-3" style={{ fontSize: 12, padding: '10px 8px 4px', display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -369,7 +380,10 @@ export const PickerModal: React.FC = () => {
                 </div>
               )}
 
-              {active && !loadingTracks && filtered.length === 0 && (
+              {active && !loadingTracks && tracksError && <p className="ink-2" role="alert" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                {tracksError} <button className="chip" onClick={() => setTracksAttempt((n) => n + 1)}>Réessayer</button>
+              </p>}
+              {active && !loadingTracks && !tracksError && filtered.length === 0 && (
                 <p className="ink-3" style={{ textAlign: 'center', padding: 40, fontSize: 13 }}>Aucun morceau ne correspond.</p>
               )}
 

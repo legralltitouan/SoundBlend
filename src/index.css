@@ -2558,8 +2558,7 @@ html[data-mode='light'] .sb-dose-name { color: #fff; text-shadow: 0 1px 6px rgba
      aucun bord visible où que la boule passe */
   contain: strict;
 }
-/* c'est un canvas désormais : le filtre SVG recalculé à chaque image
-   laissait un bord net et des marches dans les dégradés sombres */
+/* La référence est reproduite en SVG : ellipses floutées et grain masqué. */
 .sb-organic-svg {
   position: absolute; inset: 0;
   display: block;
@@ -2951,3 +2950,64 @@ html[data-mode='dark'] .sb-install-done svg { color: #3ddc84; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--ink-2); flex: 0 0 auto;
 }
+
+/* Exclusions : une décision explicite, utilisable aussi depuis le lecteur. */
+.sb-block-backdrop { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.68); }
+.sb-block-dialog { width: min(440px, 100%); padding: 22px; border: 1px solid var(--line-2); border-radius: 20px; background: var(--bg-2); color: var(--ink); box-shadow: 0 24px 80px rgba(0,0,0,.3); }
+.sb-block-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sb-block-heading h2 { margin: 0 0 6px; font-size: 21px; }
+.sb-block-heading p, .sb-block-explain { color: var(--ink-2); line-height: 1.5; font-size: 13px; }
+.sb-block-heading p { margin: 0; }
+.sb-block-explain { margin: 16px 0; }
+.sb-block-choice { width: 100%; text-align: left; padding: 14px 16px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--bg); color: var(--ink); cursor: pointer; margin-top: 8px; }
+.sb-block-choice:hover, .sb-block-choice:focus-visible { border-color: var(--accent); outline: none; }
+.sb-block-choice strong, .sb-block-choice span { display: block; }
+.sb-block-choice strong { font-size: 13px; }
+.sb-block-choice span { margin-top: 5px; font-size: 12px; color: var(--ink-3); }
+.sb-exclusion-list { display: grid; gap: 4px; margin: 14px 0; }
+.sb-exclusion-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sb-exclusion-row span { min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.sb-exclusion-row strong, .sb-exclusion-row small { display: block; }
+.sb-exclusion-row small { color: var(--ink-3); margin-top: 4px; }
+.sb-exclusion-add { display: grid; gap: 10px; margin-top: 18px; }
+.sb-exclusion-add label { font-size: 12px; color: var(--ink-2); }
+.sb-exclusion-add input { display: block; width: 100%; margin-top: 6px; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; background: var(--bg); color: var(--ink); }
+.sb-exclusion-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.sb-exclusion-buttons button:disabled { opacity: .42; cursor: not-allowed; }
+
+/* Assistant : contexte réel, dialogue, puis proposition explicite. */
+.sb-assistant { max-width: 760px; }
+.sb-assistant-context { display: flex; align-items: center; gap: 8px; color: var(--accent); font-size: 12px; margin: 0 0 10px; }
+.sb-assistant-note { font-size: 12px; line-height: 1.5; color: var(--ink-3); margin: 8px 0 14px; }
+.sb-chat { display: grid; gap: 12px; min-height: 180px; padding: 12px 0; }
+.sb-chat-empty { text-align: center; padding: 26px 16px; color: var(--ink-2); }
+.sb-chat-empty > span { display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); }
+.sb-chat-empty h2 { color: var(--ink); font-size: 18px; margin: 16px 0 6px; }
+.sb-chat-empty p { font-size: 13px; margin: 0 auto 16px; max-width: 360px; line-height: 1.5; }
+.sb-chat-message { width: fit-content; max-width: min(88%, 620px); padding: 12px 15px; border-radius: 15px; background: var(--bg-2); border: 1px solid var(--line); }
+.sb-chat-message--user { justify-self: end; background: var(--accent-soft); border-color: transparent; }
+.sb-chat-label { color: var(--ink-3); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+.sb-chat-message p { margin: 6px 0 0; white-space: pre-wrap; font-size: 13px; line-height: 1.55; color: var(--ink); overflow-wrap: anywhere; }
+.sb-chat-thinking { display: flex; gap: 8px; align-items: center; color: var(--ink-3); font-size: 12px; }
+.sb-assistant-error { padding: 12px 14px; background: var(--accent-soft); border-radius: 12px; color: var(--ink); font-size: 13px; }
+.sb-assistant-plan { border: 1px solid var(--line-2); border-radius: 17px; background: var(--bg-2); padding: 18px; margin: 14px 0; display: grid; gap: 13px; }
+.sb-assistant-plan-heading { display: flex; gap: 10px; color: var(--accent); }
+.sb-assistant-plan-heading strong { color: var(--ink); font-size: 14px; }
+.sb-assistant-plan-heading p { color: var(--ink-3); font-size: 12px; margin: 4px 0 0; }
+.sb-assistant-plan label { display: grid; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.sb-assistant-plan select, .sb-assistant-plan textarea { width: 100%; padding: 10px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg); color: var(--ink); font: inherit; }
+.sb-assistant-plan textarea { resize: vertical; line-height: 1.45; }
+.sb-assistant-plan-bottom { display: flex; gap: 12px; justify-content: space-between; align-items: end; flex-wrap: wrap; }
+.sb-assistant-plan-bottom label { min-width: 110px; }
+.sb-chat-compose { display: flex; align-items: end; gap: 10px; margin-top: 16px; padding: 10px; border: 1px solid var(--line-2); background: var(--bg-2); border-radius: 16px; }
+.sb-chat-compose textarea { flex: 1; min-width: 0; resize: vertical; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; outline: none; padding: 8px; }
+.sb-chat-compose button { border: 0; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: white; cursor: pointer; flex: none; }
+.sb-chat-compose button:disabled, .sb-assistant-plan button:disabled { opacity: .45; cursor: not-allowed; }
+/* Comme la légende de la référence : le texte est au bas de l'écran,
+   sans voile superposé qui décolore le pigment et son grain. */
+.sb-gen-caption { position: absolute; z-index: 3; bottom: max(7vh, 36px); left: 50%; transform: translateX(-50%); width: min(90%, 560px); text-align: center; pointer-events: none; color: #fff; text-shadow: 0 1px 12px #07060a; }
+.sb-gen-caption-title { font-size: 12px; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; animation: sb-reference-pulse 2.8s ease-in-out infinite; }
+.sb-gen-caption p { font-size: 12px; line-height: 1.45; margin: 10px 0 0; }
+.sb-gen[data-mode='light'] .sb-gen-caption { color: #4a3833; text-shadow: 0 1px 12px #fdf7f0; }
+@keyframes sb-reference-pulse { 0%,100% { opacity: .45; } 50% { opacity: .92; } }
+@media (prefers-reduced-motion: reduce) { .sb-gen-caption-title { animation: none; } }

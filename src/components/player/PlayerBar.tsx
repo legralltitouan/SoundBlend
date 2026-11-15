@@ -2,10 +2,10 @@ import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, ChevronUp,
-  ThumbsUp, ThumbsDown, ListMusic, ExternalLink,
+  ListMusic, ExternalLink,
 } from 'lucide-react';
 import { usePlayer } from '../../context/PlayerContext';
-import { useData } from '../../context/DataContext';
+import { BlockButton } from '../ui/BlockButton';
 import { usePlayerSheet, useViewportHeight } from './PlayerGestures';
 import { Art, useCover } from '../ui/Art';
 import { usePalette, paletteToCss } from '../../lib/palette';
@@ -44,17 +44,6 @@ export const PlayerBar: React.FC = () => {
     togglePlay, seekTo, setVolume, toggleMute, nextTrack, prevTrack, stepTrack, mode, toggleMode, clip, attachVideo,
     queue,
   } = usePlayer();
-
-  /* même registre que la liste du blend : un vote posé ici s'y voit, et
-     réciproquement — plus de décalage entre les deux affichages */
-  const { ratingOf, setRating } = useData();
-  const ownRating = currentTrack ? ratingOf(currentTrack) ?? currentTrack.userRating ?? null : null;
-  const vote = (r: 'liked' | 'disliked') => {
-    if (!currentTrack) return;
-    /* un second appui sur le même pouce retire l'avis — et « Tes goûts »
-       doit le refléter, c'est setRating qui s'en charge. */
-    setRating(currentTrack, ownRating === r ? null : r);
-  };
 
   const vh = useViewportHeight();
   /* la position visée pendant qu'on glisse sur la barre (null = au repos) */
@@ -178,24 +167,7 @@ export const PlayerBar: React.FC = () => {
             </div>
 
             <div className="nowbar-actions">
-              <button
-                className="icon-btn rate-btn"
-                data-on={ownRating === 'liked' ? 'true' : 'false'}
-                onClick={() => vote('liked')}
-                aria-label="J’aime"
-                aria-pressed={ownRating === 'liked'}
-              >
-                <ThumbsUp size={16} strokeWidth={1.9} fill={ownRating === 'liked' ? 'currentColor' : 'none'} />
-              </button>
-              <button
-                className="icon-btn rate-btn"
-                data-on={ownRating === 'disliked' ? 'true' : 'false'}
-                onClick={() => vote('disliked')}
-                aria-label="Je n’aime pas"
-                aria-pressed={ownRating === 'disliked'}
-              >
-                <ThumbsDown size={16} strokeWidth={1.9} fill={ownRating === 'disliked' ? 'currentColor' : 'none'} />
-              </button>
+              {currentTrack && <BlockButton track={currentTrack} size={16} />}
               <button className="icon-btn" onClick={() => sheet.open()} aria-label="File d’attente">
                 <ListMusic size={16} strokeWidth={1.9} />
               </button>
@@ -355,10 +327,7 @@ export const PlayerBar: React.FC = () => {
                     c'est le gestionnaire qui décide, à l'appui, si le doigt
                     part sur un bouton (clic) ou sur le vide (geste). */}
                 <div className="nowplaying-controls">
-                  <button className="icon-btn nowplaying-vote" data-on={ownRating === 'disliked' ? 'true' : 'false'}
-                    onClick={() => vote('disliked')} aria-label="Je n’aime pas" aria-pressed={ownRating === 'disliked'}>
-                    <ThumbsDown size={19} strokeWidth={1.8} fill={ownRating === 'disliked' ? 'currentColor' : 'none'} />
-                  </button>
+                  {currentTrack && <BlockButton track={currentTrack} className="nowplaying-vote" size={19} />}
                   <button className="icon-btn" onClick={prevTrack} aria-label="Précédent">
                     <SkipBack size={24} strokeWidth={1.6} />
                   </button>
@@ -370,10 +339,7 @@ export const PlayerBar: React.FC = () => {
                   <button className="icon-btn" onClick={nextTrack} aria-label="Suivant">
                     <SkipForward size={24} strokeWidth={1.6} />
                   </button>
-                  <button className="icon-btn nowplaying-vote" data-on={ownRating === 'liked' ? 'true' : 'false'}
-                    onClick={() => vote('liked')} aria-label="J’aime" aria-pressed={ownRating === 'liked'}>
-                    <ThumbsUp size={19} strokeWidth={1.8} fill={ownRating === 'liked' ? 'currentColor' : 'none'} />
-                  </button>
+                  <span className="nowplaying-vote" aria-hidden="true" />
                 </div>
               </div>
 

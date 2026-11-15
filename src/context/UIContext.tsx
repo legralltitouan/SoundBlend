@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState, useCall
 import type { Design, Mode } from './prefs';
 import { getDesign, getMode, applyTheme, choisirMode } from './prefs';
 
-type ViewName = 'library' | 'blend' | 'history' | 'taste' | 'settings';
+type ViewName = 'library' | 'blend' | 'history' | 'assistant' | 'settings';
 type ModalName =
   | 'picker'
   | 'config'
@@ -110,7 +110,7 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     () => ({
       design,
       mode,
-      setMode: setModeState,
+      setMode: (m) => { choisirMode(m); setModeState(m); },
       /* l'interrupteur, c'est un choix : il est daté (voir prefs.ts) pour
          que la synchro sache à qui obéir entre deux appareils */
       toggleMode: () => setModeState((m) => {

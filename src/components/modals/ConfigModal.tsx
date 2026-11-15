@@ -6,7 +6,7 @@ import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
 import { Modal, ModalHeader, ModalFooter, ModalBody } from '../ui/Modal';
 import { Button } from '../ui';
-import { getStoredTasteMemory } from '../../services/storage';
+
 import type { BlendRatio } from '../../types';
 import { RatioWheel, type WheelRatio } from '../ui/RatioWheel';
 
@@ -36,12 +36,12 @@ const CHANNELS = [
 
 export const ConfigModal: React.FC = () => {
   const { modal, closeModal, openModal, setView, showToast, design } = useUI();
-  const { selectedTracks, generate, settings } = useData();
+  const { selectedTracks, generate, settings, exclusions } = useData();
 
   const [minutes, setMinutes] = useState(45);
   const [ratio, setRatio] = useState<BlendRatio>({ anchor: 30, deepDive: 30, fresh: 40 });
 
-  const taste = getStoredTasteMemory();
+
   const target = useMemo(() => Math.max(4, Math.round(minutes / 3.5)), [minutes]);
 
   /* même fonction que celles du moteur (curator.ts) : ce que cet écran
@@ -148,7 +148,7 @@ export const ConfigModal: React.FC = () => {
           </div>
         </ModalBody>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 26px 20px', borderTop: '1px solid var(--line)' }}>
-          <span className="ink-3" style={{ fontSize: 12 }}>{taste.likedArtists.length} artistes aimés · {taste.dislikedArtists.length} écartés</span>
+          <span className="ink-3" style={{ fontSize: 12 }}>{exclusions.tracks.length} musique(s) · {exclusions.artists.length} artiste(s) bloqué(s)</span>
           <span style={{ flex: 1 }} />
           <Button variant="ghost" onClick={closeModal}>Retour</Button>
           <Button onClick={launch}><Sparkles size={15} /> Générer</Button>
@@ -270,16 +270,12 @@ export const ConfigModal: React.FC = () => {
           </div>
         </div>
 
-        {/* mémoire des goûts */}
         <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 16, background: 'var(--accent-soft)' }}>
           <ShieldCheck size={17} style={{ color: 'var(--accent)', flexShrink: 0 }} />
           <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.45 }} className="ink-2">
-            <strong style={{ color: 'var(--ink)' }}>Mémoire active :</strong> {taste.likedArtists.length} artiste(s) aimé(s),{' '}
-            {taste.dislikedArtists.length} écarté(s). Tes avis sont pris en compte.
+            <strong style={{ color: 'var(--ink)' }}>Exclusions actives :</strong> {exclusions.tracks.length} musique(s), {exclusions.artists.length} artiste(s).
           </p>
-          <button onClick={() => { closeModal(); setTimeout(() => setView('taste'), 180); }} className="ink-3" style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 12 }}>
-            Voir
-          </button>
+          <button onClick={() => { closeModal(); setTimeout(() => setView('settings'), 180); }} className="ink-3" style={{ background: 'none', border: 0, cursor: 'pointer', fontSize: 12 }}>Voir</button>
         </div>
       </ModalBody>
 

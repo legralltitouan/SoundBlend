@@ -2,29 +2,29 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title SoundBlend - mise a jour v6.9.30
+title SoundBlend - mise a jour v6.9.31
 
 rem Placer ce script dans le depot Git clone.
-rem Decompresser le paquet src-v6.9.30 a cote du depot.
+rem Decompresser le paquet src-v6.9.31 a cote du depot.
 rem Ce script ne modifie ni .git, ni .github/workflows/pages.yml.
 rem Il refuse les modifications existantes et n'utilise pas reset --hard.
 
 set "RACINE=%~dp0"
 set "SRC="
-for %%D in ("%RACINE%..\src-v6.9.30" "%RACINE%src-v6.9.30" "%RACINE%..\site-v6.9.30" "%RACINE%site-v6.9.30" "%RACINE%..\..\src-v6.9.30") do (
+for %%D in ("%RACINE%..\src-v6.9.31" "%RACINE%src-v6.9.31" "%RACINE%..\site-v6.9.31" "%RACINE%site-v6.9.31" "%RACINE%..\..\src-v6.9.31") do (
   if not defined SRC if exist "%%~fD\src\App.tsx" set "SRC=%%~fD"
 )
 
 echo.
 echo ==========================================================
-echo   SoundBlend - mise a jour v6.9.30
+echo   SoundBlend - mise a jour v6.9.31
 echo   Depot : %CD%
 echo   Source: %SRC%
 echo ==========================================================
 echo.
 
 if not defined SRC (
-  echo [ERREUR] Paquet src-v6.9.30 introuvable.
+  echo [ERREUR] Paquet src-v6.9.31 introuvable.
   echo Decompresse soundblend-site-v6-9.zip a cote du depot, puis relance.
   echo Aucun fichier n'a ete modifie.
   pause
@@ -32,9 +32,9 @@ if not defined SRC (
 )
 if not exist "%SRC%\package.json" goto badsource
 if not exist "%SRC%\public\sw.js" goto badsource
-findstr /L /C:"6.9.30" "%SRC%\package.json" >nul
+findstr /L /C:"6.9.31" "%SRC%\package.json" >nul
 if errorlevel 1 goto badsource
-findstr /L /C:"sb-v6-9-30" "%SRC%\public\sw.js" >nul
+findstr /L /C:"sb-v6-9-31" "%SRC%\public\sw.js" >nul
 if errorlevel 1 goto badsource
 
 git --version >nul 2>&1
@@ -46,6 +46,16 @@ if errorlevel 1 (
 git rev-parse --is-inside-work-tree >nul 2>&1
 if errorlevel 1 (
   echo [ERREUR] Place ce script DANS le depot Git clone.
+  pause
+  exit /b 1
+)
+rem Un sous-dossier du depot n'est pas la racine ou vivent src et public.
+set "GITROOT="
+for /f "delims=" %%R in ('git rev-parse --show-toplevel') do for %%P in ("%%R") do set "GITROOT=%%~fP"
+if not defined GITROOT goto giterror
+if /I not "%CD%"=="%GITROOT%" (
+  echo [ERREUR] Place ce script a la racine du depot, a cote du dossier src.
+  echo Aucun fichier n'a ete modifie.
   pause
   exit /b 1
 )
@@ -78,6 +88,15 @@ if defined CONFLIT (
   exit /b 1
 )
 
+rem Les fichiers non suivis ignores ne figurent pas dans git status.
+rem On refuse aussi leur presence dans les chemins de copie, par prudence.
+call :verifier_ignores
+if errorlevel 1 (
+  echo Deplace ou sauvegarde ces fichiers avant de recommencer. Rien n'a ete copie.
+  pause
+  exit /b 1
+)
+
 echo === 1. Mise a niveau sans effacer les changements ===
 git fetch origin main
 if errorlevel 1 goto giterror
@@ -89,8 +108,16 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Un pull peut changer les regles d'ignorance : controle une seconde fois.
+call :verifier_ignores
+if errorlevel 1 (
+  echo Pull termine, mais aucune copie du paquet. Verifie les fichiers listes.
+  pause
+  exit /b 1
+)
+
 echo.
-echo === 2. Copie des fichiers v6.9.30 ===
+echo === 2. Copie des fichiers v6.9.31 ===
 rem Copie par-dessus, sans supprimer les dossiers ni les fichiers ignores.
 xcopy "%SRC%\src" "src\" /E /I /Y /Q >nul
 if errorlevel 1 goto copyerror
@@ -113,13 +140,13 @@ for %%F in (README.md .env.example index.html package.json package-lock.json pos
 rem Controle de la version et du code de synchronisation.
 findstr /L /C:"synchroniserClip" "src\context\PlayerContext.tsx" >nul
 if errorlevel 1 goto copyerror
-findstr /L /C:"v6.9.30" "src\components\views\SettingsView.tsx" >nul
+findstr /L /C:"v6.9.31" "src\components\views\SettingsView.tsx" >nul
 if errorlevel 1 goto copyerror
-findstr /L /C:"sb-v6-9-30" "public\sw.js" >nul
+findstr /L /C:"sb-v6-9-31" "public\sw.js" >nul
 if errorlevel 1 goto copyerror
 
 rem Une vraie cle API Google ne doit pas etre envoyee par accident.
-findstr /S /I /C:"AIzaSy" src\*.ts src\*.tsx src\*.js src\*.jsx src\*.json index.html >nul 2>&1
+findstr /S /I /C:"AIzaSy" "src\*" "index.html" >nul 2>&1
 if not errorlevel 1 (
   echo [ERREUR] Une chaine ressemblant a une cle Google a ete detectee.
   echo Copie effectuee, mais aucun commit ni envoi. Verifie les fichiers.
@@ -135,7 +162,7 @@ if errorlevel 1 goto giterror
 git diff --cached --quiet
 if errorlevel 2 goto giterror
 if errorlevel 1 (
-  git commit -m "v6.9.30 - synchronisation du clip et aide YouTube Premium"
+  git commit -m "v6.9.31 - assistant, exclusions et synchronisation"
   if errorlevel 1 goto giterror
 ) else (
   echo Aucun changement du paquet a committer.
@@ -145,14 +172,14 @@ if errorlevel 1 goto giterror
 
 echo.
 echo === TERMINE ===
-echo Verifie GitHub Actions, puis Reglages : SoundBlend AI v6.9.30.
-echo Pour Premium, connecte YouTube dans le meme navigateur et verifie ses cookies.
+echo Verifie GitHub Actions, puis Reglages : SoundBlend AI v6.9.31.
+echo Teste Assistant, blocages et synchronisation depuis Reglages.
 git log --oneline -1
 pause
 exit /b 0
 
 :badsource
-echo [ERREUR] Le dossier trouve ne contient pas le paquet v6.9.30 complet.
+echo [ERREUR] Le dossier trouve ne contient pas le paquet v6.9.31 complet.
 echo Aucun fichier n'a ete modifie.
 pause
 exit /b 1
@@ -168,3 +195,13 @@ echo [ERREUR] Une commande Git a echoue. Lis le message ci-dessus.
 echo Un commit local peut deja exister si seul le push a echoue.
 pause
 exit /b 1
+
+:verifier_ignores
+set "IGNORES="
+for /f "delims=" %%L in ('git ls-files --others --ignored --exclude-standard -- src public deploy verification README.md .env.example index.html package.json package-lock.json postcss.config.js tailwind.config.js vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json') do set "IGNORES=1"
+if defined IGNORES (
+  echo [ERREUR] Des fichiers non suivis et ignores sont presents dans les chemins de copie.
+  git ls-files --others --ignored --exclude-standard -- src public deploy verification README.md .env.example index.html package.json package-lock.json postcss.config.js tailwind.config.js vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json
+  exit /b 1
+)
+exit /b 0

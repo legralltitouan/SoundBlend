@@ -1,4 +1,4 @@
-import { TasteMemory, Track, TrackCategory } from '../types';
+import { Exclusions, Track, TrackCategory } from '../types';
 import { getStoredPortrait, saveStoredPortrait, type SoundPortrait } from './storage';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -55,17 +55,20 @@ const arr = (v: any, max = 8): string[] =>
     ? v.map((x) => String(x).trim()).filter((x) => x.length > 0 && x.length < 60).slice(0, max)
     : [];
 
-export const analysisPrompt = (seeds: Track[], taste: TasteMemory, portrait: SoundPortrait | null) => `
+export const analysisPrompt = (seeds: Track[], taste: Exclusions, portrait: SoundPortrait | null, instruction = '', recentArtists: string[] = []) => `
 Tu es un curateur musical. Un auditeur a choisi quelques morceaux d'amorce ; ton premier travail est de les ÉCOUTER, pas encore de proposer quoi que ce soit.
 
 ═══ LES AMORCES ═══
 ${seeds.map((t) => `- "${t.title}" — ${t.artist}`).join('\n')}
 
-═══ CE QUE L'ON SAIT DE SES GOÛTS ═══
-Artistes aimés : ${taste.likedArtists.join(', ') || 'non renseigné'}
-Morceaux aimés : ${taste.likedTracks.slice(0, 12).map((t) => `${t.title} — ${t.artist}`).join(', ') || 'aucun'}
-Artistes écartés (INTERDITS) : ${taste.dislikedArtists.join(', ') || 'aucun'}
-Morceaux écartés (INTERDITS) : ${taste.dislikedTracks.slice(0, 12).map((t) => `${t.title} — ${t.artist}`).join(', ') || 'aucun'}
+═══ INSTRUCTION EXPLICITE DE L'AUDITEUR ═══
+${instruction || 'Respecter le fil sonore des amorces.'}
+
+═══ EXCLUSIONS EXPLICITES ═══
+Artistes interdits : ${taste.artists.join(', ') || 'aucun'}
+Morceaux interdits : ${taste.tracks.map((t) => `${t.title} — ${t.artist}`).join(', ') || 'aucun'}
+Un morceau bloqué ne bannit PAS automatiquement le reste de son artiste.
+Artistes récemment proposés (varier quand possible) : ${recentArtists.slice(-100).join(', ') || 'aucun'}
 ${portrait ? `Portrait établi lors d'une écoute précédente : ${portrait.style}` : ''}
 
 ═══ TA TÂCHE ═══
@@ -74,7 +77,7 @@ Décris ce que ces morceaux ont en commun, avec les mots d'un critique musical �
 - les genres et micro-genres précis
 - les textures et couleurs de production (analogique, saturé, aérien, sec…)
 - l'énergie et le tempo ressenti
-- ce que les goûts de l'auditeur confirment, ou au contraire nuancent : s'il aime des choses éloignées des amorces, dis-le
+- comment la demande explicite de l'auditeur infléchit le style, l'instrumentation et l'énergie
 - les artistes à éviter : ceux qu'il a rejetés, plus ceux qui traîneraient artificiellement dans le même coin et ruineraient le blend
 
 Réponds STRICTEMENT en JSON, sans texte autour :
@@ -107,18 +110,18 @@ export const parseAnalysis = (raw: string | null): Analysis | null => {
 /* ─────────────── 2. comprendre ─────────────── */
 
 /** Le portrait de la personne : déduit de son analyse + de son historique. */
-export const toPortrait = (a: Analysis, taste: TasteMemory): SoundPortrait => ({
+export const toPortrait = (a: Analysis, taste: Exclusions): SoundPortrait => ({
   style: [a.fil, a.gout].filter(Boolean).join(' '),
   genres: a.genres,
   textures: a.textures,
   energy: a.energie,
-  avoid: [...a.eviter, ...taste.dislikedArtists].filter((x, i, all) => all.indexOf(x) === i).slice(0, 12),
+  avoid: [...a.eviter, ...taste.artists].filter((x, i, all) => all.indexOf(x) === i).slice(0, 12),
   at: new Date().toISOString(),
 });
 
 /** Le portrait enregistré (il reste valable jusqu'à ce qu'un blend le
     réécrive). */
-export const portraitFor = (_taste: TasteMemory): SoundPortrait | null =>
+export const portraitFor = (_taste: Exclusions): SoundPortrait | null =>
   getStoredPortrait() || null;
 
 /* ─────────────── le remplacement : un seul rôle, mais le même raisonnement ─────────────── */
@@ -141,11 +144,13 @@ export const replacePrompt = (args: {
   after?: Track;
   seeds: Track[];
   all: Track[];
-  taste: TasteMemory;
+  taste: Exclusions;
   portrait: SoundPortrait | null;
   forbidden: string[];
+  instruction?: string;
+  recentArtists?: string[];
 }) => {
-  const { target, role, index, total, before, after, seeds, all, taste, portrait, forbidden } = args;
+  const { target, role, index, total, before, after, seeds, all, taste, portrait, forbidden, instruction, recentArtists = [] } = args;
   const roleText: Record<TrackCategory, string> = {
     anchor: `« ANCHOR » — un pilier. Choisis UNIQUEMENT parmi les amorces de l'auditeur
 (liste ci-dessous) un morceau qui n'est pas déjà dans le blend.`,
@@ -179,9 +184,12 @@ ${seeds.map((t) => `- « ${t.title} » — ${t.artist}`).join('\n')}
 ═══ LE RESTE DU BLEND (ne rien reproposer) ═══
 ${all.filter((t) => t.id !== target.id).map((t) => `- « ${t.title} » — ${t.artist}`).join('\n') || '- (aucun)'}
 
-═══ SES GOÛTS ═══
-Aimés : ${[...taste.likedArtists, ...taste.likedTracks.slice(0, 12).map((t) => `${t.title} — ${t.artist}`)].join(', ') || 'non renseigné'}
-À éviter absolument : ${[...taste.dislikedArtists, ...taste.dislikedTracks.slice(0, 12).map((t) => `${t.title} — ${t.artist}`)].join(', ') || 'aucun'}
+═══ CONSIGNE ET EXCLUSIONS ═══
+Consigne du blend : ${instruction || 'respecter les amorces'}
+Artistes bloqués : ${taste.artists.join(', ') || 'aucun'}
+Morceaux bloqués : ${taste.tracks.map((t) => `${t.title} — ${t.artist}`).join(', ') || 'aucun'}
+Un morceau bloqué n'interdit pas tout son artiste.
+Artistes récents à varier quand possible : ${recentArtists.slice(-100).join(', ') || 'aucun'}
 
 ═══ DÉJÀ INTERDIT ═══
 ${forbidden.length ? forbidden.slice(-60).map((f) => `- ${f}`).join('\n') : '- (rien)'}
@@ -215,8 +223,10 @@ export const listPrompt = (
   count: number,
   seeds: Track[],
   analysis: Analysis,
-  taste: TasteMemory,
+  taste: Exclusions,
   forbidden: string[],
+  instruction = '',
+  recentArtists: string[] = [],
 ) => {
   const roleText: Record<TrackCategory, string> = {
     anchor: `« ANCHOR » — les piliers du blend.
@@ -231,8 +241,7 @@ des collaborations, des reprises méconnues — ce que la personne n'a probablem
 mis dans ses playlists. Interdits : les titres déjà dans les amorces.`,
     fresh: `« DÉCOUVERTE » — les inconnus qui tomberont juste.
 Choisis ${count} morceaux d'ARTISTES ABSENTS de la liste des amorces, en te fondant sur
-le fil sonore décrit plus haut (mêmes textures, même époque, même énergie) ET sur les
-goûts de la personne (ce qu'elle a aimé guide le choix, ce qu'elle a rejeté l'exclut).
+le fil sonore décrit plus haut et la consigne explicite de l'auditeur. Varie les artistes récents quand possible.
 Aucun de ces artistes ne doit déjà figurer dans les amorces.`,
   };
 
@@ -249,12 +258,15 @@ Textures / production : ${analysis.textures.join(', ') || '—'}
 ═══ LES AMORCES DE L'AUDITEUR ═══
 ${seeds.map((t) => `- "${t.title}" — ${t.artist}`).join('\n')}
 
-═══ SES GOÛTS ═══
-Aimés : ${[...taste.likedArtists, ...taste.likedTracks.slice(0, 10).map((t) => `${t.title} — ${t.artist}`)].join(', ') || 'non renseigné'}
-À éviter absolument : ${[...taste.dislikedArtists, ...taste.dislikedTracks.slice(0, 10).map((t) => `${t.title} — ${t.artist}`)].join(', ') || 'aucun'}
+═══ CONSIGNE ET EXCLUSIONS ═══
+Consigne explicite à respecter : ${instruction || 'suivre le fil sonore des amorces'}
+Artistes bloqués : ${taste.artists.join(', ') || 'aucun'}
+Morceaux bloqués : ${taste.tracks.map((t) => `${t.title} — ${t.artist}`).join(', ') || 'aucun'}
+Ne déduis pas un blocage d'artiste d'un titre bloqué.
+Artistes récemment proposés à varier quand c'est possible : ${recentArtists.slice(-100).join(', ') || 'aucun'}
 
 ═══ DÉJÀ INTERDIT ═══
-Ne propose aucun de ces titres ni aucun morceau du même artiste si l'artiste est listé :
+Ne repropose aucun de ces titres récents ou amorces :
 ${forbidden.length ? forbidden.map((f) => `- ${f}`).join('\n') : '- (rien)'}
 
 ═══ TA SÉLECTION ═══

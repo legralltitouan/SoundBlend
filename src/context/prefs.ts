@@ -53,6 +53,7 @@ export function applyTheme(design: Design, mode: Mode) {
 export function choisirMode(mode: Mode) {
   applyTheme(getDesign(), mode);
   try { localStorage.setItem(MODE_AT_KEY, String(Date.now())); } catch { /* ignore */ }
+  window.dispatchEvent(new CustomEvent('sb:data-changed'));
 }
 
 /** le mode vient d'un autre appareil : on l'applique en reprenant

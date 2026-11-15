@@ -10,12 +10,11 @@ export interface Track {
   durationFormatted?: string;
   videoUrl?: string;
   videoId: string;
-  /** Vérifié sur YouTube (le lecteur répond-il ?) — posé une fois, pour
-      toute la vie du morceau, quand le blend est composé. */
+  /** Indication de vérification à la composition ou à la réparation.
+      Les métadonnées oEmbed ne garantissent pas la lecture réelle. */
   verifie?: boolean;
   category?: TrackCategory;
   rationale?: string;
-  userRating?: 'liked' | 'disliked' | null;
 }
 
 export interface Playlist {
@@ -36,6 +35,8 @@ export interface BlendRatio {
 export interface BlendConfig {
   durationMinutes: number; // e.g. 20, 45, 60, 120
   ratio: BlendRatio;
+  /** Consigne libre fournie par l’assistant, transmise au curateur. */
+  instruction?: string;
 }
 
 export interface GeneratedBlend {
@@ -44,6 +45,9 @@ export interface GeneratedBlend {
   description: string;
   createdAt: string;
   expiresAt: string; // ISO string 14 days later
+  /** Dernière modification locale, pour réconcilier les appareils. */
+  updatedAt?: number;
+  instruction?: string;
   seedTracks: Track[];
   tracks: Track[];
   exportedPlaylistId?: string;
@@ -77,25 +81,30 @@ export type BlendMethod = {
   detail: string;
 };
 
-export interface TasteMemoryItem {
+/** Une exclusion ne découle jamais implicitement d’un avis sur un titre. */
+export interface ExclusionRecord {
   id: string;
-  title: string;
+  kind: 'track' | 'artist';
   artist: string;
-  addedAt: string;
+  title?: string;
+  videoId?: string;
+  updatedAt: number;
+  deleted: boolean;
 }
 
-export interface TasteMemory {
-  likedTracks: TasteMemoryItem[];
-  dislikedTracks: TasteMemoryItem[];
-  likedArtists: string[];
-  dislikedArtists: string[];
-  /**
-   * Tout ce qui a déjà été proposé à cet auditeur, refusé ou non.
-   * Un remplacement ne doit jamais reproposer deux fois le même titre :
-   * c'est ce journal qui l'en empêche, pas le hasard.
-   */
-  seenTracks?: string[];
+export interface Exclusions {
+  tracks: ExclusionRecord[];
+  artists: string[];
 }
+
+export interface DiscoveryRecord {
+  title: string;
+  artist: string;
+  videoId?: string;
+  shownAt: number;
+}
+
+export interface BlendTombstone { at: number; expiresAt: number }
 
 export interface AppSettings {
   googleClientId: string;
