@@ -93,6 +93,14 @@ export const PlayerBar: React.FC = () => {
      continue de tourner pendant la fin du geste (et ne retombe pas d'un
      coup pendant que l'image glisse encore) */
   const coverMix = sheet.mix;
+  /* Le rail et sa pastille suivent exactement la pochette que le doigt
+     fait entrer : à droite c'est la précédente, à gauche la suivante. On
+     mélange des couleurs, pas des teintes HSL (qui feraient parfois un
+     détour par une troisième couleur). */
+  const targetPal = coverMix > 0 ? prevPal : nextPal;
+  const mixPct = Math.min(100, Math.abs(coverMix) * 100);
+  const colorOf = (p: typeof curPal) => `hsl(${p.hues[0]} ${p.sat}% ${p.light}%)`;
+  const selectorTint = `color-mix(in srgb, ${colorOf(curPal)} ${100 - mixPct}%, ${colorOf(targetPal)} ${mixPct}%)`;
 
   if (!currentTrack) return null;
 
@@ -212,13 +220,13 @@ export const PlayerBar: React.FC = () => {
                 style={{
                   ...paletteToCss(prevPal),
                   backgroundImage: prevCover.small ? `url("${prevCover.small}")` : undefined,
-                  opacity: Math.max(0, -coverMix) * 0.9,
+                  opacity: Math.max(0, coverMix) * 0.9,
                 }} />
               <span className="nowplaying-ambience__layer"
                 style={{
                   ...paletteToCss(nextPal),
                   backgroundImage: nextCover.small ? `url("${nextCover.small}")` : undefined,
-                  opacity: Math.max(0, coverMix) * 0.9,
+                  opacity: Math.max(0, -coverMix) * 0.9,
                 }} />
             </div>
 
@@ -234,7 +242,8 @@ export const PlayerBar: React.FC = () => {
                     rail (tu avais raison, ça chargeait un contrôle qui
                     n'est qu'un choix binaire), et la pastille blanche
                     épouse exactement la position choisie. */}
-                <div className="sb-artmode" role="group" aria-label="Image du lecteur" data-mode={mode}>
+                <div className="sb-artmode" role="group" aria-label="Image du lecteur" data-mode={mode}
+                  style={{ '--art-tint': selectorTint } as React.CSSProperties}>
                   <button
                     className="sb-artmode__opt"
                     data-on={mode === 'audio' ? '1' : '0'}

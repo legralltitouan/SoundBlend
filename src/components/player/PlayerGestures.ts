@@ -231,8 +231,6 @@ export const usePlayerSheet = (opts: Opts) => {
            laissait un gel d'une cinquantaine de millisecondes juste au
            relâchement — le « ça saute, ça fige » d'origine. */
         setSettling(true);
-        opts.onCoverProgress?.(0);
-        setMixBoth(0);
 
         const pas = Math.max(1, opts.coverWidth());
         const from = dxRef.current;
@@ -247,7 +245,11 @@ export const usePlayerSheet = (opts: Opts) => {
         const step = () => {
           const k = Math.min(1, (performance.now() - t0) / DUREE);
           if (k < 1) {
-            setDxBoth(from + (to - from) * ease(k));
+            const position = from + (to - from) * ease(k);
+            const progress = Math.max(-1, Math.min(1, position / pas));
+            setDxBoth(position);
+            setMixBoth(progress);
+            opts.onCoverProgress?.(progress);
             cancelRaf.current = requestAnimationFrame(step);
             return;
           }
@@ -258,6 +260,8 @@ export const usePlayerSheet = (opts: Opts) => {
              `dragging` encore une image : le temps que React peigne les
              nouvelles images, aucune transition ne doit s'inviter. */
           setDxBoth(0);
+          setMixBoth(0);
+          opts.onCoverProgress?.(0);
           if (dir > 0) opts.onNext(); else opts.onPrev();
           cancelRaf.current = requestAnimationFrame(() => {
             setDragging(false);

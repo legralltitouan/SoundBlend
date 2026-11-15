@@ -937,7 +937,7 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
 /* la pochette suit la place disponible : `--art` est calculé pour la
    fenêtre du carrousel, et borné pour ne jamais pousser les commandes
    hors champ sur un téléphone court. */
-.nowplaying { --art: min(46vh, 380px); --art-r: 16px; }
+.nowplaying { --art: max(200px, min(46vh, 380px)); --art-r: 16px; }
 .nowplaying-art {
   width: var(--art); height: var(--art);
   border-radius: var(--art-r); overflow: hidden; flex: 0 0 auto;
@@ -949,7 +949,7 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
    Le clip n'a pas sa propre boîte dans la mise en page : il vit dans
    celle de la pochette. C'est ce qui fait que basculer ne réorganise
    rien — seule l'image change, à la même place, avec le même rayon.
-   Le lecteur YouTube y est déplacé (jamais recréé) : le son ne coupe pas. */
+   L'iframe muette est créée directement ici ; le lecteur audio reste en place. */
 .nowplaying-art { position: relative; }
 .nowplaying-art__still,
 .nowplaying-clip {
@@ -970,10 +970,9 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
      dimensionne en pixels réels, ici on ne fait que rogner les bords */
 }
 .nowplaying-clip[data-on='1'] { opacity: 1; }
-/* l'iframe du clip : elle remplit la boîte, et elle est inerte — toutes
-   les commandes sont celles de l'app, aucune barre YouTube ne doit
-   apparaître ici (contrôles désactivés à la création, ceci est la ceinture
-   en plus des bretelles) */
+/* L'iframe remplit la boîte ; la barre YouTube configurable est désactivée
+   via l'API. YouTube peut néanmoins afficher sa marque, son titre ou des
+   éléments natifs au démarrage, en pause et en fin de lecture. */
 .nowplaying-clip__frame,
 .nowplaying-clip__frame iframe {
   position: absolute; inset: 0;
@@ -989,12 +988,11 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   background: #000;
 }
 
-/* ─── le sélecteur d'image, à la place de l'ancien mot « En lecture » ───
-   Le dessin demandé : un seul galet sombre, deux positions, et la
-   pastille claire qui **remplit exactement** la moitié choisie. Pas de
-   marge entre le galet et la pastille, pas de vignette, pas de trou.
-   La pastille est un pseudo-élément de largeur 50 % : elle ne peut donc
-   jamais laisser d'espace vide, quelle que soit la longueur des mots. */
+/* ─── Titre / Vidéo ───
+   Même galet à deux positions, maintenant teinté par la palette de la
+   pochette. Le rail et la pastille ont deux luminosités distinctes ; en
+   clair, la couleur est volontairement plus diluée. Le mélange est porté
+   par le même geste que l'ambiance, y compris après le relâchement. */
 .sb-artmode {
   position: relative;
   justify-self: center;
@@ -1005,8 +1003,14 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   height: 34px;
   padding: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--ink) 26%, transparent);
+  background-color: color-mix(in srgb, var(--art-tint, #bf405f) 30%, #29262d);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+  transition: background-color .28s ease;
   isolation: isolate;
+}
+html[data-mode='light'] .sb-artmode {
+  background-color: color-mix(in srgb, var(--art-tint, #bf405f) 12%, #efedef);
+  box-shadow: inset 0 0 0 1px rgba(30,20,30,.06);
 }
 /* la pastille : la moitié du galet, au pixel */
 .sb-artmode::before {
@@ -1016,11 +1020,17 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   left: 0;
   width: 50%;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--bg) 88%, white);
-  box-shadow: 0 1px 2px rgba(0,0,0,.16);
-  transition: transform .26s cubic-bezier(.32,.72,0,1);
+  background-color: color-mix(in srgb, var(--art-tint, #bf405f) 26%, #16141b);
+  box-shadow: 0 1px 3px rgba(0,0,0,.22), inset 0 0 0 1px rgba(255,255,255,.06);
+  transition: transform .26s cubic-bezier(.32,.72,0,1), background-color .28s ease;
   z-index: 0;
 }
+html[data-mode='light'] .sb-artmode::before {
+  background-color: color-mix(in srgb, var(--art-tint, #bf405f) 7%, #fff);
+  box-shadow: 0 1px 4px rgba(30,20,30,.13), inset 0 0 0 1px rgba(30,20,30,.06);
+}
+.nowplaying[data-drag='1'] .sb-artmode,
+.nowplaying[data-drag='1'] .sb-artmode::before { transition-duration: 0s; }
 .sb-artmode[data-mode='clip']::before { transform: translateX(100%); }
 .sb-artmode__opt {
   position: relative;
@@ -1029,7 +1039,7 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   height: 100%;
   padding: 0;
   border: 0; background: transparent;
-  color: var(--ink-2);
+  color: #dfd9e0;
   font: inherit; font-size: 12.5px; font-weight: 650;
   letter-spacing: .005em;
   cursor: pointer;
@@ -1037,8 +1047,11 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
   white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
-.sb-artmode__opt[data-on='1'] { color: var(--ink); }
-.sb-artmode__opt[data-off='1'] { opacity: .42; cursor: default; }
+.sb-artmode__opt[data-on='1'] { color: #fff; }
+html[data-mode='light'] .sb-artmode__opt { color: #4d454e; }
+html[data-mode='light'] .sb-artmode__opt[data-on='1'] { color: #211a22; }
+.sb-artmode__opt:focus-visible { outline: 2px solid currentColor; outline-offset: -3px; border-radius: 999px; }
+.sb-artmode__opt[data-off='1'] { opacity: .55; cursor: default; }
 .sb-artmode__opt:disabled { cursor: default; }
 .sb-artmode__opt:not([data-off='1']):active { transform: scale(.98); }
 .sb-artmode__spin {
@@ -2791,14 +2804,11 @@ html[data-mode='dark'] .sb-install-done svg { color: #3ddc84; }
   .nowplaying,
   .nowplaying-sheet { max-width: 100vw; overflow: hidden; }
 
-  /* la pochette : le reste de la place, entre 132 px et 46 vh.
-     132 px est le plancher pour qu'elle reste lisible sur un très petit
-     écran ; au-delà, c'est la fenêtre qui décide. */
+  /* Réserver 200 px au clip YouTube lorsque l'écran le permet, sans
+     dépasser la largeur du téléphone. Les règles compactes ci-dessous
+     redonnent de la place aux commandes sur les écrans courts. */
   .nowplaying {
-    /* la pochette prend la place qui reste, mais ne dépasse jamais la
-       largeur de l'écran moins les marges : sur un téléphone étroit,
-       c'est la largeur qui décide. */
-    --art: clamp(120px, min(calc(100vh - 430px - var(--safe-b)), 92vw), 46vh);
+    --art: clamp(min(200px, calc(100vw - 40px)), min(calc(100vh - 430px - var(--safe-b)), 92vw), 46vh);
     --art-r: 16px;
   }
 
@@ -2847,12 +2857,61 @@ html[data-mode='dark'] .sb-install-done svg { color: #3ddc84; }
   .queue-title { font-size: 10.5px; }
 }
 
-/* un téléphone couché, ou une fenêtre très courte : on cache la pochette
-   latérale et on resserre encore, plutôt que de laisser déborder */
-@media (max-height: 560px) {
-  .nowplaying { --art: min(30vh, 200px); }
+/* Écrans courts : on garde le carré de 200 px et on compacte la file,
+   plutôt que de rétrécir le lecteur YouTube. */
+@media (max-height: 660px) {
   .nowplaying-why { display: none; }
-  .nowplaying-queue { padding-bottom: 8px; }
+  .nowplaying-queue { padding-top: 6px; padding-bottom: max(6px, var(--safe-b)); gap: 7px; }
+  .queue-item { width: 58px; }
+  /* Art porte une taille inline : il faut aussi réduire son conteneur. */
+  .queue-item > span:first-child { width: 58px !important; height: 58px !important; }
+  .queue-item img { width: 58px; height: 58px; }
+  .queue-title { font-size: 9.5px; }
+}
+@media (max-height: 560px) {
+  .nowplaying { --art: min(200px, calc(100vw - 40px)); }
+}
+/* En paysage, pochette et commandes côte à côte : aucune superposition et
+   la file reste accessible au lieu de disparaître. */
+@media (max-height: 560px) and (min-width: 560px) {
+  .nowplaying-body {
+    display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto auto auto; align-content: center; justify-items: center;
+    gap: 8px 18px; padding: 0 24px;
+  }
+  .nowplaying-stage { grid-column: 1; grid-row: 1 / 4; align-self: center; }
+  .nowplaying-meta { grid-column: 2; grid-row: 1; }
+  .nowplaying-progress { grid-column: 2; grid-row: 2; }
+  .nowplaying-controls { grid-column: 2; grid-row: 3; margin: 0; gap: clamp(4px, 1vw, 9px); }
+  .nowplaying-controls .icon-btn { flex: 0 0 38px; }
+  .nowplaying-vote { flex: 0 0 36px; width: 36px; height: 36px; }
+  .nowplaying-play { flex: 0 0 50px; width: 50px; height: 50px; }
+  .nowplaying-meta h2 { font-size: 19px; line-height: 1.15; }
+}
+@media (max-height: 600px) and (max-width: 559px) {
+  .nowplaying-body { gap: 4px; }
+  .nowplaying-controls { margin-bottom: 0; }
+  .nowplaying-play { width: 50px; height: 50px; }
+  .nowplaying-vote { width: 38px; height: 38px; }
+}
+@media (max-height: 520px) and (max-width: 559px) {
+  .nowplaying-top { padding-top: max(5px, var(--safe-t)); padding-bottom: 4px; }
+  .nowplaying-meta h2 { -webkit-line-clamp: 1; }
+  .nowplaying-play { width: 46px; height: 46px; }
+  .queue-item { width: 48px; }
+  .queue-item > span:first-child { width: 48px !important; height: 48px !important; }
+  .queue-item img { width: 48px; height: 48px; }
+}
+/* Une fenêtre exceptionnellement basse n'a pas assez de place pour la
+   file et le carré simultanément ; les boutons précédent/suivant restent. */
+@media (max-height: 440px) and (max-width: 559px), (max-height: 320px) {
+  .nowplaying-queue { display: none; }
+}
+@media (max-height: 440px) and (max-width: 559px) {
+  .nowplaying-top { padding-top: max(4px, var(--safe-t)); padding-bottom: 4px; }
+  .nowplaying-meta h2 { font-size: 16px; line-height: 1.15; -webkit-line-clamp: 1; }
+  .nowplaying-meta p { display: none; }
+  .nowplaying-play { width: 44px; height: 44px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3003,11 +3062,65 @@ html[data-mode='dark'] .sb-install-done svg { color: #3ddc84; }
 .sb-chat-compose textarea { flex: 1; min-width: 0; resize: vertical; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; outline: none; padding: 8px; }
 .sb-chat-compose button { border: 0; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: white; cursor: pointer; flex: none; }
 .sb-chat-compose button:disabled, .sb-assistant-plan button:disabled { opacity: .45; cursor: not-allowed; }
-/* Comme la légende de la référence : le texte est au bas de l'écran,
-   sans voile superposé qui décolore le pigment et son grain. */
-.sb-gen-caption { position: absolute; z-index: 3; bottom: max(7vh, 36px); left: 50%; transform: translateX(-50%); width: min(90%, 560px); text-align: center; pointer-events: none; color: #fff; text-shadow: 0 1px 12px #07060a; }
-.sb-gen-caption-title { font-size: 12px; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; animation: sb-reference-pulse 2.8s ease-in-out infinite; }
-.sb-gen-caption p { font-size: 12px; line-height: 1.45; margin: 10px 0 0; }
+/* La légende reste sous la sphère : aucun voile ne décolore son grain. */
+.sb-gen-caption {
+  position: absolute; z-index: 3; bottom: max(5vh, calc(20px + var(--safe-b)));
+  left: 50%; transform: translateX(-50%); width: min(92%, 560px);
+  text-align: center; pointer-events: none; color: #fff;
+  text-shadow: 0 1px 12px #07060a;
+}
+.sb-gen-caption-title {
+  margin: 0; font-size: 11px; font-weight: 650; letter-spacing: .2em;
+  text-transform: uppercase; opacity: .78;
+}
+.sb-gen-flip-line { display: flex; justify-content: center; margin-top: 10px; min-height: 38px; }
+.sb-gen-flip {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  max-width: 100%; min-height: 38px; overflow: hidden; padding: 5px 15px;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 999px;
+  background: rgba(255,255,255,.07); box-shadow: 0 6px 28px rgba(0,0,0,.12);
+}
+.sb-gen-flip-word {
+  display: block; font-size: clamp(14px, 4vw, 17px); font-weight: 550;
+  line-height: 1.35; letter-spacing: -.01em; white-space: nowrap;
+}
+.sb-gen-diagnostic {
+  max-width: 500px; max-height: min(22vh, 6em); margin: 10px auto 0;
+  font-size: 12px; line-height: 1.45; color: rgba(255,255,255,.78);
+  overflow-wrap: anywhere; overflow-y: auto; overscroll-behavior: contain;
+  pointer-events: auto; scrollbar-width: thin;
+}
+.sb-gen-diagnostic:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+/* Les messages précédents sont repliés pour préserver la composition ;
+   leur liste reste défilable au doigt et au clavier sur les petits écrans. */
+.sb-gen-history { pointer-events: auto; margin: 6px auto 0; max-width: 500px; font-size: 11px; }
+.sb-gen-history summary { display: inline-block; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.sb-gen-history summary:focus-visible, .sb-gen-history ol:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.sb-gen-history ol {
+  box-sizing: border-box; max-height: min(18vh, 7em); overflow-y: auto;
+  overscroll-behavior: contain; overflow-wrap: anywhere; margin: 6px 0 0;
+  padding: 8px 12px 8px 28px; border-radius: 10px; text-align: left;
+  background: rgba(10,8,13,.72); color: #fff; text-shadow: none; line-height: 1.45;
+  scrollbar-width: thin;
+}
+.sb-gen-history li + li { margin-top: 4px; }
+.sb-gen[data-mode='light'] .sb-gen-history ol { background: rgba(255,250,246,.96); color: #4a3833; }
 .sb-gen[data-mode='light'] .sb-gen-caption { color: #4a3833; text-shadow: 0 1px 12px #fdf7f0; }
-@keyframes sb-reference-pulse { 0%,100% { opacity: .45; } 50% { opacity: .92; } }
-@media (prefers-reduced-motion: reduce) { .sb-gen-caption-title { animation: none; } }
+.sb-gen[data-mode='light'] .sb-gen-flip {
+  border-color: rgba(117,65,72,.14); background: rgba(255,255,255,.56);
+  box-shadow: 0 6px 24px rgba(110,60,65,.07);
+}
+.sb-gen[data-mode='light'] .sb-gen-diagnostic { color: #685650; }
+@media (max-width: 340px) {
+  .sb-gen-flip-word { font-size: clamp(10px, 4vw, 14px); }
+}
+@media (max-height: 480px) {
+  .sb-gen-caption { bottom: max(10px, var(--safe-b)); }
+  .sb-gen-flip-line { margin-top: 5px; min-height: 30px; }
+  .sb-gen-flip { min-height: 30px; padding-block: 3px; }
+  .sb-gen-diagnostic { margin-top: 5px; font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sb-artmode, .sb-artmode::before, .sb-artmode__opt { transition-duration: 0s !important; }
+  .sb-artmode__spin { animation: none; }
+}

@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-/* Port du moteur du fichier de référence : six ellipses, grain masqué,
-   respiration asymétrique sur 7 s et chaîne cinématique amortie. Les deux
-   trajectoires d’origine sont disponibles : balade et chargement en huit.
-   Les couleurs sombres existantes sont conservées ; la géométrie suit le
-   conteneur réel lors d'une rotation ou d'un redimensionnement. */
+/* Port du moteur du fichier de référence : six nappes, grain masqué,
+   respiration asymétrique sur 7 s et chaîne cinématique amortie. Le cœur
+   et ses couleurs ne changent pas. Les deux nappes arrière gardent leurs
+   rayons et leurs flous, mais se courbent doucement dans les virages au
+   lieu de pivoter comme des ellipses rigides. */
 type Props = { mode?: 'light' | 'dark'; movement?: 'balade' | 'chargement'; className?: string };
 type Layer = { rx: number; ry: number; restDist: number; stretch: number; blur: number };
 const LAYERS: Layer[] = [
@@ -30,9 +30,21 @@ const PALETTE = {
 const PAD = 420; // hors cadre uniquement : évite une coupure interne du filtre près du bord
 const normalizeAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
+/* Une ellipse cubique légèrement cintrée autour de son axe. À courbure
+   nulle elle coïncide pratiquement avec l'ellipse SVG d'origine ; les
+   quatre raccords restent lisses lorsque les extrémités fléchissent. */
+const curvedLayer = (rx: number, ry: number, bend: number) => {
+  const k = .5522847498307936;
+  const pt = (x: number, y: number) => `${x.toFixed(2)} ${y.toFixed(2)}`;
+  return `M ${pt(bend, -ry)} C ${pt(bend + k * rx, -ry)} ${pt(rx, -k * ry)} ${pt(rx, 0)}`
+    + ` C ${pt(rx, k * ry)} ${pt(bend + k * rx, ry)} ${pt(bend, ry)}`
+    + ` C ${pt(bend - k * rx, ry)} ${pt(-rx, k * ry)} ${pt(-rx, 0)}`
+    + ` C ${pt(-rx, -k * ry)} ${pt(bend - k * rx, -ry)} ${pt(bend, -ry)} Z`;
+};
+
 export const OrganicBlob: React.FC<Props> = ({ mode = 'light', movement = 'balade', className = '' }) => {
   const host = useRef<HTMLDivElement | null>(null);
-  const refs = useRef<(SVGEllipseElement | null)[]>([]);
+  const refs = useRef<(SVGElement | null)[]>([]);
   const [box, setBox] = useState(() => ({ w: window.innerWidth || 1024, h: window.innerHeight || 768 }));
 
   useEffect(() => {
@@ -44,9 +56,11 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', movement = 'balad
     };
     let { w, h } = measure();
     let scale = Math.max(.62, Math.min(1.06, Math.min(w, h) / 700));
-    const initialX = w * .5, initialY = h * .37;
+    /* La tête part sur la trajectoire de chargement, pas à 6 % de hauteur
+       de celle-ci : pas de saut ni d'étirement parasite à la première image. */
+    const initialX = w * .5, initialY = h * (movement === 'chargement' ? .43 : .37);
     const nodes = LAYERS.map((layer, i) => ({ ...layer, el: refs.current[i]!, x: initialX,
-      y: initialY + (i === 0 ? -4 : layer.restDist) * scale, angle: 0 }));
+      y: initialY + (i === 0 ? -4 : layer.restDist) * scale, angle: 0, bend: 0 }));
     let heading = -Math.PI / 2, turnRate = 0, currentSpeed = 48;
     let swimPhase = 0, breathTime = .8, loaderAngle = 0, waypointTimer = 2.8, curiosityTimer = 0, deepBreathBoost = 0;
     let waypoint = { x: w * .64, y: h * .34 };
@@ -108,9 +122,18 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', movement = 'balad
         const rx = node.rx * scale * breathScale * (1 - node.stretch * .35 * velocityStretch);
         const ry = node.ry * scale * breathScale * (1 + node.stretch * velocityStretch);
         if (![node.x, node.y, rx, ry].every(Number.isFinite)) return;
-        node.el.setAttribute('cx', node.x.toFixed(2)); node.el.setAttribute('cy', node.y.toFixed(2));
-        node.el.setAttribute('rx', Math.max(1, rx).toFixed(2)); node.el.setAttribute('ry', Math.max(1, ry).toFixed(2));
-        node.el.setAttribute('transform', `rotate(${(node.angle * 180 / Math.PI).toFixed(2)} ${node.x.toFixed(2)} ${node.y.toFixed(2)})`);
+        if (i < 4) {
+          /* Les quatre nappes du cœur sont exactement celles de la référence. */
+          node.el.setAttribute('cx', node.x.toFixed(2)); node.el.setAttribute('cy', node.y.toFixed(2));
+          node.el.setAttribute('rx', Math.max(1, rx).toFixed(2)); node.el.setAttribute('ry', Math.max(1, ry).toFixed(2));
+          node.el.setAttribute('transform', `rotate(${(node.angle * 180 / Math.PI).toFixed(2)} ${node.x.toFixed(2)} ${node.y.toFixed(2)})`);
+        } else {
+          /* Même pigment et même flou, mais silhouette pliable. La courbure
+             est bornée et amortie, sans changement brutal dans les virages. */
+          node.el.setAttribute('d', curvedLayer(Math.max(1, rx), Math.max(1, ry), node.bend * rx));
+          node.el.setAttribute('transform', `translate(${node.x.toFixed(2)} ${node.y.toFixed(2)}) rotate(${(node.angle * 180 / Math.PI).toFixed(2)})`);
+          node.el.setAttribute('data-bend', node.bend.toFixed(4));
+        }
       });
       el.setAttribute('data-tete', `${Math.round(nodes[1].x)},${Math.round(nodes[1].y)}`);
     };
@@ -172,7 +195,17 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', movement = 'balad
         const maxAllowed = segDist * 1.38;
         if (postDist > maxAllowed) { curr.x = prev.x - postDx / postDist * maxAllowed; curr.y = prev.y - postDy / postDist * maxAllowed; }
         const tangent = Math.atan2(prev.y - curr.y, prev.x - curr.x) + Math.PI / 2;
-        curr.angle = normalizeAngle(curr.angle + normalizeAngle(tangent - curr.angle) * Math.min(1, dt * 10));
+        const turnFollow = i >= 4 ? 1 - Math.exp(-4.5 * dt) : Math.min(1, dt * 10);
+        curr.angle = normalizeAngle(curr.angle + normalizeAngle(tangent - curr.angle) * turnFollow);
+      }
+      for (let i = 4; i < nodes.length; i++) {
+        /* L'écart des tangentes le long de la chaîne donne la courbure du
+           sillage. Un filtre temporel évite les à-coups quand le huit se
+           croise ; la borne préserve la rondeur et l'identité de la sphère. */
+        const ahead = nodes[i - 2], behind = nodes[Math.min(i + 1, nodes.length - 1)];
+        const turn = normalizeAngle(behind.angle - ahead.angle);
+        const target = Math.max(-.42, Math.min(.42, -turn * .32 * nodes[i].ry / nodes[i].rx));
+        nodes[i].bend += (target - nodes[i].bend) * (1 - Math.exp(-3.8 * dt));
       }
       draw();
       if (!reduced?.matches) raf = requestAnimationFrame(frame);
@@ -214,7 +247,9 @@ export const OrganicBlob: React.FC<Props> = ({ mode = 'light', movement = 'balad
         </filter>
         {LAYERS.map((l, i) => <filter key={i} id={`sbOrganicB${i}`} x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation={l.blur} /></filter>)}
       </defs>
-      <g filter="url(#sbOrganicPigment)">{[5, 4, 3, 2, 1, 0].map((i) => <ellipse key={i} ref={(node) => { refs.current[i] = node; }} cx={0} cy={0} rx={LAYERS[i].rx} ry={LAYERS[i].ry} fill={PALETTE[mode][i].fill} opacity={PALETTE[mode][i].opacity} filter={`url(#sbOrganicB${i})`} />)}</g>
+      <g filter="url(#sbOrganicPigment)">{[5, 4, 3, 2, 1, 0].map((i) => i >= 4
+        ? <path key={i} ref={(node) => { refs.current[i] = node; }} data-layer={i} fill={PALETTE[mode][i].fill} opacity={PALETTE[mode][i].opacity} filter={`url(#sbOrganicB${i})`} />
+        : <ellipse key={i} ref={(node) => { refs.current[i] = node; }} data-layer={i} cx={0} cy={0} rx={LAYERS[i].rx} ry={LAYERS[i].ry} fill={PALETTE[mode][i].fill} opacity={PALETTE[mode][i].opacity} filter={`url(#sbOrganicB${i})`} />)}</g>
     </svg>
   </div>;
 };

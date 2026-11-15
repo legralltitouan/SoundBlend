@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /* ═══════════════════════════════════════════════════════════════
    Lire les couleurs d'une pochette.
@@ -102,18 +102,21 @@ export async function readPalette(src: string): Promise<Palette> {
 /* ─────────── le hook : palette du morceau courant ─────────── */
 
 export function usePalette(src?: string | null): Palette {
-  const [pal, setPal] = useState<Palette>(() => (src && cache.get(src)) || FALLBACK);
-  const asked = useRef<string>('');
+  const [state, setState] = useState<{ src: string | null | undefined; palette: Palette }>(
+    () => ({ src, palette: (src && cache.get(src)) || FALLBACK }),
+  );
 
   useEffect(() => {
-    if (!src || asked.current === src) return;
-    asked.current = src;
+    if (!src) return;
     let alive = true;
-    void readPalette(src).then((p) => { if (alive) setPal(p); });
+    void readPalette(src).then((palette) => { if (alive) setState({ src, palette }); });
     return () => { alive = false; };
   }, [src]);
 
-  return useMemo(() => pal, [pal.hues[0], pal.hues[1], pal.hues[2], pal.sat, pal.light]);
+  /* Les palettes des voisins ont déjà été lues : sur un changement de
+     morceau, utiliser le cache dès le rendu, sans afficher entre-temps la
+     couleur de l'ancien titre. Si rien n'est prêt, le repli reste sûr. */
+  return (src && (cache.get(src) || (state.src === src && state.palette))) || FALLBACK;
 }
 
 /* les trois couleurs prêtes à peindre */

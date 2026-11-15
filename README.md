@@ -1,4 +1,4 @@
-# SoundBlend AI · 6.9.31
+# SoundBlend AI · 6.9.32
 
 Application web pour écouter sa bibliothèque YouTube et composer des blends. Cette version remplace l'ancien écran **Goûts** par un **Assistant** conversationnel ; elle conserve le lecteur et l'export vers YouTube.
 
@@ -12,7 +12,11 @@ Application web pour écouter sa bibliothèque YouTube et composer des blends. C
 
 Les découvertes et faces cachées réellement affichées sont mémorisées 14 jours pour éviter de les reproposer. Les amorces explicitement choisies peuvent revenir même si elles sont récentes. L'identification dépend des métadonnées disponibles : des variantes mal étiquetées ou des informations absentes peuvent échapper au rapprochement. Une réponse oEmbed n'est pas une garantie que la vidéo sera lisible dans tous les pays ou pour tous les comptes.
 
-Pendant la composition, une sphère organique animée apparaît en plein écran. Le mouvement réduit du système la fige, y compris lorsqu'on modifie ce réglage en cours d'utilisation.
+Pendant la composition, la sphère garde ses pigments et son grain ; ses nappes arrière se courbent dans les virages. Des phrases françaises défilent, tandis que l'étape réelle reste lisible en dessous. Les 50 derniers messages réels, même émis très rapidement, sont consultables sous « Étapes précédentes » pendant la génération. Le réglage de mouvement réduit fige la sphère et les phrases, y compris lorsqu'on le modifie pendant la génération.
+
+Dans le grand lecteur, le sélecteur **Titre / Vidéo** reprend la couleur de la pochette et suit le glissement vers le morceau voisin. La teinte est plus discrète en mode clair. Les commandes configurables de l'iframe YouTube sont désactivées, mais YouTube peut toujours afficher son titre, sa marque, des éléments de pause ou des publicités. Sur les écrans courts, la disposition réserve autant que possible un carré de 200 × 200 px au clip, puis compacte les commandes et la file ; une fenêtre trop étroite ne peut pas offrir cette taille.
+
+**Attention — intégration YouTube héritée à refondre avant une diffusion conforme :** le lecteur audio est masqué derrière l'application et mesure 320 × 180 px ; un second lecteur muet peut jouer en même temps pour le clip. L'iframe du clip ne reçoit pas les interactions et ses coins sont arrondis. Ces choix préexistants ne respectent pas plusieurs [exigences YouTube](https://developers.google.com/youtube/terms/required-minimum-functionality) et [politiques sur le lecteur et la séparation audio/vidéo](https://developers.google.com/youtube/terms/developer-policies#i.-additional-prohibitions). Cette version améliore la taille du clip, mais **ne rend pas l'intégration entièrement conforme**. Une refonte vers un lecteur unique, visible et interactif, diffusant ensemble le son et l'image du même contenu, changerait l'expérience actuelle et nécessite de nouveaux essais.
 
 ## Données et confidentialité
 
@@ -46,7 +50,7 @@ La PWA peut rouvrir son **interface** hors ligne après une première visite et 
 
 ## GitHub Pages
 
-Pour un dépôt existant, voir `MISE-A-JOUR-GITHUB-v6-9-31.md` et le script accompagnant l'archive. Le workflow `.github/workflows/pages.yml` est conservé : il choisit la base adaptée au nom du dépôt. Pour tester manuellement une compilation en sous-dossier :
+Pour un dépôt existant, voir `MISE-A-JOUR-GITHUB-v6-9-32.md` et le script accompagnant l'archive. Le workflow `.github/workflows/pages.yml` est conservé : il choisit la base adaptée au nom du dépôt. Pour tester manuellement une compilation en sous-dossier :
 
 ```sh
 BASE_PATH=/SoundBlend/ npm run build

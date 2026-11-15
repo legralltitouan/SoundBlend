@@ -2,29 +2,29 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title SoundBlend - mise a jour v6.9.31
+title SoundBlend - mise a jour v6.9.32
 
 rem Placer ce script dans le depot Git clone.
-rem Decompresser le paquet src-v6.9.31 a cote du depot.
+rem Decompresser le paquet src-v6.9.32 a cote du depot.
 rem Ce script ne modifie ni .git, ni .github/workflows/pages.yml.
 rem Il refuse les modifications existantes et n'utilise pas reset --hard.
 
 set "RACINE=%~dp0"
 set "SRC="
-for %%D in ("%RACINE%..\src-v6.9.31" "%RACINE%src-v6.9.31" "%RACINE%..\site-v6.9.31" "%RACINE%site-v6.9.31" "%RACINE%..\..\src-v6.9.31") do (
+for %%D in ("%RACINE%..\src-v6.9.32" "%RACINE%src-v6.9.32" "%RACINE%..\site-v6.9.32" "%RACINE%site-v6.9.32" "%RACINE%..\..\src-v6.9.32") do (
   if not defined SRC if exist "%%~fD\src\App.tsx" set "SRC=%%~fD"
 )
 
 echo.
 echo ==========================================================
-echo   SoundBlend - mise a jour v6.9.31
+echo   SoundBlend - mise a jour v6.9.32
 echo   Depot : %CD%
 echo   Source: %SRC%
 echo ==========================================================
 echo.
 
 if not defined SRC (
-  echo [ERREUR] Paquet src-v6.9.31 introuvable.
+  echo [ERREUR] Paquet src-v6.9.32 introuvable.
   echo Decompresse soundblend-site-v6-9.zip a cote du depot, puis relance.
   echo Aucun fichier n'a ete modifie.
   pause
@@ -32,9 +32,9 @@ if not defined SRC (
 )
 if not exist "%SRC%\package.json" goto badsource
 if not exist "%SRC%\public\sw.js" goto badsource
-findstr /L /C:"6.9.31" "%SRC%\package.json" >nul
+findstr /L /C:"6.9.32" "%SRC%\package.json" >nul
 if errorlevel 1 goto badsource
-findstr /L /C:"sb-v6-9-31" "%SRC%\public\sw.js" >nul
+findstr /L /C:"sb-v6-9-32" "%SRC%\public\sw.js" >nul
 if errorlevel 1 goto badsource
 
 git --version >nul 2>&1
@@ -117,7 +117,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo === 2. Copie des fichiers v6.9.31 ===
+echo === 2. Copie des fichiers v6.9.32 ===
 rem Copie par-dessus, sans supprimer les dossiers ni les fichiers ignores.
 xcopy "%SRC%\src" "src\" /E /I /Y /Q >nul
 if errorlevel 1 goto copyerror
@@ -140,9 +140,9 @@ for %%F in (README.md .env.example index.html package.json package-lock.json pos
 rem Controle de la version et du code de synchronisation.
 findstr /L /C:"synchroniserClip" "src\context\PlayerContext.tsx" >nul
 if errorlevel 1 goto copyerror
-findstr /L /C:"v6.9.31" "src\components\views\SettingsView.tsx" >nul
+findstr /L /C:"v6.9.32" "src\components\views\SettingsView.tsx" >nul
 if errorlevel 1 goto copyerror
-findstr /L /C:"sb-v6-9-31" "public\sw.js" >nul
+findstr /L /C:"sb-v6-9-32" "public\sw.js" >nul
 if errorlevel 1 goto copyerror
 
 rem Une vraie cle API Google ne doit pas etre envoyee par accident.
@@ -162,7 +162,7 @@ if errorlevel 1 goto giterror
 git diff --cached --quiet
 if errorlevel 2 goto giterror
 if errorlevel 1 (
-  git commit -m "v6.9.31 - assistant, exclusions et synchronisation"
+  git commit -m "v6.9.32 - lecteur et animation de generation"
   if errorlevel 1 goto giterror
 ) else (
   echo Aucun changement du paquet a committer.
@@ -172,14 +172,14 @@ if errorlevel 1 goto giterror
 
 echo.
 echo === TERMINE ===
-echo Verifie GitHub Actions, puis Reglages : SoundBlend AI v6.9.31.
+echo Verifie GitHub Actions, puis Reglages : SoundBlend AI v6.9.32.
 echo Teste Assistant, blocages et synchronisation depuis Reglages.
 git log --oneline -1
 pause
 exit /b 0
 
 :badsource
-echo [ERREUR] Le dossier trouve ne contient pas le paquet v6.9.31 complet.
+echo [ERREUR] Le dossier trouve ne contient pas le paquet v6.9.32 complet.
 echo Aucun fichier n'a ete modifie.
 pause
 exit /b 1

@@ -40,31 +40,37 @@ export const bestCover = (t: { videoId?: string; title?: string; artist?: string
 
 type Size = number | string;
 
-const coverCache = new Map<string, string>();
+type CoverState = { url: string; large: string; small: string };
+/* Garder les deux tailles ensemble : un grand Art ne doit pas remplacer
+   l'URL dont les palettes des pochettes voisines se servent. */
+const coverCache = new Map<string, CoverState>();
 
 export const useCover = (
   t: { videoId?: string; title?: string; artist?: string; thumbnailUrl?: string },
   wantLarge = false,
 ): { url: string; large: string; small: string } => {
   const cacheKey = `${t.videoId || ''}|${t.artist || ''}|${t.title || ''}`;
-  const [state, setState] = useState(() => {
-    const known = coverCache.get(cacheKey);
-    if (known) return { url: known, large: known, small: known };
-    return bestCover(t);
-  });
+  const immediate = () => {
+    return coverCache.get(cacheKey) || bestCover(t);
+  };
+  const [state, setState] = useState(() => ({ key: cacheKey, cover: immediate() }));
 
   useEffect(() => {
     let alive = true;
     const known = coverCache.get(cacheKey);
-    if (known) { setState({ url: known, large: known, small: known }); return; }
+    if (known) {
+      setState({ key: cacheKey, cover: known });
+      return;
+    }
 
     void (async () => {
       /* 1. la vraie pochette d'album */
       const cover = await resolveCover(t.artist || '', t.title || '');
       if (!alive) return;
       if (cover) {
-        coverCache.set(cacheKey, wantLarge ? cover.large : cover.small);
-        setState({ url: cover.small, large: cover.large, small: cover.small });
+        const ready = { url: cover.small, large: cover.large, small: cover.small };
+        coverCache.set(cacheKey, ready);
+        setState({ key: cacheKey, cover: ready });
         return;
       }
       /* 2. sinon la vignette YouTube — mais seulement si elle existe */
@@ -73,20 +79,26 @@ export const useCover = (
         const ok = await imageExists(yt);
         if (!alive) return;
         if (ok) {
-          coverCache.set(cacheKey, yt);
-          setState({ url: yt, large: youtubeThumb(t.videoId, 1280), small: yt });
+          const ready = { url: yt, large: youtubeThumb(t.videoId, 1280), small: yt };
+          coverCache.set(cacheKey, ready);
+          setState({ key: cacheKey, cover: ready });
           return;
         }
       }
       /* 3. le repli dessiné */
-      setState({ url: '', large: '', small: '' });
+      setState({ key: cacheKey, cover: { url: '', large: '', small: '' } });
     })();
 
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey, wantLarge]);
 
-  return state;
+  /* Au changement de morceau, ne jamais prêter la pochette précédente au
+     nouveau. La voisine déjà en cache est disponible dès ce rendu, avant
+     même que son effet de chargement soit exécuté. Le cache reste neutre :
+     chaque appelant choisit sa taille sans modifier celle des autres. */
+  const cover = state.key === cacheKey ? state.cover : immediate();
+  return { ...cover, url: wantLarge ? (cover.large || cover.small) : cover.small };
 };
 
 export const Art: React.FC<{
@@ -99,7 +111,7 @@ export const Art: React.FC<{
   /** demande l'artwork 1000 px (plein écran) */
   large?: boolean;
 }> = ({ track, size = '100%', radius = 6, className, style, alt = '', large = false }) => {
-  const { url } = useCover(track, large);
+  const { url, small } = useCover(track, large);
   const [shown, setShown] = useState(url);
   const [failed, setFailed] = useState(false);
 
@@ -139,7 +151,12 @@ export const Art: React.FC<{
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
+          onError={() => {
+            /* La très grande vignette YouTube n'existe pas pour tous les
+               clips. Revenir à la petite avant d'afficher les initiales. */
+            if (large && small && shown !== small) setShown(small);
+            else setFailed(true);
+          }}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
         />
       )}

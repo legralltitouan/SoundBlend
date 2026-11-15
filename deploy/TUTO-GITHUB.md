@@ -1,7 +1,7 @@
 # Mettre SoundBlend sur GitHub — le tutoriel
 
-> **Version 6.9.31 :** pour mettre à jour un dépôt existant, suivre en priorité
-> `MISE-A-JOUR-GITHUB-v6-9-31.md` et le script fourni. L'identifiant OAuth
+> **Version 6.9.32 :** pour mettre à jour un dépôt existant, suivre en priorité
+> `MISE-A-JOUR-GITHUB-v6-9-32.md` et le script fourni. L'identifiant OAuth
 > public est déjà dans `src/config/app.ts` ; aucune clé YouTube n'est demandée.
 
 *De zéro à une adresse https qui marche 24 h/24, sans PC allumé, sans
@@ -236,15 +236,15 @@ l'application utilise la connexion Google ou son repli de recherche.
 
 ## Mettre à jour un dépôt existant
 
-Suis `MISE-A-JOUR-GITHUB-v6-9-31.md`, fourni dans l'archive. Sur Windows,
-le script `MAJ-SoundBlend-v6.9.31.bat`, placé à la racine du dépôt, copie les fichiers depuis le dossier
-`src-v6.9.31` extrait, vérifie les modifications locales, puis crée un
+Suis `MISE-A-JOUR-GITHUB-v6-9-32.md`, fourni dans l'archive. Sur Windows,
+le script `MAJ-SoundBlend-v6.9.32.bat`, placé à la racine du dépôt, copie les fichiers depuis le dossier
+`src-v6.9.32` extrait, vérifie les modifications locales, puis crée un
 commit si nécessaire et envoie sur `main`. Lis la notice avant de l'exécuter : le script
 n'a pas été testé sous Windows dans l'environnement de préparation. Il ne
 modifie pas ton workflow `.github/workflows/pages.yml`.
 
 Après publication, vérifie l'onglet **Actions**, puis **Réglages →
-SoundBlend AI · v6.9.31**. Si l'ancienne version reste visible, ferme et
+SoundBlend AI · v6.9.32**. Si l'ancienne version reste visible, ferme et
 rouvre tous les onglets de l'application.
 
 ---

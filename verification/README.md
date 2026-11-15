@@ -1,4 +1,4 @@
-# Vérifications facultatives — SoundBlend 6.9.31
+# Vérifications facultatives — SoundBlend 6.9.32
 
 Ces tests utilisent Node.js, Playwright et Chromium. Ils ouvrent des profils de navigateur temporaires et simulent les API pour les parcours fonctionnels. Ils ne se connectent pas à ton compte Google et n'envoient pas de vraie requête Gemini. L'essai YouTube réel, optionnel et distinct, est décrit plus bas.
 
@@ -31,9 +31,18 @@ node verification/t-curateur631.mjs
 node verification/t-resolution631.mjs
 node verification/t-youtube-bibliotheque631.mjs
 node verification/t-orb631.mjs
+node verification/t-pochettes-diagnostics632.mjs
 ```
 
-Ils visent par défaut `http://localhost:5173/`. Si le serveur utilise un autre port, régler `SOUNDBLEND_DEV_URL` sur son adresse. L'animation sauvegarde une capture dans `verification/captures/`. Le test de délai accélère à 100 ms un délai réseau de production de 12 secondes ; les requêtes sont simulées.
+Ils visent par défaut `http://localhost:5173/`. Si le serveur utilise un autre port, régler `SOUNDBLEND_DEV_URL` sur son adresse. L'animation sauvegarde une capture dans `verification/captures/`. Le test de délai accélère à 100 ms un délai réseau de production de 12 secondes ; les requêtes sont simulées. Le test pochettes/diagnostics vérifie notamment les résolutions, les réponses réseau tardives et la conservation de messages émis dans le même tour JavaScript.
+
+Une vérification complémentaire de la composition, du sélecteur et des petits écrans utilise **à la fois** le serveur de sources et le site compilé (voir ci-dessous) :
+
+```sh
+node verification/t-visuel632.mjs
+```
+
+`SOUNDBLEND_DEV_URL` désigne le serveur de sources, `SOUNDBLEND_URL` le site compilé. Les pochettes sont des couleurs simulées, les lecteurs YouTube sont simulés et seul le cycle de texte est accéléré pour le test. Il vérifie notamment les contrastes sur 48 palettes dans chaque thème, les deux directions du geste, les diagnostics, le mouvement réduit et plusieurs tailles d'écran. Il ne prouve pas l'apparence des éléments natifs YouTube.
 
 ## Tests sur le site compilé
 
@@ -64,6 +73,6 @@ Le test PWA active un **vrai service worker dans un profil temporaire** et recha
 node verification/t-youtube-reel630.mjs
 ```
 
-Ce test charge de vraies iframes YouTube et force la même vidéo d'exemple dans les deux lecteurs afin de comparer leurs horloges. Il a besoin d'Internet, peut échouer selon le réseau et ne vérifie ni un compte Premium ni les pixels dans tous les environnements. Ne pas le confondre avec le test simulé ci-dessus.
+Ce test charge de vraies iframes YouTube et force la même vidéo d'exemple dans les deux lecteurs afin de comparer leurs horloges. Il a besoin d'Internet, peut échouer selon le réseau et ne vérifie ni un compte Premium ni les pixels dans tous les environnements. Ne pas le confondre avec le test simulé ci-dessus. L'essai de la 6.9.32 dans l'environnement de livraison n'a pas démarré et est non concluant. Une sonde séparée avec un seul lecteur visible a reçu une demande de connexion anti-robot de YouTube, sans prouver l'unique cause de l'échec de SoundBlend. Les tests, même réussis, ne valident pas la conformité aux règles YouTube : l'architecture existante avec deux lecteurs dont un caché doit être revue (voir le README principal).
 
 Pour utiliser un navigateur Chromium déjà installé, définir `CHROMIUM_PATH` sur son exécutable ; sinon Playwright utilise son propre navigateur. Ces variables sont réservées aux tests.

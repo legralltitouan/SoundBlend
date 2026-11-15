@@ -18,12 +18,13 @@ try {
   const svg=document.querySelector('.sb-organic-svg');
   return {mode:document.querySelector('.sb-organic').dataset.movement,viewBox:svg.getAttribute('viewBox'),
    nodes:[...svg.querySelectorAll('ellipse')].map(e=>['cx','cy','rx','ry'].map(a=>Number(e.getAttribute(a)))),
-   fills:[...svg.querySelectorAll('ellipse')].map(e=>e.getAttribute('fill')),
+   paths:[...svg.querySelectorAll('path[data-layer]')].map(e=>({d:e.getAttribute('d'),bend:Number(e.getAttribute('data-bend'))})),
+   fills:[...svg.querySelectorAll('[data-layer]')].map(e=>e.getAttribute('fill')),
    turbulence:svg.querySelector('feTurbulence')?.getAttribute('baseFrequency'),octaves:svg.querySelector('feTurbulence')?.getAttribute('numOctaves'),
    mask:svg.querySelector('feComposite')?.getAttribute('operator'),blend:svg.querySelector('feBlend')?.getAttribute('mode')};
  });
  check(shape.mode==='chargement'&&shape.viewBox==='0 0 390 844','mode chargement et canevas mobile');
- check(shape.nodes.length===6&&shape.nodes.every(row=>row.every(Number.isFinite)&&row[2]>0&&row[3]>0),'six couches avec géométrie numérique valide');
+ check(shape.nodes.length===4&&shape.nodes.every(row=>row.every(Number.isFinite)&&row[2]>0&&row[3]>0)&&shape.paths.length===2&&shape.paths.every(x=>x.d?.endsWith('Z')&&!/NaN|Infinity/.test(x.d)&&Number.isFinite(x.bend)),'six nappes : quatre ellipses et deux traînées courbes valides');
  check(shape.fills.join(',')==='#ffcaa0,#ffb27e,#ff7866,#fa4884,#f72598,#f0148c','palette claire de la référence');
  check(shape.turbulence==='0.72'&&shape.octaves==='3'&&shape.mask==='in'&&shape.blend==='overlay','grain fin masqué sur le pigment');
  const points=[];for(let i=0;i<6;i++){points.push((await head()).split(',').map(Number));await p.waitForTimeout(320);}
@@ -36,7 +37,8 @@ try {
  check(await p.locator('.sb-organic-svg').getAttribute('viewBox')==='0 0 844 390','rotation : canevas recalculé sans relancer l’animation');
  const frozen2=await head();await p.waitForTimeout(500);check(await head()===frozen2,'mouvements réduits conservés après rotation');
  const bounds=await p.evaluate(()=>[...document.querySelectorAll('ellipse')].map(e=>['cx','cy','rx','ry'].map(a=>Number(e.getAttribute(a)))));
- check(bounds.every(x=>x.every(Number.isFinite)&&x[2]>0&&x[3]>0),'géométrie redessinée et valide après rotation');
+ const tails=await p.locator('path[data-layer]').evaluateAll(a=>a.map(x=>x.getAttribute('d')));
+ check(bounds.length===4&&bounds.every(x=>x.every(Number.isFinite)&&x[2]>0&&x[3]>0)&&tails.length===2&&tails.every(x=>x&&!/NaN|Infinity/.test(x)),'géométrie redessinée et valide après rotation');
  await p.emulateMedia({reducedMotion:'no-preference'});await p.waitForTimeout(900);
  check(await head()!==frozen2,'la sphère repart si les mouvements sont de nouveau autorisés');
  await p.goto(url('mode=dark&movement=balade'));await p.waitForSelector('.sb-organic[data-tete]');const roam=await head();await p.waitForTimeout(800);

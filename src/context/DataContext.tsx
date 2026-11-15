@@ -45,6 +45,8 @@ interface DataContextType {
 
   generating: boolean;
   generatingStatus: string;
+  /** Derniers messages réellement émis pendant cette génération. */
+  generatingLog: string[];
   generate: (config: BlendConfig, options?: { seeds?: Track[] }) => Promise<GeneratedBlend | null>;
 
   exclusions: Exclusions;
@@ -75,6 +77,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [generating, setGenerating] = useState(false);
   const [generatingStatus, setGeneratingStatus] = useState('');
+  const [generatingLog, setGeneratingLog] = useState<string[]>([]);
   const [exclusions, setExclusions] = useState<Exclusions>(getExclusions);
   const blockTrack = useCallback((track: { title?: string; artist?: string; videoId?: string }, kind: 'track' | 'artist') => {
     block(track, kind);
@@ -277,10 +280,19 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const seeds = uniqueTracks(requested.filter((t) => !isExcluded(t)));
       if (!seeds.length) throw new Error('Toutes les amorces choisies sont bloquées. Modifie les exclusions dans Réglages.');
       setGenerating(true);
-      setGeneratingStatus('Analyse de l’empreinte musicale des morceaux sélectionnés…');
+      /* Certains messages se suivent dans le même tour JavaScript (par
+         exemple « aucune clé » puis « vérification YouTube »). L'état
+         courant seul perdrait le premier lors du regroupement React : on
+         garde aussi les 50 derniers messages effectivement reçus. */
+      setGeneratingLog([]);
+      const report = (msg: string) => {
+        setGeneratingStatus(msg);
+        setGeneratingLog((prev) => prev.at(-1) === msg ? prev : [...prev.slice(-49), msg]);
+      };
+      report('Analyse de l’empreinte musicale des morceaux sélectionnés…');
       try {
         const generatedTracks = await geminiService.generateBlend(
-          seeds, config, getExclusions(), (msg) => setGeneratingStatus(msg),
+          seeds, config, getExclusions(), report,
         );
         // Dernier verrou : l'utilisateur peut bloquer un titre pendant une recherche.
         // Les amorces explicitement choisies restent possibles, même si récentes.
@@ -342,6 +354,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       searchCatalog,
       generating,
       generatingStatus,
+      generatingLog,
       generate,
       syncState,
       syncNow,
@@ -350,7 +363,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       settings, saveSettings, isAuthenticated, userProfile, login, logout, playlists, loadingLibrary,
       libraryError, loadLibrary, loadPlaylistTracks, refreshLibrary, selectedTracks, toggleTrack,
       removeTrack, clearSelection, isSelected, currentBlend, setCurrentBlend, updateBlend,
-      recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generate, exclusions, blockTrack, unblockExclusion,
+      recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generatingLog, generate, exclusions, blockTrack, unblockExclusion,
       syncState, syncNow,
     ],
   );

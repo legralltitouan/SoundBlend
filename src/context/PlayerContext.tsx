@@ -111,7 +111,13 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      Elle n'est créée qu'au premier morceau : rien n'est chargé avant. */
   /* le lecteur caché, celui qui vit hors de l'écran quand on est en
      pochette */
-  /* ── le lecteur reste dans le document, à SA taille, derrière l'app ──
+  /* ATTENTION : architecture héritée, pas une intégration YouTube conforme.
+     Le lecteur masqué et sa taille, le second lecteur simultané et la
+     séparation son/image nécessitent une refonte vers un lecteur unique
+     visible et interactif avant toute diffusion revendiquant la conformité.
+     Voir README.md et les règles officielles de YouTube.
+
+     ── le lecteur reste dans le document, à SA taille, derrière l'app ──
      Avant, il vivait dans une boîte de 2 × 2 px hors de l'écran. YouTube
      n'aime pas ça : il refuse de peindre, et surtout il **coupe le son**
      quand l'iframe n'a pas de surface réelle (c'est même une règle
@@ -597,11 +603,9 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   /* ── créer le lecteur du clip, dans la pochette ──
-     Vérifié sur le vrai YouTube : créé directement dans la boîte de la
-     pochette, le lecteur démarre et peint normalement (`#movie_player`
-     monté, vidéo présente) — y compris quand la boîte est encore en
-     opacité 0. Il n'y a donc rien à déplacer, rien à contourner.
-     Deux pièges en revanche, tous deux mesurés :
+     Un ancien essai avait montré un lecteur peint dans sa boîte ; le test
+     réel de cette version n'a pas démarré et reste non concluant.
+     Deux pièges observés dans les versions précédentes :
        · l'API n'accepte pas `100%` en largeur/hauteur → lecteur de
          taille nulle, écran noir. On donne des pixels.
        · l'API **remplace** la div par l'iframe : on retient l'iframe
@@ -631,8 +635,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
 
-    const l = Math.max(160, Math.round(cadre.clientWidth || 320));
-    const h = Math.max(160, Math.round(cadre.clientHeight || 320));
+    /* YouTube demande un lecteur d'au moins 200 × 200 px. La mise en page
+       réserve cette place quand l'écran le permet ; ne pas créer une
+       instance déclarée plus petite lors de son initialisation. */
+    const l = Math.max(200, Math.round(cadre.clientWidth || 320));
+    const h = Math.max(200, Math.round(cadre.clientHeight || 320));
 
     const cible = document.createElement('div');
     cible.className = 'nowplaying-clip__frame';
@@ -649,7 +656,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         height: String(h),
         videoId: id,
         playerVars: {
-          autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
+          /* YouTube permet de désactiver la barre de commandes, pas de
+             garantir l'absence du titre, de la marque ou des écrans de
+             pause. L'intégration héritée demande néanmoins une refonte
+             pour la visibilité et les interactions (voir README). */
+          autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0,
           playsinline: 1, iv_load_policy: 3,
           /* la position du son, et surtout : muet. Le son vient du lecteur
              de musique, jamais d'ici — sinon on entendrait deux fois. */
