@@ -104,8 +104,8 @@ kbd {
 /* le lecteur YouTube vit dans le document, derrière l'application : il
    garde une vraie surface (exigence de YouTube depuis 2023 — sans elle il
    coupe le son), simplement il ne se voit pas */
-#youtube-player-host { z-index: 0; }
-#root, .sb-root { position: relative; z-index: 1; }
+#youtube-player-host { z-index: -1 !important; }
+#root, .sb-root { position: relative; z-index: 0; }
 
 /* La barre haute ne se voit plus du tout : ni plaque, ni filet, ni flou.
    Seul le champ de recherche flotte au-dessus de l'ambiance. */
@@ -953,11 +953,20 @@ html[data-mode='light'] .nowbar-progress .prail-knob {
      dimensionne en pixels réels, ici on ne fait que rogner les bords */
 }
 .nowplaying-clip[data-on='1'] { opacity: 1; }
-.nowplaying-vitre {
+/* l'iframe du clip : elle remplit la boîte, et elle est inerte — toutes
+   les commandes sont celles de l'app, aucune barre YouTube ne doit
+   apparaître ici (contrôles désactivés à la création, ceci est la ceinture
+   en plus des bretelles) */
+.nowplaying-clip__frame {
   position: absolute; inset: 0;
-  width: 100%; height: 100%;
+  overflow: hidden;
+}
+.nowplaying-clip__frame iframe {
+  width: 100% !important;
+  height: 100% !important;
+  border: 0;
   display: block;
-  background: #000;
+  pointer-events: none;
 }
 
 /* ─── le sélecteur d'image, à la place de l'ancien mot « En lecture » ───

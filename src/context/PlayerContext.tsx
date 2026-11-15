@@ -105,10 +105,11 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      explicite de leur API depuis 2023). D'où les erreurs de la console
      — et, pour nous, une image impossible à récupérer.
 
-     Maintenant l'iframe a une vraie surface (320 × 180), elle est
-     simplement recouverte par l'application et rendue inerte. Elle reste
-     dans le document en permanence : aucune API n'est jamais appelée sur
-     un lecteur détaché. */
+     Maintenant l'iframe a une vraie surface (320 × 180) et un empilement
+     qui la met **toujours** derrière l'application (z-index négatif,
+     plus bas que la racine). Elle reste dans le document en permanence :
+     aucune API n'est jamais appelée sur un lecteur détaché, et aucune
+     barre YouTube ne peut apparaître à l'écran. */
   const ombre = () => {
     let host = document.getElementById('youtube-player-host');
     if (!host) {
@@ -116,7 +117,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       host.id = 'youtube-player-host';
       host.setAttribute('aria-hidden', 'true');
       Object.assign(host.style, {
-        position: 'fixed', zIndex: '0',
+        position: 'fixed', zIndex: '-1',
         left: '0', bottom: '0',
         width: '320px', height: '180px',
         overflow: 'hidden',
@@ -126,6 +127,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const mount = document.createElement('div');
       mount.id = 'youtube-player-mount';
       mount.style.cssText = 'width:320px;height:180px;';
+      host.style.zIndex = '-1';
       host.appendChild(mount);
       document.body.appendChild(host);
     }
@@ -557,86 +559,125 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
          l'écart dépasserait 0,7 s, on recale. Aucune boucle, aucun
          doublon : une seule source de son, toujours. */
   /**
-   * ─────────── la vidéo, SANS jamais déplacer le lecteur ───────────
+   * ─────────── l'image du clip : une SECONDE iframe, sans son ───────────
    *
-   * La version précédente déplaçait l'iframe dans la pochette. C'était la
-   * cause de tous les défauts constatés en console :
+   * Deux tentatives ont échoué avant celle-ci, et il faut le dire :
    *
-   *   « The YouTube player is not attached to the DOM. API calls should be
-   *     made after the onReady event. »
+   *   1. déplacer l'iframe du lecteur → YouTube la perd (« not attached to
+   *      the DOM »), le lecteur meurt ;
+   *   2. recopier son image sur un canvas → **impossible** : c'est une
+   *      origine différente, le navigateur interdit la lecture des pixels
+   *      (et de la vidéo) d'une iframe youtube.com. C'était l'écran noir.
    *
-   * Arracher l'iframe à son conteneur, c'est la sortir du document le
-   * temps d'un frame : YouTube le voit passer et met son lecteur en
-   * erreur. Ensuite, plus rien ne répond — d'où le lecteur mort quand on
-   * revenait à la pochette, et l'image sans rapport qui restait affichée.
+   * La solution qui marche est celle que la plateforme prévoit : une
+   * **iframe d'intégration dédiée**, muette, placée dans la pochette, et
+   * pilotée par l'API. Le lecteur de musique, lui, continue de son côté,
+   * intact — il porte le son, et il n'est plus jamais touché.
    *
-   * Le lecteur ne bouge donc plus jamais. On pose à la place une **vitre**
-   * au-dessus de sa boîte, et on y recopie l'image de la vidéo, frame par
-   * frame, tant que le mode vidéo est demandé. Le son, lui, ne bouge pas
-   * d'un pouce : il vient toujours du lecteur, qui n'a pas été touché.
+   * Pour que l'image et le son restent ensemble, on recale le clip sur la
+   * position du lecteur à la bascule, puis dès que l'écart dépasse une
+   * demi-seconde (ce qui n'arrive qu'après un saut manuel).
    */
   const attachVideo = React.useCallback((el: HTMLDivElement | null) => {
     clipSlot.current = el;
-    if (!el) return;
-    poserVitre();
+    if (el) monterClip();
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [mode, clipId, currentTrack]);
 
-  /* la copie de l'image : une boucle, qui ne tourne que quand on regarde */
-  const vitreRaf = useRef(0);
-  const poserVitre = () => {
-    cancelAnimationFrame(vitreRaf.current);
+  const clipPlayer = useRef<any>(null);
+  const clipPret = useRef(false);
+
+  /* crée (une seule fois) l'iframe du clip dans la boîte de la pochette */
+  const monterClip = () => {
     const cadre = clipSlot.current;
     if (!cadre) return;
-    let c = cadre.querySelector('canvas') as HTMLCanvasElement | null;
-    if (!c) {
-      c = document.createElement('canvas');
-      c.className = 'nowplaying-vitre';
-      cadre.appendChild(c);
-    }
-    const dessiner = () => {
-      const p = playerRef.current;
-      let video: HTMLVideoElement | null = null;
+    const id = mode === 'clip' && clipId ? clipId : null;
+    if (!id) return;
+
+    if (clipPlayer.current?.loadVideoById) {
+      /* il existe déjà : on lui donne simplement le nouveau morceau */
       try {
-        const fr = p?.getIframe?.() as HTMLIFrameElement | undefined;
-        video = fr?.contentWindow?.document?.querySelector('video') || null;
-      } catch { video = null; }
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const lw = cadre.clientWidth, lh = cadre.clientHeight;
-      if (video && video.videoWidth && lw && lh) {
-        /* on recopie en respectant le cadre (letterbox si l'image n'a pas
-           le même rapport que la boîte) */
-        if (c!.width !== Math.round(lw * dpr) || c!.height !== Math.round(lh * dpr)) {
-          c!.width = Math.round(lw * dpr);
-          c!.height = Math.round(lh * dpr);
-        }
-        const g = c!.getContext('2d');
-        if (g) {
-          const r = Math.min(c!.width / video.videoWidth, c!.height / video.videoHeight);
-          const w = video.videoWidth * r, h = video.videoHeight * r;
-          g.fillStyle = '#000';
-          g.fillRect(0, 0, c!.width, c!.height);
-          g.drawImage(video, (c!.width - w) / 2, (c!.height - h) / 2, w, h);
-        }
-      }
-      vitreRaf.current = requestAnimationFrame(dessiner);
-    };
-    dessiner();
+        const son = playerRef.current?.getCurrentTime?.() || 0;
+        clipPlayer.current.loadVideoById({ videoId: id, startSeconds: Math.max(0, son - 0.3) });
+        clipPlayer.current.mute?.();
+        if (wantedPlay.current) clipPlayer.current.playVideo?.();
+      } catch { /* ignore */ }
+      return;
+    }
+    if (!window.YT || !window.YT.Player) {
+      /* l'API n'est pas encore là : on réessaie dans un instant */
+      let n = 0;
+      const t = window.setInterval(() => {
+        n += 1;
+        if (window.YT?.Player) { window.clearInterval(t); monterClip(); }
+        else if (n > 40) window.clearInterval(t);
+      }, 200);
+      return;
+    }
+
+    const cible = document.createElement('div');
+    cible.style.cssText = 'width:100%;height:100%;';
+    const ancien = cadre.querySelector('.nowplaying-clip__frame');
+    if (ancien) ancien.remove();
+    cible.className = 'nowplaying-clip__frame';
+    cadre.appendChild(cible);
+
+    const son = playerRef.current?.getCurrentTime?.() || progressRef.current || 0;
+    try {
+      clipPlayer.current = new window.YT.Player(cible, {
+        width: '100%',
+        height: '100%',
+        videoId: id,
+        playerVars: {
+          autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1,
+          playsinline: 1, iv_load_policy: 3,
+          /* la position du son, et surtout : muet. Le son vient du lecteur
+             de musique, jamais d'ici — sinon on entendrait deux fois. */
+          start: Math.max(0, Math.floor(son - 0.3)), mute: 1,
+        },
+        events: {
+          onReady: (e: any) => {
+            clipPret.current = true;
+            try { e.target.mute?.(); } catch { /* ignore */ }
+            if (wantedPlay.current) e.target.playVideo?.();
+          },
+        },
+      });
+    } catch { /* lecteur absent */ }
   };
 
-  /* le mode vidéo est demandé : le lecteur doit être SUR le clip */
+  /* le clip suit la lecture : pause, reprise, et recalage discret */
   useEffect(() => {
-    if (mode !== 'clip') return;
-    if (!clipId || !currentTrack) return;
-    if (clipId === currentTrack.videoId) { poserVitre(); return; }
-    if (clipCharge.current === clipId) return;
-    const p = playerRef.current;
-    if (!p?.loadVideoById || !wantedPlay.current) return;
-    const ici = p.getCurrentTime?.() || progressRef.current || 0;
-    clipCharge.current = clipId;
-    try { p.loadVideoById({ videoId: clipId, startSeconds: Math.max(0, ici - 0.4) }); } catch { /* ignore */ }
-    /* eslint-disable-next-line react-hooks/exhaustive-deps */
-  }, [mode, clipId, currentTrack]);
+    const t = window.setInterval(() => {
+      if (mode !== 'clip' || !clipPlayer.current?.getPlayerState) return;
+      const c = clipPlayer.current;
+      const son = playerRef.current;
+      if (!son?.getCurrentTime) return;
+      let etatC = 0;
+      try { etatC = c.getPlayerState?.() ?? 0; } catch { return; }
+      /* on ne cherche pas à synchroniser au dixième de seconde : au-delà
+         d'une demi-seconde d'écart, on recale. En deçà, l'œil ne voit rien
+         et le son est de toute façon celui du lecteur de musique. */
+      try {
+        const ecart = (c.getCurrentTime?.() || 0) - (son.getCurrentTime?.() || 0);
+        if (Math.abs(ecart) > 0.6) c.seekTo?.(son.getCurrentTime() || 0, true);
+        const enLecture = (son.getPlayerState?.() ?? 0) === 1;
+        if (enLecture && etatC !== 1) c.playVideo?.();
+        if (!enLecture && etatC === 1) c.pauseVideo?.();
+      } catch { /* ignore */ }
+    }, 700);
+    return () => window.clearInterval(t);
+  }, [mode]);
+
+  /* on quitte le mode vidéo : le clip se tait et disparaît */
+  useEffect(() => {
+    if (mode === 'clip') return;
+    try { clipPlayer.current?.pauseVideo?.(); } catch { /* ignore */ }
+    clipSlot.current?.querySelectorAll('.nowplaying-clip__frame').forEach((n) => {
+      const f = n as HTMLElement;
+      f.style.display = 'none';
+    });
+  }, [mode]);
 
   /* un clip qui n'existe pas : on ne montre pas une image, on revient à
      la pochette — et on le dit, sans jamais laisser un cadre noir */
@@ -647,33 +688,28 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [mode, clipEtat]);
 
-  const clipCharge = useRef<string | null>(null);
+  /* le clip arrive après la bascule : on le monte à ce moment-là */
+  useEffect(() => {
+    if (mode !== 'clip' || clipEtat !== 'pret' || !clipId) return;
+    monterClip();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [mode, clipEtat, clipId, currentTrack?.id]);
 
-  /* ── charger l'image qui correspond au morceau COURANT ──
-     Un seul endroit qui décide, et qui vérifie toujours les deux choses :
-     quelle vidéo, et pour quel morceau. S'il y a un doute, on recharge. */
-  const poserImage = (t: Track | null, clip: string | null, m: 'audio' | 'clip') => {
-    const p = playerRef.current;
-    if (!t || !p?.loadVideoById) return;
-    const voulu = m === 'clip' && clip ? clip : t.videoId;
-    if (!voulu) return;
-    /* même vidéo ET même morceau : rien à faire, on ne coupe pas le son */
-    if (p.getVideoData?.()?.video_id === voulu && clipChargePour.current === t.id) return;
-    const ici = p.getCurrentTime?.() || progressRef.current || 0;
-    clipCharge.current = voulu;
-    clipChargePour.current = t.id;
-    try { p.loadVideoById({ videoId: voulu, startSeconds: Math.max(0, ici - (m === 'clip' && clip ? 0.4 : 0)) }); } catch { /* ignore */ }
-  };
-
+  /* ── basculer l'image ──
+     Rien à faire sur le lecteur de musique : il continue le morceau qu'il
+     joue. Seule la seconde iframe (muette) change, elle, de vidéo. C'est
+     ce qui garantit que le son ne s'interrompt pas et que l'horloge de la
+     musique ne bouge pas d'un dixième de seconde. */
   const toggleMode = () => {
     const suivant: 'audio' | 'clip' = mode === 'audio' ? 'clip' : 'audio';
-    /* on demande le clip au moment où on le montre, pas avant : inutile
-       d'interroger YouTube pour chaque morceau écouté */
-    if (suivant === 'clip' && clipEtat === 'inconnu') chercherClip(currentTrack);
-    /* retour à la pochette : le lecteur reprend la vidéo du morceau, au
-       même endroit du morceau. Aucune autre manipulation. */
-    poserImage(currentTrack, suivant === 'clip' ? clipId : null, suivant);
     setMode(suivant);
+    if (suivant === 'clip') {
+      if (clipEtat === 'inconnu') chercherClip(currentTrack);
+      /* le clip a déjà sa réponse : on le monte tout de suite */
+      if (clipEtat === 'pret' && clipId) monterClip();
+    } else {
+      try { clipPlayer.current?.pauseVideo?.(); } catch { /* ignore */ }
+    }
   };
 
   /* un nouveau morceau remet l'image à zéro : le clip de l'ancien n'a
@@ -687,8 +723,10 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
        « déjà chargé », sinon le nouveau morceau hérite du clip précédent */
     setClipId(null);
     setClipEtat('inconnu');
-    clipCharge.current = null;
-    clipChargePour.current = null;
+    try { clipPlayer.current?.pauseVideo?.(); } catch { /* ignore */ }
+    clipSlot.current?.querySelectorAll('.nowplaying-clip__frame').forEach((n) => (n as HTMLElement).remove());
+    clipPlayer.current = null;
+    clipPret.current = false;
     if (mode === 'clip') chercherClip(currentTrack);
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, [currentTrack?.id, mode]);

@@ -1,7 +1,7 @@
 {
   "name": "soundblend-ai",
   "private": true,
-  "version": "6.9.27",
+  "version": "6.9.28",
   "type": "module",
   "scripts": {
     "dev": "vite",
