@@ -338,29 +338,52 @@ export function firstJson(raw: string | null): any | null {
 
 /* ─────────────── l'ordre des rôles ─────────────── */
 
-/**
- * La répartition demandée, ajustée pour rester honnête : on ne peut pas
- * mettre en anchor plus de morceaux qu'il n'y a d'amorces. Si le compte
- * ne tombe pas juste, on décale les places restantes vers les découvertes,
- * qui sont toujours possibles.
- */
+/** Arrondi par plus fort reste : la somme est exacte et une part à zéro
+    ne reçoit aucun titre. En cas d'égalité, l'ordre du tableau tranche. */
+const repartir = (total: number, weights: number[]): number[] => {
+  const n = Math.max(0, Math.floor(Number.isFinite(total) ? total : 0));
+  const w = weights.map((x) => Number.isFinite(x) ? Math.max(0, x) : 0);
+  const sum = w.reduce((a, b) => a + b, 0);
+  if (!sum) return w.map((_, i) => i === w.length - 1 ? n : 0);
+  const exact = w.map((x) => n * x / sum);
+  const parts = exact.map(Math.floor);
+  const order = exact.map((x, i) => ({ i, rest: x - parts[i] }))
+    .sort((a, b) => b.rest - a.rest || a.i - b.i);
+  for (let i = 0, left = n - parts.reduce((a, b) => a + b, 0); i < left; i++) parts[order[i].i]++;
+  return parts;
+};
+
+/** La répartition choisie avant toute limitation par les amorces. Elle
+    reste la référence du bilan, même si la demande doit être adaptée. */
+export const splitRequestedCounts = (
+  total: number,
+  ratio: { anchor: number; deepDive: number; fresh: number },
+): PickCounts => {
+  const [anchor, deepDive, fresh] = repartir(total, [ratio.anchor, ratio.deepDive, ratio.fresh]);
+  return { anchor, deepDive, fresh };
+};
+
+/** Comptes effectivement demandés au moteur. On ne peut pas avoir plus de
+    piliers que d'amorces : leurs places indisponibles sont demandées en
+    découvertes, sans augmenter artificiellement les faces cachées. */
 export const splitCounts = (
   total: number,
   ratio: { anchor: number; deepDive: number; fresh: number },
   seedCount: number,
 ): PickCounts => {
-  const sum = ratio.anchor + ratio.deepDive + ratio.fresh || 100;
-  const wanted = (p: number) => Math.round((total * p) / sum);
-  let anchor = Math.min(seedCount, Math.max(1, wanted(ratio.anchor)));
-  let deepDive = Math.max(1, wanted(ratio.deepDive));
-  let fresh = Math.max(1, total - anchor - deepDive);
-  /* si le compte dépasse le total, on retire d'abord aux deep dives */
-  while (anchor + deepDive + fresh > total) {
-    if (deepDive > 1) deepDive--;
-    else if (fresh > 1) fresh--;
-    else break;
-  }
-  /* et s'il en manque, on complète en découvertes */
-  fresh += Math.max(0, total - (anchor + deepDive + fresh));
-  return { anchor, deepDive, fresh };
+  const wanted = splitRequestedCounts(total, ratio);
+  const capacity = Number.isFinite(seedCount) ? Math.max(0, Math.floor(seedCount)) : 0;
+  const anchor = Math.min(capacity, wanted.anchor);
+  return { anchor, deepDive: wanted.deepDive, fresh: wanted.fresh + wanted.anchor - anchor };
+};
+
+/** Une fois les catégories demandées essayées, les places vides vont aux
+    piliers et découvertes selon leurs parts initiales. Si les deux parts
+    sont nulles, on donne ces places aux découvertes en dernier recours. */
+export const splitReplacement = (
+  total: number,
+  ratio: { anchor: number; fresh: number },
+): { anchor: number; fresh: number } => {
+  const [anchor, fresh] = repartir(total, [ratio.anchor, ratio.fresh]);
+  return { anchor, fresh };
 };

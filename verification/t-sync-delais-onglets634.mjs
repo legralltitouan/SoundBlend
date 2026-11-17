@@ -34,9 +34,10 @@ try{
  await wait(async()=> (await status(q)).enAttente,'marqueur partagé');
  const qstate=await status(q),text=await q.locator('.sb-sync-line').innerText();
  check(qstate.enAttente&&qstate.phase!=='pret'&&!text.includes('Dernière synchronisation vérifiée'),'un geste en attente dans un onglet rend l’état de l’autre honnête');
- fail=false;await q.getByRole('button',{name:'Synchroniser maintenant'}).click();
- await wait(()=>remote.exclusions.some(x=>x.artist==='Autre onglet')&&ready(q),'reprise depuis le second onglet');
- check(remote.exclusions.some(x=>x.artist==='Autre onglet'&&!x.deleted),'l’autre onglet peut reprendre et envoyer le changement partagé');
+ check(await q.getByRole('button',{name:'Synchroniser maintenant'}).count()===0,'aucun bouton manuel dans les réglages');
+ fail=false;
+ await wait(()=>remote.exclusions.some(x=>x.artist==='Autre onglet')&&ready(q),'reprise automatique depuis les onglets');
+ check(remote.exclusions.some(x=>x.artist==='Autre onglet'&&!x.deleted),'le changement partagé est repris automatiquement sans bouton');
  await p.evaluate(async()=>await (await import('/src/services/drive.ts')).demarrerSync());await wait(()=>ready(p),'état avant écritures concurrentes');
  holdPatch=true;await p.evaluate(async()=> (await import('/src/services/storage.ts')).block({artist:'Premier geste en vol'},'artist'));
  const first=await p.evaluate(()=>localStorage.getItem('soundblend_account_v1:same-account:soundblend_sync_pending_v2'));

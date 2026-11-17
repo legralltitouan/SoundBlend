@@ -28,11 +28,11 @@ try {
    throw new Error(`Service worker ou nettoyage des anciens caches non prêt : ${(await caches.keys()).join(', ')}`);
  });
  const before=await p.evaluate(async()=>{
-   const keys=await caches.keys();const shell=await caches.open('sb-v6-9-35-shell');const req=await shell.keys();
+   const keys=await caches.keys();const shell=await caches.open('sb-v6-9-36-shell');const req=await shell.keys();
    const manifest=await (await fetch('manifest.webmanifest')).json();
    return {keys,requests:req.map(r=>new URL(r.url).pathname),manifest};
  });
- check(before.keys.includes('sb-v6-9-35-shell'),'service worker de la nouvelle version activé');
+ check(before.keys.includes('sb-v6-9-36-shell'),'service worker de la nouvelle version activé');
  const anciensCachesNettoyes = before.keys.includes('une-autre-application') && !before.keys.includes('sb-v6-9-31-shell') && !before.keys.includes('sb-v6-9-32-shell') && !before.keys.includes('sb-v6-9-33-shell') && !before.keys.includes('sb-v6-9-34-shell');
  if (!anciensCachesNettoyes) console.error('Caches observés :', before.keys.join(', '));
  check(anciensCachesNettoyes,'anciens caches SoundBlend nettoyés sans effacer celui des autres applications');

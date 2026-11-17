@@ -83,6 +83,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [recentBlends, setRecentBlends] = useState<GeneratedBlend[]>(getStoredBlends);
 
   const [generating, setGenerating] = useState(false);
+  const generationInProgress = useRef<symbol | null>(null);
   const [generatingStatus, setGeneratingStatus] = useState('');
   const [generatingLog, setGeneratingLog] = useState<string[]>([]);
   const [exclusions, setExclusions] = useState<Exclusions>(getExclusions);
@@ -134,6 +135,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSettings(getStoredSettings()); setRecentBlends(getStoredBlends()); setExclusions(getExclusions());
       setSelectedTracks([]); setCurrentBlendState(null);
       setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p }))); setLibraryError(null); setLoadingLibrary(false);
+      generationInProgress.current = null;
       setGenerating(false); setGeneratingStatus(''); setGeneratingLog([]);
       setIsAuthenticated(youtubeService.isAuthenticated()); setAccountKnown(!!youtubeService.accountId());
       setUserProfile(youtubeService.getUserProfile()); setAuthNotice('');
@@ -289,6 +291,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!requested.length) return null;
       const seeds = uniqueTracks(requested.filter((t) => !isExcluded(t)));
       if (!seeds.length) throw new Error('Toutes les amorces choisies sont bloquées. Modifie les exclusions dans Réglages.');
+      if (generationInProgress.current) throw new Error('Une génération est déjà en cours.');
+      const generationToken = Symbol('generation'); generationInProgress.current = generationToken;
       setGenerating(true);
       /* Certains messages se suivent dans le même tour JavaScript (par
          exemple « aucune clé » puis « vérification YouTube »). L'état
@@ -310,11 +314,25 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Les amorces explicitement choisies restent possibles, même si récentes.
         const tracks = uniqueTracks(generatedTracks).filter((t) => !isExcluded(t)
           && (t.category === 'anchor' || !isRecentlyProposed(t)));
-        if (!tracks.length) throw new Error('Aucun titre disponible après application des exclusions et de l’historique.');
+        const generationReport = geminiService.dernierRapport;
+        if (!tracks.length) throw new Error(`Aucun titre admissible n’a pu être conservé.${generationReport?.warning ? ` ${generationReport.warning}` : ''}`);
         const now = new Date();
         const expires = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
         const artists = Array.from(new Set(seeds.map((t) => t.artist))).slice(0, 2);
         const name = artists.length >= 2 ? `${artists[0]}, ${artists[1]} & co.` : artists[0] ? `Autour de ${artists[0]}` : 'Nouveau blend';
+        const actual = { anchor: tracks.filter((t) => t.category === 'anchor').length,
+          deepDive: tracks.filter((t) => t.category === 'deep_dive').length,
+          fresh: tracks.filter((t) => t.category === 'fresh').length };
+        const beforeFinal = generationReport
+          ? generationReport.created.anchor + generationReport.created.deepDive + generationReport.created.fresh : 0;
+        const removedFinal = Math.max(0, beforeFinal - tracks.length);
+        const finalWarning = generationReport && removedFinal
+          ? `Avant le contrôle final : ${generationReport.warning || `sélection de ${beforeFinal}/${generationReport.target} titres.`} `
+            + `Contrôle final : ${tracks.length}/${generationReport.target} titres enregistrés (${actual.anchor} piliers, ${actual.deepDive} faces cachées, ${actual.fresh} découvertes). `
+            + `${removedFinal} titre${removedFinal > 1 ? 's ont été écartés' : ' a été écarté'} après contrôle des exclusions, de l’historique et des doublons.`
+          : generationReport?.warning;
+        const generation = generationReport ? { ...generationReport, created: actual, warning: finalWarning || '',
+          ...(removedFinal && !generationReport.cause ? { cause: 'other' as const } : {}) } : undefined;
         const blend: GeneratedBlend = {
           id: `blend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           title: name,
@@ -322,6 +340,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: now.toISOString(), expiresAt: expires.toISOString(), seedTracks: seeds, tracks,
           instruction: config.instruction?.trim() || undefined,
           methode: { kind: geminiService.derniereMethode, model: geminiService.dernierModele || undefined, detail: geminiService.derniereNote },
+          generation,
         };
         recordDiscoveries(tracks, now.getTime());
         const saved = saveBlendToStorage(blend);
@@ -331,7 +350,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return saved;
       } catch (e: any) {
         throw new Error(e?.message || 'La génération a échoué.');
-      } finally { if (accountRevision() === revision) setGenerating(false); }
+      } finally {
+        if (generationInProgress.current === generationToken) generationInProgress.current = null;
+        if (accountRevision() === revision) setGenerating(false);
+      }
     }, [selectedTracks],
   );
 

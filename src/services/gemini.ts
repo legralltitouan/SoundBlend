@@ -1,5 +1,5 @@
-import { BlendConfig, Exclusions, Track, TrackCategory, Playlist, GeneratedBlend, type DiscoveryRecord } from '../types';
-import { getStoredSettings, getDiscoveryHistory, isRecentlyProposed, isExcluded, recentArtists, getStoredPortrait } from './storage';
+import { BlendConfig, Exclusions, Track, TrackCategory, Playlist, GeneratedBlend, type BlendGenerationCounts, type BlendGenerationReport, type DiscoveryRecord } from '../types';
+import { artistMatches, getStoredSettings, getDiscoveryHistory, isRecentlyProposed, isExcluded, recentArtists, getStoredPortrait } from './storage';
 import { accountRevision, assertAccountRevision } from './accountScope';
 import { isSafeGoogleSuggestions } from './googleSuggestions';
 import { matchesVideoIdentity, youtubeService, withTimeout, type PlayableVideo } from './youtube';
@@ -8,7 +8,7 @@ import { matchesAsked, norm, cleanTitle } from '../lib/track';
 import { verifyVideo, looksLikeVideoId, artistTracks, relatedArtists } from './search';
 import {
   analysisPrompt, parseAnalysis, toPortrait, rememberPortrait, portraitFor,
-  listPrompt, parsePicks, splitCounts, replacePrompt,
+  listPrompt, parsePicks, splitCounts, splitRequestedCounts, splitReplacement, replacePrompt,
   type Pick, type CallModel,
 } from './curator';
 
@@ -21,7 +21,8 @@ export type ReplaceStep = 'taste' | 'thinking' | 'comparing' | 'finding' | 'artw
     celui de la vidéo réellement trouvée. */
 const videoInterdite = (v: PlayableVideo, history: DiscoveryRecord[], checkHistory = true): boolean => {
   const official = { videoId: v.videoId, title: v.sourceTitle || v.title, artist: v.sourceArtist || v.artist };
-  return [v, official].some((identity) => isExcluded(identity) || (checkHistory && isRecentlyProposed(identity, history)));
+  return [v, official].some((identity) => isExcluded(identity)
+    || (checkHistory && (isRecentlyProposed(identity, history) || isRecentlyProposed(identity))));
 };
 
 interface GeminiTrackSuggestion {
@@ -148,37 +149,28 @@ function rankOf(m: ApiModel): number {
 
 type Engine = { model: string; at: number; queue: string[] };
 const engineCache = new Map<string, Engine>();
-/** un modèle qui a refusé la requête (400/404) : on ne le rappelle pas */
+// Un refus concerne une clé ET un modèle, jamais tous les comptes de l'app.
+// Ces identifiants restent uniquement en mémoire et ne sont pas affichés.
+const modelKey = (apiKey: string, model: string) => `${apiKey}\u0000${model}`;
 const brokenModels = new Map<string, number>();
 const ENGINE_TTL = 30 * 60 * 1000;
 
-/* ─────────── les modèles à court de quota ───────────
-   Le mur qu'on a vraiment rencontré : `gemini-2.5-pro` renvoie 429 sur
-   l'offre gratuite, tout de suite, alors que `gemini-2.5-flash` répond
-   parfaitement. Or le moteur demandait le plus puissant d'abord, à chaque
-   fois — donc chaque blend perdait son analyse, ses faces cachées et ses
-   découvertes sur le même refus, en le payant d'une requête à chaque
-   appel. Un quota épuisé ne se répare pas en insistant : on met le
-   modèle de côté un moment, et on le sait sans le redemander.
-   C'est en mémoire seulement : un rechargement de page redonne sa chance
-   au modèle (le quota a pu se rouvrir entre-temps). */
-const quotaOut = new Map<string, number>();
-/* Un quota **journalier** ne se rouvre pas en dix minutes : on écarte le
-   modèle pour la journée (minuit, heure locale de l'auditeur). Un blocage
-   de débit, lui, retombe en une minute — la distinction se fait sur le
-   message de Google, voir `noteQuota`. */
-const QUOTA_DAY = () => {
-  const minuit = new Date();
-  minuit.setHours(24, 0, 1, 0);
-  return minuit.getTime();
+/* Un 429 peut correspondre à un quota ou à une limitation de débit.
+   On retient le refus par clé + modèle afin de ne pas multiplier les
+   requêtes ; un changement de clé ne doit pas hériter de l'ancien refus. */
+type QuotaInfo = { until: number; daily: boolean };
+const quotaOut = new Map<string, QuotaInfo>();
+const quotaInfo = (apiKey: string, model: string): QuotaInfo | null => {
+  const k = modelKey(apiKey, model), entry = quotaOut.get(k);
+  if (entry && Date.now() >= entry.until) { quotaOut.delete(k); return null; }
+  return entry || null;
 };
-const outOfQuota = (model: string) => {
-  const until = quotaOut.get(model) || 0;
-  if (until && Date.now() > until) { quotaOut.delete(model); return false; }
-  return !!until;
+const outOfQuota = (apiKey: string, model: string) => !!quotaInfo(apiKey, model);
+const noteQuota = (apiKey: string, model: string, daily: boolean) => {
+  // L'heure réelle de remise à zéro dépend du quota Google. Ne pas promettre
+  // « demain à minuit » : le délai local est seulement une limite de relance.
+  quotaOut.set(modelKey(apiKey, model), { until: Date.now() + (daily ? 60 * 60 * 1000 : 60 * 1000), daily });
 };
-const noteQuota = (model: string, journalier: boolean) =>
-  quotaOut.set(model, journalier ? Math.min(QUOTA_DAY(), Date.now() + 24 * 3600 * 1000) : Date.now() + 60 * 1000);
 
 /**
  * Les modèles de texte que cette clé peut appeler, du plus puissant au
@@ -201,7 +193,7 @@ const ecarter = (apiKey: string, nom: string, raison: string) => {
   ecartesPour(apiKey).set(nom.replace(/^models\//, ''), raison);
 };
 
-async function listTextModels(apiKey: string, signal?: AbortSignal): Promise<string[]> {
+async function listTextModels(apiKey: string, signal?: AbortSignal, includeQuota = false): Promise<string[]> {
   const all: ApiModel[] = [];
   let pageToken = '';
   for (let page = 0; page < 5; page++) {
@@ -209,7 +201,10 @@ async function listTextModels(apiKey: string, signal?: AbortSignal): Promise<str
       `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`,
       { headers: { Accept: 'application/json', 'x-goog-api-key': apiKey }, signal, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' },
     );
-    if (!res.ok) throw new Error(`models.list ${res.status}`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw Object.assign(new Error(`models.list ${res.status}`), { status: res.status, detail });
+    }
     const data = await res.json();
     all.push(...(data.models || []));
     pageToken = data.nextPageToken || '';
@@ -225,6 +220,8 @@ async function listTextModels(apiKey: string, signal?: AbortSignal): Promise<str
           : (m.supportedGenerationMethods || []).includes('generateContent') ? 'ne peut pas écrire un blend entier' : 'n’écrit pas de texte');
     } else if (famille(m) > 1) {
       ecarter(apiKey, n, 'famille inconnue — gardée en dernier recours');
+    } else if (outOfQuota(apiKey, n)) {
+      ecarter(apiKey, n, 'limite Gemini (429) rencontrée récemment');
     }
   }
   return all
@@ -232,8 +229,8 @@ async function listTextModels(apiKey: string, signal?: AbortSignal): Promise<str
     /* la famille Gemini de sortie de texte passe devant ; les autres
        (gemma, etc.) restent en réserve, jamais en tête */
     .filter((m) => famille(m) <= 1)
-    .filter((m) => !brokenModels.has(m.name.replace(/^models\//, '')))
-    .filter((m) => !outOfQuota(m.name.replace(/^models\//, '')))
+    .filter((m) => !brokenModels.has(modelKey(apiKey, m.name.replace(/^models\//, ''))))
+    .filter((m) => includeQuota || !outOfQuota(apiKey, m.name.replace(/^models\//, '')))
     .sort((a, b) => rankOf(a) - rankOf(b))
     .map((m) => m.name.replace(/^models\//, ''))
     .filter((n, i, arr) => arr.indexOf(n) === i);
@@ -247,12 +244,13 @@ async function listTextModels(apiKey: string, signal?: AbortSignal): Promise<str
  * réseau), on rend une file vide : l'appelant le sait et le dit, plutôt
  * que de faire semblant avec un nom de modèle inventé.
  */
-async function engineQueue(apiKey: string, signal?: AbortSignal): Promise<string[]> {
-  const listed = await listTextModels(apiKey, signal);
+async function engineQueue(apiKey: string, signal?: AbortSignal, includeQuota = false): Promise<string[]> {
+  const listed = await listTextModels(apiKey, signal, includeQuota);
   const cached = engineCache.get(apiKey);
   if (!listed.length) {
     return cached && Date.now() - cached.at < ENGINE_TTL
       ? [cached.model, ...cached.queue.filter((m) => m !== cached.model)]
+        .filter((m) => !brokenModels.has(modelKey(apiKey, m)) && (includeQuota || !outOfQuota(apiKey, m)))
       : [];
   }
   /* celui qui vient de répondre garde la main s'il est toujours là */
@@ -388,7 +386,7 @@ async function callModelResilient(
         }
       }
       /* refus net : ce modèle n'accepte pas nos requêtes, on l'oublie */
-      brokenModels.set(model, Date.now());
+      brokenModels.set(modelKey(apiKey, model), Date.now());
       engineCache.delete(apiKey);
     }
     throw e;
@@ -406,7 +404,18 @@ async function callModelResilient(
 /** le refus est-il une incarnation, pas un mur de quota ? */
 const illisible = (e: any) => !!e?.illisible;
 
+/** Une demande a épuisé la file de modèles. Les 429 et les autres refus
+    sont distingués : un 404 YouTube n'est jamais une preuve de quota. */
+class ModelExhausted extends Error {
+  constructor(message: string, public quota: boolean, public allQuota: boolean) {
+    super(message);
+    this.name = 'ModelExhausted';
+  }
+}
+type ModelProblem = { role: 'analysis' | TrackCategory; message: string; quota: boolean; allQuota: boolean };
+
 function explain(e: any): string {
+  if (e instanceof ModelExhausted) return e.message;
   const st = e?.status;
   if (st === 403) return 'clé Gemini refusée (403) — vérifie la clé et que l’API Generative Language est autorisée';
   if (st === 401) return 'clé Gemini invalide (401)';
@@ -416,9 +425,9 @@ function explain(e: any): string {
        demain, ou changer de clé). Les confondre faisait dire « réessaie
        demain » pour un simple débit. */
     if (/per.?day|PerDay|daily/i.test(String(e?.detail || ''))) {
-      return 'quota journalier Gemini atteint (429) — une autre clé, ou demain';
+      return 'quota journalier Gemini atteint (429) — vérifie les quotas avant de réessayer';
     }
-    return 'Gemini limite le débit (429) — réessaie dans un instant';
+    return 'Gemini limite le quota ou le débit (429) — vérifie les quotas et réessaie plus tard';
   }
   if (st === 404) return 'modèle introuvable (404)';
   if (st === 400) return 'requête refusée par le modèle (400)';
@@ -675,7 +684,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
         if (options.signal?.aborted) throw new Error('Préparation interrompue.');
         last = e;
         if (e?.status === 401 || e?.status === 403) break;
-        if (e?.status === 429) noteQuota(model, /per.?day|PerDay|daily/i.test(String(e?.detail || '')));
+        if (e?.status === 429) noteQuota(apiKey, model, /per.?day|PerDay|daily/i.test(String(e?.detail || '')));
       }
     }
     throw new Error(last ? `L’assistant ne peut pas répondre : ${explain(last)}.` : 'Gemini n’a pas renvoyé une réponse exploitable. Réessaie.');
@@ -690,6 +699,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
     onProgress?: (message: string) => void
   ): Promise<Track[]> {
     const revision = accountRevision();
+    this.derniereMethode = 'gemini'; this.dernierModele = ''; this.derniereNote = ''; this.dernierRapport = undefined;
     const originalProgress = onProgress;
     onProgress = (message) => { assertAccountRevision(revision); originalProgress?.(message); };
     const apiKey = cleGemini(getStoredSettings().geminiApiKey);
@@ -699,7 +709,15 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
 
     /* la durée demandée, en morceaux de ~3,5 min */
     const targetCount = Math.max(4, Math.round(config.durationMinutes / 3.5));
+    const requested = splitRequestedCounts(targetCount, config.ratio);
     const counts = splitCounts(targetCount, config.ratio, seedTracks.length);
+    const problems: ModelProblem[] = [];
+    const recordProblem = (role: ModelProblem['role'], e: any) => {
+      problems.push({ role, message: explain(e), quota: e instanceof ModelExhausted ? e.quota : e?.status === 429,
+        allQuota: e instanceof ModelExhausted && e.allQuota });
+    };
+    let supplementGemini: ((need: number, current: Track[]) => Promise<Track[]>) | undefined;
+    const terminer = (tracks: Track[]) => this.completerBlend(tracks, seedTracks, config, requested, counts, tasteMemory, problems, revision, onProgress, supplementGemini);
 
     /* tout ce qui ne doit jamais ressortir : les amorces, les morceaux
        déjà écoutés ou proposés, ceux que la personne a rejetés */
@@ -714,7 +732,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
     const bannedArtists = new Set(
       tasteMemory.artists.map((a) => a.toLowerCase().trim()).filter(Boolean),
     );
-    const seedArtistSet = new Set(seedTracks.map((t) => t.artist.toLowerCase().trim()));
+    const isSeedArtist = (artist: string) => seedTracks.some((t) => artistMatches(artist, t.artist));
 
     if (!apiKey) {
       if (instruction) throw new Error('Une clé Gemini est nécessaire pour appliquer cette demande.');
@@ -723,127 +741,88 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
          YouTube sont de vrais voisins musicaux. On le dit, et on le fait
          au lieu de rendre les piliers en annonçant un échec. */
       onProgress?.('Aucune clé Gemini — analyse impossible. On compose autrement : par voisinage sur YouTube.');
-      return this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, 'aucune clé Gemini');
+      return terminer(await this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, 'aucune clé Gemini'));
     }
 
-    /* ── la réserve ──
-       Un 429 sur `gemini-2.5-pro` ne dit rien des autres : le quota de
-       l'offre gratuite est compté **par modèle**. On garde donc, pour
-       cette clé, le premier modèle qui répond et UNE seule réserve —
-       pas trois. Trois tentatives qui échouent sur le même mur, c'est
-       ce qui remplissait la console de cinq 429 et donnait un blend
-       réduit aux piliers sans qu'on sache pourquoi. */
-    /* ── toute la file, pas seulement deux ──
-       L'offre gratuite compte son quota **par modèle**. Quand le modèle
-       phare est à sec, un modèle plus léger a souvent encore son quota
-       entier (mesuré chez l'auditeur : Hydrogen 23/20, 3.8 Flash 33/20,
-       3.6 Flash 22/20 — mais 3.5 Flash Lite 78/500, intact). S'arrêter
-       après deux candidats, c'était renoncer au blend alors qu'il en
-       restait six capables de le composer. On les essaie dans l'ordre,
-       et on s'arrête au premier qui répond : en pratique un ou deux
-       appels, pas huit. */
-    /* `memeFamilleSeulement` : après un mur de quota, on ne réessaie que
-       des Gemini — les autres familles échoueraient pareil (même quota
-       de projet), c'est une requête perdue. */
-    const chain: { model: string; key: string; famille: boolean }[] = [];
+    /* Conserver dans la file les modèles temporairement limités, pour
+       pouvoir distinguer « tous refusés par quota » de « aucun modèle
+       annoncé ». Les modèles déjà limités ne sont pas redemandés. */
+    const chain: { model: string; key: string }[] = [];
+    let listingError = '';
     try {
-      const models = await engineQueue(apiKey);
-      chain.push(...models.map((m) => ({ model: m, key: apiKey, famille: /^gemini-/.test(m) })));
-    } catch { /* la liste n'a pas répondu : on le dira plus bas */ }
+      const models = await engineQueue(apiKey, undefined, true);
+      assertAccountRevision(revision);
+      chain.push(...models.map((model) => ({ model, key: apiKey })));
+    } catch (e: any) {
+      assertAccountRevision(revision);
+      listingError = explain(e); recordProblem('analysis', e);
+    }
     if (!chain.length) {
-      if (instruction) throw new Error('Aucun modèle Gemini disponible pour respecter cette demande.');
+      if (instruction) throw new Error(`Aucun modèle Gemini disponible pour respecter cette demande${listingError ? ` : ${listingError}` : ''}.`);
       onProgress?.('Aucun modèle de texte disponible — on compose par voisinage sur YouTube.');
-      return this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, 'aucun modèle disponible');
+      return terminer(await this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, listingError || 'aucun modèle disponible'));
     }
 
-    /* état visible du mur, pour l'avouer à l'écran si tout tombe */
     let dernierMur = '';
-    const epuisees = new Set<string>();
-
-    /* ── la trace : par quel moyen ce blend est né ──
-       posée au fil des appels, pas devinée à la fin : `answer` retient le
-       modèle qui a réellement répondu, `dernierMur` la raison du silence. */
     let modeleQuiRepond = '';
-
+    let rateRetryUsed = false;
     const call: CallModel = async (prompt, temperature, budgetMs) => {
       assertAccountRevision(revision);
       let last: any = null;
-      let journalier = false;
-      /* ── toute la file, jusqu'au dernier ──
-         L'ordre : les Gemini de texte, du plus récent au plus ancien,
-         puis les autres (gemma…) en réserve. On les essaie **tous**,
-         dans cet ordre, et on s'arrête au premier qui écrit vraiment.
-         Aucun plafond : la demande est explicite. */
-      for (const step of chain) {
-        /* un modèle déjà à sec n'est pas rappelé : sinon chaque appel du
-           blend repayait un 429 sur le même modèle, cinq fois de suite */
-        if (outOfQuota(step.model)) continue;
+      const outcomes = new Map<string, 'quota' | 'other'>();
+      const attempt = async (step: { model: string; key: string }): Promise<{ text?: string; stop?: boolean }> => {
+        assertAccountRevision(revision);
+        if (outOfQuota(step.key, step.model)) { outcomes.set(step.model, 'quota'); return {}; }
+        if (brokenModels.has(modelKey(step.key, step.model))) { outcomes.set(step.model, 'other'); return {}; }
         try {
           const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
           assertAccountRevision(revision);
-          if (raw) {
-            rememberEngine(step.key, step.model);
-            modeleQuiRepond = step.model;
-            return raw;
-          }
+          if (raw) { rememberEngine(step.key, step.model); modeleQuiRepond = step.model; return { text: raw }; }
+          outcomes.set(step.model, 'other');
         } catch (e: any) {
           assertAccountRevision(revision);
           last = e;
-          const st = e?.status;
-          /* quota : on met ce modèle de côté (10 min) et on essaie la
-             réserve. La clé refusée ou invalide, elle, condamne le
-             couple clé+modèle : c'est la clé qu'on abandonne. */
-          if (st === 429) {
-            /* « par jour » ou « par minute » : le message de Google le dit */
-            journalier = /per.?day|PerDay|daily/i.test(String(e?.detail || ''));
-            noteQuota(step.model, journalier);
-            dernierMur = explain(e);
-            continue;
-          }
-          if (st === 403 || st === 401) {
-            /* la clé est morte : aucun autre modèle ne la ressuscitera */
-            epuisees.add(step.key);
-            dernierMur = explain(e);
-            break;
-          }
-          if (illisible(e) || st === 400 || st === 404) {
-            /* ce modèle-là ne sait pas écrire ce qu'on demande (ou
-               n'existe plus sous ce nom) : c'est LUI qui est en cause,
-               pas la clé. On l'écarte pour un moment et on passe au
-               suivant — sans quoi il resterait en tête de file et
-               coûterait un appel perdu à chaque blend. */
-            brokenModels.set(step.model, Date.now());
-            dernierMur = st === 404 ? 'un modèle introuvable (404)' : 'un modèle qui répond sans texte';
-            continue;
+          if (e?.status === 429) {
+            noteQuota(step.key, step.model, /per.?day|PerDay|daily/i.test(String(e?.detail || '')));
+            outcomes.set(step.model, 'quota');
+          } else {
+            outcomes.set(step.model, 'other');
+            if (illisible(e) || e?.status === 400 || e?.status === 404) brokenModels.set(modelKey(step.key, step.model), Date.now());
+            if (e?.status === 401 || e?.status === 403) return { stop: true };
           }
         }
+        return {};
+      };
+      for (const step of chain) {
+        const result = await attempt(step);
+        if (result.text) return result.text;
+        if (result.stop) break;
       }
-      /* Tout a échoué, mais pour du **débit** et non du quota du jour :
-         le blocage retombe en une minute. Une seule attente, un seul
-         nouvel essai — au-delà, insister serait la bagarre qu'on s'est
-         interdite. */
-      /* un refus de forme (modèle qui n'écrit pas) n'est pas du débit :
-         attendre douze secondes ne le fera pas écrire */
-      if (last && !journalier && epuisees.size === 0 && !illisible(last)) {
-        onProgress?.('Le débit de Gemini est saturé — un instant, on réessaie.');
-        quotaOut.clear();
-        await new Promise((r) => setTimeout(r, 12000));
+      const allLimited = () => outcomes.size === chain.length && chain.every((s) => outcomes.get(s.model) === 'quota');
+      // Un seul réessai dans toute la génération, uniquement si Google a
+      // effectivement renvoyé 429 et qu'aucun des refus n'indique un quota
+      // journalier. Ne jamais effacer les limites d'une autre clé.
+      if (allLimited() && last?.status === 429 && !rateRetryUsed
+          && chain.every((s) => !quotaInfo(s.key, s.model)?.daily)) {
+        rateRetryUsed = true;
+        onProgress?.('Gemini limite temporairement les requêtes (429) : un nouvel essai…');
+        await new Promise((resolve) => setTimeout(resolve, 12000));
+        assertAccountRevision(revision);
         for (const step of chain) {
-          assertAccountRevision(revision);
-          if (brokenModels.has(step.model)) continue;
-          try {
-            const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
-            if (raw) { rememberEngine(step.key, step.model); modeleQuiRepond = step.model; return raw; }
-          } catch (e: any) {
-            last = e;
-            if (e?.status === 429) continue;
-            if (illisible(e) || e?.status === 400 || e?.status === 404) { brokenModels.set(step.model, Date.now()); continue; }
-            break;
-          }
+          if (!quotaInfo(step.key, step.model)?.daily) quotaOut.delete(modelKey(step.key, step.model));
+          const result = await attempt(step);
+          if (result.text) return result.text;
+          if (result.stop) break;
         }
       }
-      if (last) throw last;
-      return null;
+      const hasQuota = [...outcomes.values()].some((x) => x === 'quota');
+      const allQuota = allLimited();
+      dernierMur = allQuota
+        ? 'tous les modèles compatibles essayés sont temporairement limités par Gemini (429)'
+        : hasQuota
+          ? 'une limite Gemini (429) et d’autres refus ont empêché cette sélection'
+          : last ? explain(last) : 'aucun modèle compatible n’a répondu';
+      throw new ModelExhausted(dernierMur, hasQuota, allQuota);
     };
 
     /* ═══ 1. écouter ═══ */
@@ -855,7 +834,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
     let analyseErreur = '';
     let analysis = parseAnalysis(
       await call(analysisPrompt(seedTracks, tasteMemory, known, instruction, recentArtistNames), 0.4, 26000)
-        .catch((e) => { analyseErreur = explain(e); return null; }),
+        .catch((e) => { analyseErreur = explain(e); recordProblem('analysis', e); return null; }),
     );
 
     if (analysis) {
@@ -896,7 +875,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
          cette marge, deux titres introuvables laissaient deux trous. */
       const marge = Math.min(12, count + Math.max(2, Math.round(count * 0.6)));
       const raw = await call(listPrompt(role, marge, seedTracks, analysis!, tasteMemory, forbiddenList(), instruction, recentArtistNames), role === 'fresh' ? 0.85 : 0.7, 26000)
-        .catch((e) => { passe1 = explain(e); return null; });
+        .catch((e) => { passe1 = explain(e); recordProblem(role, e); return null; });
       const { analyse, titres } = parsePicks(raw);
       if (analyse) onProgress?.(analyse);
       /* on écarte ce qui est interdit, doublon ou déjà proposé AVANT de
@@ -911,8 +890,8 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
         if (bannedArtists.has(p.artist.toLowerCase().trim())) continue;
         /* anchor : uniquement des amorces ; fresh : jamais un artiste des amorces */
         if (role === 'anchor' && !seedTracks.some((s) => s.title.toLowerCase().trim() === keyB)) continue;
-        if (role === 'fresh' && seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
-        if (role === 'deep_dive' && !seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
+        if (role === 'fresh' && isSeedArtist(p.artist)) continue;
+        if (role === 'deep_dive' && !isSeedArtist(p.artist)) continue;
         if (clean.some((c) => `${c.artist} — ${c.title}`.toLowerCase() === keyA)) continue;
         clean.push(p);
         forbidden.add(keyA);
@@ -945,7 +924,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
         const reste = count - clean.length;
         /* une seconde passe ne doit jamais faire échouer la première */
         const raw2 = await call(listPrompt(role, reste + 2, seedTracks, analysis!, tasteMemory, forbiddenList(), instruction, recentArtistNames), 0.9, 24000)
-          .catch((e) => { passe2 = explain(e); return null; });
+          .catch((e) => { passe2 = explain(e); recordProblem(role, e); return null; });
         const suite = parsePicks(raw2).titres;
         for (const p of suite) {
           const keyA = `${p.artist} — ${p.title}`.toLowerCase().trim();
@@ -953,12 +932,20 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
           if (forbidden.has(keyA) || forbidden.has(keyB) || isExcluded(p, tasteMemory) || isRecentlyProposed(p, history)) continue;
           if (bannedArtists.has(p.artist.toLowerCase().trim())) continue;
           if (role === 'anchor' && !seedTracks.some((s2) => s2.title.toLowerCase().trim() === keyB)) continue;
-          if (role === 'fresh' && seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
-          if (role === 'deep_dive' && !seedArtistSet.has(p.artist.toLowerCase().trim())) continue;
+          if (role === 'fresh' && isSeedArtist(p.artist)) continue;
+          if (role === 'deep_dive' && !isSeedArtist(p.artist)) continue;
           if (clean.some((c) => `${c.artist} — ${c.title}`.toLowerCase() === keyA)) continue;
           clean.push(p);
           forbidden.add(keyA); forbidden.add(keyB);
             if (clean.length >= count) break;
+        }
+        // Les candidats supplémentaires de la seconde réponse restent eux
+        // aussi disponibles si YouTube écarte un titre ou si une autre
+        // catégorie doit être compensée en découvertes.
+        for (const p of suite) {
+          const k = `${p.artist} — ${p.title}`.toLowerCase().trim();
+          if (!clean.some((x) => `${x.artist} — ${x.title}`.toLowerCase().trim() === k)
+              && !resteCat.some((x) => `${x.artist} — ${x.title}`.toLowerCase().trim() === k)) resteCat.push(p);
         }
         if (suite.length) console.debug(`[curateur] ${role} : 2e passe, ${suite.length} de plus, total ${clean.length}/${count}`);
       }
@@ -1012,12 +999,15 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
        voisinage — un vrai blend, trouvé sur YouTube — et on dit lequel
        des deux chemins a servi. */
     if (instruction && !dives.length && !fresh.length && (counts.deepDive + counts.fresh > 0)) {
-      throw new Error('Gemini n’a pas pu proposer de titres pour appliquer la demande ; réessaie ou modifie-la.');
+      const limitation = problems.find((p) => p.quota);
+      throw new Error(limitation
+        ? `Gemini n’a pas pu appliquer la demande : ${limitation.message}. Vérifie les quotas et réessaie.`
+        : 'Gemini n’a pas pu proposer de titres pour appliquer la demande ; réessaie ou modifie-la.');
     }
     if (!dives.length && !fresh.length && analyseErreur) {
       onProgress?.(`Le moteur n’a pas répondu (${analyseErreur}). On compose par voisinage à la place.`);
       const secours = await this.parVoisinage(seedTracks, counts, tasteMemory, onProgress, analyseErreur);
-      if (secours.length > counts.anchor) return secours;
+      return terminer(secours);
     }
 
     /* ═══ 4. vérifier sur YouTube, puis rassembler ═══ */
@@ -1032,8 +1022,8 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
       titresTentes.add(cleTitre(p.title, p.artist));
       if (isExcluded(p) || (cat !== 'anchor' && isRecentlyProposed(p, history))) return null;
       if (cat !== 'anchor' && bannedArtists.has(p.artist.toLowerCase().trim())) return null;
-      if (cat === 'fresh' && seedArtistSet.has(p.artist.toLowerCase().trim())) return null;
-      if (cat === 'deep_dive' && !seedArtistSet.has(p.artist.toLowerCase().trim())) return null;
+      if (cat === 'fresh' && isSeedArtist(p.artist)) return null;
+      if (cat === 'deep_dive' && !isSeedArtist(p.artist)) return null;
       /* le pilier a déjà été vérifié plus haut (et son identifiant
          éventuellement réparé) : on reprend CETTE version, sinon on
          ramènerait le vieil identifiant mort qu'on vient de remplacer */
@@ -1064,10 +1054,13 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
         const artOfficiel = check?.author || '';
         const credible = !check || matchesVideoIdentity(p.title, p.artist, titreOfficiel, artOfficiel);
         const realIdentity = { videoId: vid, title: titreOfficiel || p.title, artist: artOfficiel || p.artist };
-        if (credible && check?.ok !== false && !isExcluded(realIdentity) && !isRecentlyProposed(realIdentity, history)) {
+        const officialSeed = isSeedArtist(realIdentity.artist) || isSeedArtist(cleanTitle(realIdentity.title).artist || '');
+        if (credible && check?.ok !== false && !(cat === 'fresh' && officialSeed) && !isExcluded(realIdentity)
+            && !isRecentlyProposed(realIdentity, history) && !isRecentlyProposed(realIdentity)) {
         return {
           id: `gen-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           videoId: p.videoId,
+          verifie: check?.ok === true,
           title: p.title,
           artist: p.artist,
           thumbnailUrl: `https://i.ytimg.com/vi/${p.videoId}/mqdefault.jpg`,
@@ -1169,32 +1162,146 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
     ];
     const unique = uniqueByVideo(dedupeTracks(blend));
 
-    /* ── le moyen, dit et gardé ──
-       Le voisinage a servi si le chemin d'urgence a été emprunté, ou si
-       aucune liste n'est revenue du modèle. On ne le devine pas : on
-       regarde ce qui a effectivement produit des morceaux. */
-    const parIA = this.derniereMethode === 'gemini'
-      && !!(modeleQuiRepond && (dives.length || fresh.length));
+    const parIA = !!(modeleQuiRepond && unique.some((t) => t.category !== 'anchor'));
     this.derniereMethode = parIA ? 'gemini' : 'voisinage';
     this.dernierModele = parIA ? modeleQuiRepond : '';
-    this.derniereNote = parIA
-      ? `Composé par ${modeleQuiRepond}.`
-      : (dernierMur
-        ? `Composé par voisinage YouTube (${dernierMur}). Aucun morceau n’a été inventé.`
-        : 'Composé par voisinage YouTube, sans modèle d’IA. Aucun morceau n’a été inventé.');
+    this.derniereNote = parIA ? `Composé par ${modeleQuiRepond}.`
+      : (dernierMur ? `Sélection Gemini indisponible (${dernierMur}).` : 'Aucune sélection Gemini exploitable.');
 
-    /* les comptes sont ceux du résultat FINAL, pas des intentions */
-    const n = (c: TrackCategory) => unique.filter((t) => t.category === c).length;
-    const plur = (k: number, un: string, des: string) => `${k} ${k > 1 ? des : un}`;
-    const manque = targetCount - unique.length;
-    onProgress?.(
-      `${plur(unique.length, 'morceau retenu', 'morceaux retenus')} : `
-      + `${plur(n('anchor'), 'pilier', 'piliers')}, `
-      + `${plur(n('deep_dive'), 'face cachée', 'faces cachées')}, `
-      + `${plur(n('fresh'), 'découverte', 'découvertes')}.`
-      + (manque > 0 ? ` ${plur(manque, 'place reste vide', 'places restent vides')} — ${raisonDesVides(pertes)}.` : ''),
-    );
-    return unique;
+    // Pour combler une autre catégorie, utiliser d'abord les découvertes
+    // déjà proposées, puis faire au plus une nouvelle sélection Gemini.
+    // Chaque candidat passe par les mêmes contrôles que le premier lot.
+    supplementGemini = async (need, current) => {
+      const found: Track[] = []; let attempts = 0;
+      const acceptPick = async (p: Pick) => {
+        if (found.length >= need || attempts >= 60 || titresTentes.has(cleTitre(p.title, p.artist))) return;
+        attempts++;
+        const t = await toTrack(p, 'fresh'); assertAccountRevision(revision);
+        if (!t || isExcluded(t) || isRecentlyProposed(t)) return;
+        if (uniqueByVideo(dedupeTracks([...current, ...found, t])).length !== current.length + found.length + 1) return;
+        found.push(t);
+      };
+      const drain = async () => {
+        const file = margeDe.get('fresh') || [];
+        while (file.length && found.length < need && attempts < 60) await acceptPick(file.shift()!);
+      };
+      await drain();
+      if (found.length < need && chain.some((s) => !outOfQuota(s.key, s.model) && !brokenModels.has(modelKey(s.key, s.model)))) {
+        const extra = await ask('fresh', need - found.length);
+        for (const p of extra) await acceptPick(p);
+        await drain();
+      }
+      if (found.length) {
+        this.derniereMethode = 'gemini';
+        this.dernierModele = modeleQuiRepond;
+        this.derniereNote = `Composé par ${modeleQuiRepond}.`;
+      }
+      return found;
+    };
+    if (unique.length < targetCount && (pertes.introuvable || pertes.titreDouteux || pertes.doublon)) {
+      onProgress?.(`Après vérification : ${raisonDesVides(pertes)}. Recherche de compléments…`);
+    }
+    return terminer(unique);
+  }
+
+  /** Dernier passage commun à tous les chemins de génération. Les places
+      vides ne changent jamais l'étiquette d'une piste : on ajoute de vrais
+      piliers disponibles ou de nouvelles découvertes, puis on raconte ce
+      qui a changé, y compris lorsque la longueur demandée est atteinte. */
+  private async completerBlend(
+    initial: Track[], seedTracks: Track[], config: BlendConfig, requested: BlendGenerationCounts, planned: BlendGenerationCounts,
+    taste: Exclusions, problems: ModelProblem[], revision: number, onProgress?: (m: string) => void,
+    supplementGemini?: (need: number, current: Track[]) => Promise<Track[]>,
+  ): Promise<Track[]> {
+    assertAccountRevision(revision);
+    const target = requested.anchor + requested.deepDive + requested.fresh;
+    const eligible = (t: Track) => !isExcluded(t, taste) && !isExcluded(t)
+      && (t.category === 'anchor' || !isRecentlyProposed(t));
+    const count = (tracks: Track[]): BlendGenerationCounts => ({
+      anchor: tracks.filter((t) => t.category === 'anchor').length,
+      deepDive: tracks.filter((t) => t.category === 'deep_dive').length,
+      fresh: tracks.filter((t) => t.category === 'fresh').length,
+    });
+    const result = uniqueByVideo(dedupeTracks(initial.filter(eligible))).slice(0, target);
+    const before = count(result), initialMethod = this.derniereMethode;
+    const added = { anchor: 0, fresh: 0, neighbour: 0 };
+    const append = (t: Track): boolean => {
+      if (result.length >= target || !eligible(t)
+          || uniqueByVideo(dedupeTracks([...result, t])).length !== result.length + 1) return false;
+      result.push(t); return true;
+    };
+    let seedIndex = 0;
+    const addAnchors = async (wanted: number) => {
+      let done = 0;
+      while (done < wanted && seedIndex < seedTracks.length && result.length < target) {
+        assertAccountRevision(revision);
+        const seed = seedTracks[seedIndex++];
+        if (!eligible({ ...seed, category: 'anchor' })
+            || dedupeTracks([...result, seed]).length !== result.length + 1) continue;
+        const [checked] = await this.piliersVerifies([seed], 1);
+        assertAccountRevision(revision);
+        if (checked && append(checked)) { done++; added.anchor++; }
+      }
+      return done;
+    };
+
+    if (result.length < target) {
+      const plan = splitReplacement(target - result.length, config.ratio);
+      onProgress?.('Répartition incomplète : recherche de piliers et de découvertes supplémentaires…');
+      await addAnchors(plan.anchor);
+      if (result.length < target && supplementGemini) {
+        const extra = await supplementGemini(target - result.length, [...result]);
+        assertAccountRevision(revision);
+        for (const t of extra) if (append(t)) added.fresh++;
+      }
+      if (result.length < target) {
+        const extra = await this.parVoisinage(seedTracks, { anchor: 0, deepDive: 0, fresh: target - result.length },
+          taste, onProgress, '', result, false);
+        assertAccountRevision(revision);
+        for (const t of extra) if (t.category === 'fresh' && append(t)) { added.fresh++; added.neighbour++; }
+        if (added.neighbour && this.derniereMethode === 'gemini') this.derniereMethode = 'mixte';
+      }
+      // Si les découvertes manquent aussi, les piliers encore disponibles
+      // peuvent à leur tour combler les places restantes.
+      if (result.length < target) await addAnchors(target - result.length);
+    }
+
+    const order: Record<TrackCategory, number> = { anchor: 0, deep_dive: 1, fresh: 2 };
+    result.sort((a, b) => (order[a.category || 'fresh'] - order[b.category || 'fresh']));
+    const created = count(result);
+    const missing: string[] = [];
+    if (before.anchor < requested.anchor) missing.push(`${before.anchor}/${requested.anchor} piliers`);
+    if (before.deepDive < requested.deepDive) missing.push(`${before.deepDive}/${requested.deepDive} faces cachées`);
+    if (before.fresh < requested.fresh) missing.push(`${before.fresh}/${requested.fresh} découvertes`);
+    // Les refus sont rapportés par rapport à ce qui a réellement été demandé
+    // au moteur, même si des piliers plafonnés ont augmenté sa part fraîche.
+    const relevant = problems.filter((p) => p.role === 'analysis' ? initialMethod === 'voisinage'
+      : p.role === 'deep_dive' ? before.deepDive < planned.deepDive || initialMethod === 'voisinage'
+        : p.role === 'fresh' ? before.fresh < planned.fresh || initialMethod === 'voisinage' || added.neighbour > 0
+          : before.anchor < planned.anchor);
+    const limits = relevant.filter((p) => p.quota);
+    const messages: string[] = [];
+    if (limits.length) messages.push(limits.some((p) => p.allQuota)
+      ? 'Limite de quota ou de débit Gemini (429) : tous les modèles compatibles essayés ont été temporairement limités pour au moins une sélection.'
+      : 'Une limite de quota ou de débit Gemini (429) a perturbé cette sélection ou l’accès aux modèles.');
+    else if (relevant.length) messages.push(`Sélection Gemini perturbée : ${relevant[0].message}.`);
+    if (missing.length) messages.push(`Répartition initiale incomplète : ${missing.join(' · ')} retenus.`);
+    const capped = requested.anchor - planned.anchor;
+    if (capped > 0) messages.push(`${capped} place${capped > 1 ? 's' : ''} de pilier sans amorce disponible ${capped > 1 ? 'ont été demandées' : 'a été demandée'} en découverte${capped > 1 ? 's' : ''}.`);
+    if (added.anchor || added.fresh) {
+      const parts = [added.anchor ? `${added.anchor} pilier${added.anchor > 1 ? 's' : ''}` : '',
+        added.fresh ? `${added.fresh} découverte${added.fresh > 1 ? 's' : ''}` : ''].filter(Boolean);
+      messages.push(`Complément ajouté : ${parts.join(' et ')}.`);
+    }
+    if (added.neighbour && config.instruction?.trim()) messages.push('Les découvertes de voisinage n’ont pas été vérifiées par Gemini pour ta consigne.');
+    if (result.length < target) messages.push(`Blend incomplet : ${result.length}/${target} titres ; pas assez de titres admissibles trouvés.`);
+    else if (messages.length) messages.push(`Total obtenu : ${result.length}/${target} titres.`);
+    if (this.derniereMethode === 'mixte') this.derniereNote = `Sélection mixte : ${this.dernierModele || 'Gemini'} et voisinage YouTube.`;
+    if (!result.some((t) => t.category !== 'anchor')) this.derniereNote = 'Seuls les piliers disponibles ont été retenus.';
+    this.dernierRapport = { target, requested: { ...requested }, planned: { ...planned }, before, created, added, warning: messages.join(' '),
+      ...(limits.length ? { cause: 'quota' as const } : messages.length ? { cause: 'other' as const } : {}) };
+    onProgress?.(`Bilan : ${result.length}/${target} titres — ${created.anchor} piliers, ${created.deepDive} faces cachées, ${created.fresh} découvertes.${this.dernierRapport.warning ? ` ${this.dernierRapport.warning}` : ''}`);
+    return result;
   }
 
   /**
@@ -1219,23 +1326,26 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
     taste: Exclusions,
     onProgress?: (m: string) => void,
     raison = '',
+    existing: Track[] = [],
+    markOrigin = true,
   ): Promise<Track[]> {
-    this.derniereMethode = 'voisinage';
-    /* La phrase de la trace est posée ici et non plus loin : ce chemin
-       sort de `generateBlend` par un `return` anticipé, et la note serait
-       restée vide — le blend aurait affiché « voisinage » sans dire
-       pourquoi. */
-    this.derniereNote = raison
-      ? `Composé par voisinage YouTube (${raison}). Aucun morceau n’a été inventé.`
-      : 'Composé par voisinage YouTube, sans modèle d’IA. Aucun morceau n’a été inventé.';
-    /* les piliers passent le même contrôle que dans le chemin IA : une
-       vidéo retirée depuis la playlist ne doit pas ouvrir le blend */
+    const revision = accountRevision();
+    if (markOrigin) {
+      this.derniereMethode = 'voisinage'; this.dernierModele = '';
+      this.derniereNote = raison
+        ? `Composé par voisinage YouTube (${raison}).`
+        : 'Composé par voisinage YouTube, sans modèle d’IA.';
+    }
     onProgress?.('Vérification des morceaux sur YouTube…');
-    const out: Track[] = await this.piliersVerifies(seedTracks, counts.anchor);
-    const vus = new Set(out.map((t) => `${t.artist} — ${t.title}`.toLowerCase().trim()));
-    const vusTitres = new Set(out.map((t) => t.title.toLowerCase().trim()));
-    const videoIds = new Set(out.map((t) => t.videoId));
-    const artistesAmorces = [...new Set(seedTracks.map((t) => t.artist))];
+    const out: Track[] = counts.anchor ? await this.piliersVerifies(seedTracks, counts.anchor) : [];
+    assertAccountRevision(revision);
+    // Les amorces non retenues et le résultat déjà construit restent aussi
+    // interdits aux découvertes et faces cachées du secours.
+    const deja = [...seedTracks, ...existing, ...out];
+    const vus = new Set(deja.map((t) => `${t.artist} — ${t.title}`.toLowerCase().trim()));
+    const vusTitres = new Set(deja.map((t) => norm(t.title)));
+    const videoIds = new Set(deja.map((t) => t.videoId));
+    const artistesAmorces = [...new Set(seedTracks.map((t) => t.artist).filter(Boolean))];
 
     const history = getDiscoveryHistory();
     const recentArtistSet = new Set(recentArtists(history).map(norm));
@@ -1245,7 +1355,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
       await Promise.all(uniques.map(async (id) => { verifications.set(id, await verifyVideo(id).catch(() => null)); }));
     };
 
-    const ajoute = (vi: { videoId: string; title: string; artist: string }, cat: TrackCategory, pourquoi: string) => {
+    const ajoute = (vi: { videoId: string; title: string; artist: string }, cat: TrackCategory, pourquoi: string, expectedArtist = '') => {
       /* Piped rend « Artiste - Titre (Official Audio) » et une chaîne du
          genre « KAVINSKY and Record Makers ». On sépare les deux avec le
          même outil que partout ailleurs : sans ça la liste affichait
@@ -1261,7 +1371,8 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
       const titre = propre.title;
       const artiste = (propre.artist || chaine || vi.artist || '').trim();
       const k = `${artiste} — ${titre}`.toLowerCase().trim();
-      if (!titre || !artiste || vus.has(k) || vusTitres.has(titre.toLowerCase().trim())) return false;
+      if (!titre || !artiste || !looksLikeVideoId(vi.videoId) || vus.has(k) || vusTitres.has(norm(titre))) return false;
+      if (cat === 'deep_dive' && expectedArtist && !artistMatches(artiste, expectedArtist)) return false;
       /* Le voisinage sans IA ramène parfois du bruit : groupes de reprise,
          karaoké, « NYE Party Band », versions piano pour bébés. Ce n'est
          pas une découverte, c'est un remplissage. On les écarte. */
@@ -1276,9 +1387,14 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
         { title: vi.title, artist: vi.artist, videoId: vi.videoId },
         ...(meta ? [{ title: meta.title, artist: meta.author, videoId: vi.videoId }] : []),
       ];
-      if (identities.some((identity) => isExcluded(identity) || isRecentlyProposed(identity, history))) return false;
+      if (identities.some((identity) => isExcluded(identity, taste) || isExcluded(identity)
+          || isRecentlyProposed(identity, history) || isRecentlyProposed(identity))) return false;
+      if (cat === 'fresh' && identities.some((identity) => {
+        const named = cleanTitle(identity.title || '').artist || '';
+        return artistesAmorces.some((a) => artistMatches(identity.artist || '', a) || artistMatches(named, a));
+      })) return false;
       if (videoIds.has(vi.videoId)) return false;
-      vus.add(k); vusTitres.add(titre.toLowerCase().trim()); videoIds.add(vi.videoId);
+      vus.add(k); vusTitres.add(norm(titre)); videoIds.add(vi.videoId);
       out.push({
         id: `voisin-${vi.videoId}`,
         videoId: vi.videoId,
@@ -1296,48 +1412,61 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
       return true;
     };
 
-    /* 1. les faces cachées : le même artiste, un autre morceau */
-    onProgress?.('Faces cachées : on fouille les artistes de ta sélection sur YouTube…');
-    /* On répartit : deux morceaux par artiste avant de revenir au
-       premier. Sinon les quatre faces cachées venaient toutes du même
-       groupe, et le blend ressemblait à un album. */
-    const listes = await Promise.all(
-      artistesAmorces.slice(0, 4).map((a) => artistTracks(a).catch(() => [])),
-    );
-    await verifierLots(listes.flatMap((liste) => liste.slice(0, 3)));
-    for (let tour = 0; tour < 3; tour++) {
-      for (let a = 0; a < listes.length; a++) {
-        if (out.filter((t) => t.category === 'deep_dive').length >= counts.deepDive) break;
-        const vi = listes[a][tour];
-        if (vi) ajoute(vi, 'deep_dive', `Voisinage : un autre morceau de ${artistesAmorces[a]}, trouvé sur sa chaîne.`);
+    /* 1. Faces cachées : le même artiste, un autre morceau. Chaque tour
+       visite plusieurs artistes avant de revenir au premier. */
+    if (counts.deepDive > 0) {
+      onProgress?.('Faces cachées : on fouille les artistes de ta sélection sur YouTube…');
+      const artistes = artistesAmorces.slice(0, 4);
+      const listes = await Promise.all(artistes.map((a) => artistTracks(a).catch(() => [])));
+      assertAccountRevision(revision);
+      const depth = Math.min(12, Math.max(3, counts.deepDive * 2));
+      for (let tour = 0; tour < depth && out.filter((t) => t.category === 'deep_dive').length < counts.deepDive; tour++) {
+        await verifierLots(listes.map((liste) => liste[tour]).filter((v): v is NonNullable<typeof v> => !!v));
+        assertAccountRevision(revision);
+        for (let a = 0; a < listes.length; a++) {
+          if (out.filter((t) => t.category === 'deep_dive').length >= counts.deepDive) break;
+          const vi = listes[a][tour];
+          if (vi) ajoute(vi, 'deep_dive', `Voisinage : un autre morceau de ${artistes[a]}, trouvé sur sa chaîne.`, artistes[a]);
+        }
       }
     }
 
-    /* 2. les découvertes : les artistes qui sortent à côté des piliers */
-    onProgress?.('Découvertes : on cherche les artistes qui jouent dans la même cour…');
-    const voisins: string[] = [];
-    for (const artiste of artistesAmorces.slice(0, 2)) {
-      const proches = await relatedArtists(artiste).catch(() => []);
-      for (const p of proches) if (!voisins.includes(p)) voisins.push(p);
-    }
-    // On favorise les artistes qui ne viennent pas déjà d'être proposés.
-    voisins.sort((a, b) => Number(recentArtistSet.has(norm(a))) - Number(recentArtistSet.has(norm(b))));
-
-    for (const artiste of voisins) {
-      if (out.filter((t) => t.category === 'fresh').length >= counts.fresh) break;
-      const liste = await artistTracks(artiste).catch(() => []);
-      await verifierLots(liste.slice(0, 3));
-      for (const vi of liste.slice(0, 3)) {
-        if (out.filter((t) => t.category === 'fresh').length >= counts.fresh) break;
-        ajoute(vi, 'fresh', `Voisinage : ${artiste} apparaît aux côtés de ${artistesAmorces[0]}.`);
+    /* 2. Découvertes : jamais un artiste des amorces. On parcourt davantage
+       que les trois premiers titres si les candidats sont filtrés. */
+    if (counts.fresh > 0) {
+      onProgress?.('Découvertes : on cherche les artistes qui jouent dans la même cour…');
+      const voisins: string[] = [];
+      for (const artiste of artistesAmorces.slice(0, 4)) {
+        const proches = await relatedArtists(artiste).catch(() => []);
+        assertAccountRevision(revision);
+        for (const p of proches) if (!voisins.some((v) => artistMatches(v, p))
+            && !artistesAmorces.some((a) => artistMatches(p, a))) voisins.push(p);
+      }
+      voisins.sort((a, b) => Number(recentArtistSet.has(norm(a))) - Number(recentArtistSet.has(norm(b))));
+      for (const artiste of voisins.slice(0, 12)) {
+        const remaining = counts.fresh - out.filter((t) => t.category === 'fresh').length;
+        if (remaining <= 0) break;
+        const liste = await artistTracks(artiste).catch(() => []);
+        assertAccountRevision(revision);
+        // Filtrer les vidéos déjà utilisées AVANT de limiter la liste :
+        // sinon un second passage ne revoit que les premiers titres déjà
+        // gardés et ne trouve jamais les suivants.
+        const candidats = liste.filter((v) => !videoIds.has(v.videoId) && !vusTitres.has(norm(cleanTitle(v.title).title)))
+          .slice(0, Math.min(100, Math.max(12, remaining * 3)));
+        for (let i = 0; i < candidats.length && out.filter((t) => t.category === 'fresh').length < counts.fresh; i += 6) {
+          const lot = candidats.slice(i, i + 6);
+          await verifierLots(lot); assertAccountRevision(revision);
+          for (const vi of lot) {
+            if (out.filter((t) => t.category === 'fresh').length >= counts.fresh) break;
+            ajoute(vi, 'fresh', `Voisinage : ${artiste} apparaît aux côtés de ${artistesAmorces[0]}.`);
+          }
+        }
       }
     }
 
     const d = out.filter((t) => t.category === 'deep_dive').length;
     const f = out.filter((t) => t.category === 'fresh').length;
-    onProgress?.(
-      `Blend composé sans IA : ${out.length} morceaux — ${out.length - d - f} piliers, ${d} face${d > 1 ? 's' : ''} cachée${d > 1 ? 's' : ''}, ${f} découverte${f > 1 ? 's' : ''}. Trouvés sur YouTube, jamais inventés.`,
-    );
+    onProgress?.(`${markOrigin ? 'Sélection par voisinage' : 'Compléments par voisinage'} : ${out.length} titres — ${out.length - d - f} piliers, ${d} faces cachées, ${f} découvertes.`);
     return out;
   }
 
@@ -1345,14 +1474,15 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ac
      « Par quel moyen ce blend est-il né ? » a une réponse, et elle est
      gardée : `methode` est posée par le chemin qui a réellement servi,
      `note` est la phrase à montrer. `DataContext` les attache au blend. */
-  public derniereMethode: 'gemini' | 'voisinage' = 'gemini';
+  public derniereMethode: 'gemini' | 'voisinage' | 'mixte' = 'gemini';
   /** le modèle qui a réellement répondu — `gemini-3.5-flash-lite`, pas « gemini » */
   public dernierModele = '';
   public derniereNote = '';
+  public dernierRapport: BlendGenerationReport | undefined;
 
-  /** Sans modèle : on ne fabrique rien, on rend au moins les amorces. */
+  /** Ne jamais fabriquer un pilier lorsque la part demandée est zéro. */
   private anchorsOnly(seedTracks: Track[], anchorCount: number): Track[] {
-    return seedTracks.slice(0, Math.max(1, anchorCount)).map((t) => ({
+    return seedTracks.slice(0, Math.max(0, anchorCount)).map((t) => ({
       ...t,
       category: 'anchor' as TrackCategory,
       rationale: 'Pilier : morceau de ta sélection.',

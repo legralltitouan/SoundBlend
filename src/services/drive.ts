@@ -70,6 +70,8 @@ let veille: ReturnType<typeof setInterval> | null = null;
 let enCours: Promise<boolean> | null = null;
 let controle: AbortController | null = null;
 let pendingNonPersistant = false;
+let retryAttempts = 0;
+let lastForeground = 0;
 const dirty = (on: boolean, nouveauGeste = false): boolean => {
   aEnvoyer = on;
   try {
@@ -295,7 +297,7 @@ const signalerErreur = (e: unknown) => {
   poserEtat({ phase: sansDroit ? 'sans-portee' : 'erreur', message: sansDroit
     ? 'Accès Drive refusé. Vérifie les autorisations et reconnecte-toi.'
     : /illisible|invalide|plus récent|Stockage local|changé pendant|Délai Drive/.test(msg) ? msg
-      : 'La synchro n’a pas abouti. Les données restent sur cet appareil ; réessaie une fois connecté.' });
+      : 'La synchro n’a pas abouti. Les données restent sur cet appareil ; un nouvel essai sera lancé automatiquement.' });
 };
 
 const armerExpiration = () => {
@@ -358,6 +360,9 @@ const cycle = (): Promise<boolean> => {
         confirmerExclusions(sent.exclusions || []); confirmerBlends(sent.blends || []);
         confirmerSettings(sent.reglages?.at || 0); confirmerMode(sent.apparence?.at || 0); confirmerPortrait(sent.portrait);
         if (!dirty(false)) throw new Error('Stockage local indisponible : état de synchronisation non enregistré.');
+        retryAttempts = 0;
+        if (minuteur) clearTimeout(minuteur);
+        minuteur = null;
         poserEtat({ phase: 'pret', dernierEnvoi: new Date().toISOString(), message: undefined });
       } else {
         dirty(true); programmer(1200);
@@ -366,7 +371,15 @@ const cycle = (): Promise<boolean> => {
       armerVeille(); return true;
     } catch (e) {
       if (c.session !== session || c.revision !== accountRevision() || c.signal.aborted) return false;
-      dirty(true); signalerErreur(e); return false;
+      dirty(true); signalerErreur(e);
+      // Le bouton manuel n'est pas nécessaire : après un échec temporaire,
+      // reprendre avec un délai croissant. Un refus d'autorisation demande
+      // une action de l'utilisateur et ne doit pas être martelé.
+      if (accountScope() && youtubeService.isAuthenticated() && etat.phase !== 'sans-portee' && etat.phase !== 'expire') {
+        const delay = Math.min(3 * 60 * 1000, 10000 * 2 ** Math.min(retryAttempts, 5));
+        retryAttempts++; programmer(delay);
+      }
+      return false;
     }
   })();
   enCours = run;
@@ -387,7 +400,7 @@ export const planifierEnvoi = (): void => {
 export const oublierSync = (): void => {
   session++; controle?.abort(); controle = null; enCours = null;
   if (minuteur) clearTimeout(minuteur); if (veille) clearInterval(veille); if (expiration) clearTimeout(expiration);
-  minuteur = null; veille = null; expiration = null;
+  minuteur = null; veille = null; expiration = null; retryAttempts = 0; lastForeground = 0;
   poserEtat({ phase: 'inactif', dernierEnvoi: undefined, message: undefined });
 };
 export const enAttente = (): boolean => aEnvoyer;
@@ -402,7 +415,19 @@ if (typeof window !== 'undefined') {
   window.addEventListener('sb:auth-expired', () => {
     oublierSync(); poserEtat({ phase: 'expire', message: 'Session Google expirée : reconnecte le même compte pour reprendre les envois en attente.' });
   });
-  window.addEventListener('online', () => { if (accountScope() && youtubeService.isAuthenticated()) void demarrerSync(); });
+  window.addEventListener('online', () => {
+    if (accountScope() && youtubeService.isAuthenticated()) { retryAttempts = 0; void demarrerSync(); }
+  });
+  // Drive ne pousse pas les changements à ce site statique. Relire au
+  // premier plan en plus de la veille périodique (3 min), sans prétendre
+  // à une propagation instantanée lorsque l'app est fermée ou hors ligne.
+  const relireAuPremierPlan = () => {
+    if (document.visibilityState === 'hidden' || !accountScope() || !youtubeService.isAuthenticated()) return;
+    if (Date.now() - lastForeground < 5000) return;
+    lastForeground = Date.now(); void demarrerSync();
+  };
+  window.addEventListener('focus', relireAuPremierPlan);
+  document.addEventListener('visibilitychange', relireAuPremierPlan);
   window.addEventListener('storage', (event) => {
     if (!belongsToCurrentScope(event.key)) return;
     if (event.key === scopedStorageKey(DIRTY_KEY)) {

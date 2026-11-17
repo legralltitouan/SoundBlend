@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import {
   Play, Pause, Trash2, RefreshCw, Share2, ExternalLink,
-  ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass,
+  ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass, TriangleAlert,
   MoreHorizontal, ArrowRight, Download, Radio,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
@@ -399,20 +399,26 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
               choses très différentes, dites avec deux icônes. */}
           {blend.methode && (
             <p className="sb-blend-origin" data-kind={blend.methode.kind}>
-              {blend.methode.kind === 'gemini'
-                ? <Cpu size={13} strokeWidth={1.9} />
-                : <Compass size={13} strokeWidth={1.9} />}
+              {blend.methode.kind === 'gemini' ? <Cpu size={13} strokeWidth={1.9} /> : <Compass size={13} strokeWidth={1.9} />}
               <span>
-                <b>{blend.methode.kind === 'gemini' ? 'Composé par Gemini' : 'Composé par voisinage YouTube'}</b>
-                {blend.methode.kind === 'gemini' && blend.methode.model && (
-                  <span className="sb-blend-origin-model"> {blend.methode.model}</span>
-                )}
-                {' — '}
-                {blend.methode.kind === 'gemini'
-                  ? 'le modèle a choisi et justifié chaque morceau.'
-                  : 'sans IA : les artistes proches de tes piliers, aucun morceau inventé.'}
+                <b>{blend.methode.kind === 'gemini' ? 'Composé avec Gemini'
+                  : blend.methode.kind === 'mixte' ? 'Gemini et voisinage YouTube'
+                    : stats.deep + stats.fresh === 0 ? 'Piliers disponibles' : 'Composé par voisinage YouTube'}</b>
+                {blend.methode.model && <span className="sb-blend-origin-model"> {blend.methode.model}</span>}
+                {' — '}{blend.methode.detail || 'Origine de la sélection enregistrée lors de la génération.'}
               </span>
             </p>
+          )}
+          {blend.generation?.warning && (
+            <div className="sb-blend-warning" role="status">
+              <TriangleAlert size={16} strokeWidth={1.8} aria-hidden />
+              <div>
+                <strong>{blend.generation.created.anchor + blend.generation.created.deepDive + blend.generation.created.fresh < blend.generation.target
+                  ? 'Blend incomplet' : 'Génération adaptée'}</strong>
+                <p>{blend.generation.warning}</p>
+                <small>Bilan à la création du blend ; tes modifications ultérieures ne sont pas incluses.</small>
+              </div>
+            </div>
           )}
 
           <div className="sb-blend-buttons">

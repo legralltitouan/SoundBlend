@@ -13,7 +13,7 @@ import { clientIdGoogle, GEMINI_API_KEY } from '../../config/app';
 /* Réglages : apparence (clair / sombre), compte YouTube, clés & API.
    Le modèle Gemini n'est plus un choix : la cascade est automatique. */
 export const SettingsView: React.FC = () => {
-  const { settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, login, logout, syncState, syncNow, exclusions } = useData();
+  const { settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, login, logout, syncState, exclusions } = useData();
   const { mode, toggleMode, showToast, restartOnboarding, openActionSheet } = useUI();
   const pwa = useInstall();
   /* aucune clé par défaut : si elles manquent, on le dit ici, en clair,
@@ -176,10 +176,12 @@ export const SettingsView: React.FC = () => {
             : syncState.phase === 'pret' && !syncState.enAttente ? 'Dernière synchronisation vérifiée sur ce compte.'
               : syncState.message || (syncState.enAttente ? 'Modifications en attente de synchronisation.' : 'Synchronisation en préparation.')}</span>
         </p>}
-        {accountKnown && isAuthenticated && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-          <button className="btn-ghost" disabled={syncState.phase === 'envoi'} onClick={() => void syncNow()}>Synchroniser maintenant</button>
-          {syncState.phase === 'sans-portee' && <button className="btn-ghost" disabled={connecting} onClick={() => void connect()}>Réactiver les autorisations</button>}
+        {accountKnown && isAuthenticated && syncState.phase === 'sans-portee' && <div style={{ marginTop: 8 }}>
+          <button className="btn-ghost" disabled={connecting} onClick={() => void connect()}>Réactiver les autorisations</button>
         </div>}
+        <p className="ink-3" style={{ margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.45 }}>
+          La synchronisation est automatique après une modification et au retour dans l’application ; les changements distants sont aussi recherchés régulièrement tant que l’app reste ouverte et connectée.
+        </p>
         <p className="ink-3" style={{ margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.45 }}>
           Les anciennes données locales restent séparées : elles ne sont jamais importées automatiquement dans un compte. Chaque compte garde ses propres données, y compris sa clé et son thème.
         </p>
@@ -249,7 +251,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.35
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.36
         </span>
       </div>
     </div>
