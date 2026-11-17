@@ -12,13 +12,14 @@ C'est celui que je recommande pour commencer. Gratuit, sans carte
 bancaire, **bande passante illimitée**, et on peut déposer les fichiers
 directement depuis le navigateur.
 
-1. Compile l'app une fois (je te fournis le dossier `dist/` prêt).
+1. Compile l'app pour la racine `/`, ou décompresse l'archive séparée `SoundBlend-v6.9.33-site.zip` qui contient déjà le site compilé. L'archive source ne contient pas de dossier `dist/`.
 2. Va sur `dash.cloudflare.com` → crée un compte gratuit.
 3. Menu **Workers & Pages** → **Create** → onglet **Pages** → **Upload assets**.
 4. Donne un nom au projet : `soundblend` → l'adresse sera
    `https://soundblend.pages.dev`.
-5. Glisse **tout le contenu** du dossier `dist/` (pas le dossier
-   lui-même : `index.html`, `assets/`, `sw.js`, `manifest.webmanifest`…).
+5. Glisse **tout le contenu** du dossier de site compilé extrait (ou de
+   `dist/`), pas son dossier parent : `index.html`, `assets/`, `sw.js`,
+   `manifest.webmanifest`…
 6. **Deploy**. C'est en ligne, en https, pour toujours.
 
 Limites du gratuit : 500 compilations par mois (tu n'en feras qu'une

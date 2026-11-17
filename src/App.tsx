@@ -14,6 +14,7 @@ import { SettingsView } from './components/views/SettingsView';
 import { PickerModal } from './components/modals/PickerModal';
 import { ConfigModal } from './components/modals/ConfigModal';
 import { GeneratingOverlay } from './components/modals/GeneratingOverlay';
+import { ActionSheets } from './components/modals/ActionSheets';
 import { PlayerBar } from './components/player/PlayerBar';
 import { Check } from 'lucide-react';
 import { WelcomeFlow } from './components/shell/WelcomeFlow';
@@ -88,6 +89,7 @@ export const AppContent: React.FC = () => {
     {/* hors de <main> : sinon ils restent piégés dans son contexte d'empilement */}
     <Modals />
     <PlayerBar />
+    <ActionSheets />
     <Toast />
     <TaskTicker />
     {/* l'invitation à installer : téléphone seulement, une seule fois */}

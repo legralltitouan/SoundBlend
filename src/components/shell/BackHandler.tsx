@@ -11,7 +11,7 @@ import { BACK_HOME_EVENT } from '../../lib/backEvents';
    ═══════════════════════════════════════════════════════════════ */
 
 export const BackHandler: React.FC = () => {
-  const { view, setView, modal, closeModal, onboarded, finishOnboarding } = useUI();
+  const { view, setView, modal, closeModal, actionSheet, closeActionSheet, onboarded, finishOnboarding } = useUI();
 
 
   /* le plein écran du lecteur : il vit dans son propre composant, donc
@@ -33,13 +33,12 @@ export const BackHandler: React.FC = () => {
     btn?.click();
   }, []);
 
-  /* de la plus profonde à la plus haute — l'ordre compte : le retour
-     ferme la dernière. Le plein écran du lecteur passe au-dessus de
-     tout (il est rendu après les fenêtres, et à un z-index plus haut) :
-     c'est donc lui la couche du dessus quand il est ouvert. */
+  /* De la plus profonde à la plus haute. Une feuille d'action peut être
+     ouverte depuis le lecteur : retour la ferme avant de réduire celui-ci. */
   const layers: BackLayer[] = [];
   if (modal) layers.push({ key: 'modal', close: closeModal });
   if (sheetOpen) layers.push({ key: 'sheet', close: closeSheet });
+  if (actionSheet) layers.push({ key: 'action-sheet', close: closeActionSheet });
   /* l'accueil de bienvenue n'est pas une couche : c'est le premier écran,
      le retour n'a pas de sens avant d'être entré dans l'app */
 

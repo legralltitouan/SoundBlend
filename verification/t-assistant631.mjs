@@ -93,7 +93,9 @@ await row.locator('[aria-label="Bloquer"]').click();await p.getByRole('button',{
 exclusions=await p.evaluate(()=>JSON.parse(localStorage.getItem('soundblend_exclusions_v1')));
 check(exclusions.some(x=>x.artist==='NewBand'&&x.kind==='artist'&&!x.deleted)&&exclusions.some(x=>x.title==='Jazz Safe'&&x.kind==='track'&&!x.deleted),'choix artiste enregistré séparément du titre déjà bloqué');
 await p.setViewportSize({width:390,height:844});await p.locator('.ytm-mobile-bar [aria-label="Réglages du compte"]').click();
-await p.getByRole('button',{name:'Débloquer Jazz Safe'}).click();await p.getByRole('button',{name:'Débloquer NewBand'}).click();
+await p.getByRole('button',{name:'Afficher la liste des exclusions'}).click();
+await p.getByRole('button',{name:'Débloquer Jazz Safe'}).click();
+await p.getByRole('tab',{name:/Artistes/}).click();await p.getByRole('button',{name:'Débloquer NewBand'}).click();
 exclusions=await p.evaluate(()=>JSON.parse(localStorage.getItem('soundblend_exclusions_v1')));
 check(exclusions.some(x=>x.title==='Jazz Safe'&&x.deleted)&&exclusions.some(x=>x.artist==='NewBand'&&x.kind==='artist'&&x.deleted),'déblocage indépendant des deux choix depuis Réglages');
 check(!(await p.getByRole('button',{name:/J’aime|Je n’aime pas/}).count()),'aucun bouton pouce dans l’interface');

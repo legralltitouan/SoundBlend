@@ -23,7 +23,12 @@ async function makeDevice(name) {
   },{name});
   await ctx.route('https://accounts.google.com/**',r=>r.fulfill({status:200,contentType:'application/javascript',body:'window.google={accounts:{oauth2:{initTokenClient:()=>({requestAccessToken(){}})}}};'}));
   await ctx.route('https://www.youtube.com/**',r=>r.fulfill({status:200,headers:cors,body:'{}'}));
-  await ctx.route(/pipedapi\.|api\.piped\./,r=>r.abort());
+  await ctx.route(/pipedapi\.|api\.piped\./,r=>{
+    const u=new URL(r.request().url());
+    if(u.pathname==='/search' && u.searchParams.get('q')==='Chanson A' && u.searchParams.get('filter')==='music_songs')
+      return r.fulfill({status:200,headers:cors,body:JSON.stringify({items:[{type:'stream',url:'/watch?v=VID00000001',title:'Chanson A',uploaderName:'Artiste A',duration:200}]})});
+    return r.abort();
+  });
   await ctx.route('https://www.googleapis.com/youtube/v3/**',r=>{
     const u=r.request().url();
     if(u.includes('/playlists')) return r.fulfill({status:200,headers:cors,body:JSON.stringify({items:[{id:'PL1',snippet:{title:'Chill Voiture',description:'',thumbnails:{}},contentDetails:{itemCount:1}}]})});
@@ -72,9 +77,9 @@ check(content().blends.length===1 && content().blends[0].id==='valid' && !('user
 check(content().decouvertes.some(x=>x.title==='Ancienne découverte'),'découverte d’un ancien blend valide reconstruite et synchronisée');
 
 await A.page.locator('.ytm-mobile-bar [aria-label="Réglages du compte"]').click();
-await A.page.locator('#exclusions input').nth(0).fill('Artiste A');
-await A.page.locator('#exclusions input').nth(1).fill('Chanson A');
-await A.page.getByRole('button',{name:'Bloquer cette musique',exact:true}).click();
+await A.page.getByRole('button',{name:'Ajouter une exclusion'}).click();
+await A.page.getByRole('searchbox',{name:'Rechercher dans les exclusions et le catalogue'}).fill('Chanson A');
+await A.page.getByRole('button',{name:'Exclure Chanson A de Artiste A'}).click();
 check(await sync(A.page),'envoi du geste de blocage depuis les réglages');
 check(content().exclusions.filter(x=>!x.deleted).some(x=>x.kind==='track'&&x.artist==='Artiste A'&&x.title==='Chanson A'),'blocage précis de la musique présent dans Drive');
 check(!content().exclusions.some(x=>x.kind==='artist'&&x.artist==='Artiste A'),'le blocage d’un morceau ne bannit pas son artiste');

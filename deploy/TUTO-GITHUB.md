@@ -1,8 +1,9 @@
 # Mettre SoundBlend sur GitHub — le tutoriel
 
-> **Version 6.9.32 :** pour mettre à jour un dépôt existant, suivre en priorité
-> `MISE-A-JOUR-GITHUB-v6-9-32.md` et le script fourni. L'identifiant OAuth
-> public est déjà dans `src/config/app.ts` ; aucune clé YouTube n'est demandée.
+> **Version 6.9.33 :** pour mettre à jour un dépôt existant, sauvegarde et
+> compare tes fichiers comme indiqué ci-dessous. Aucun script d'envoi automatique
+> n'est fourni pour cette version. L'identifiant OAuth public est dans
+> `src/config/app.ts` ; aucune clé YouTube n'est demandée dans l'interface.
 
 *De zéro à une adresse https qui marche 24 h/24, sans PC allumé, sans
 PowerShell. Et **sans jamais publier tes clés**.*
@@ -229,22 +230,23 @@ Enregistre. La prise en compte peut demander quelques minutes.
 
 ### 8b. Recherche YouTube
 
-Aucune clé YouTube n'est à renseigner pour la configuration actuelle :
-l'application utilise la connexion Google ou son repli de recherche.
+Aucune clé YouTube n'est demandée dans l'interface. La bibliothèque et la
+recherche générale peuvent nécessiter la connexion Google. La recherche
+pour ajouter une exclusion utilise Piped, service public indépendant ; elle
+nécessite Internet et transmet la requête à ce service.
 
 ---
 
 ## Mettre à jour un dépôt existant
 
-Suis `MISE-A-JOUR-GITHUB-v6-9-32.md`, fourni dans l'archive. Sur Windows,
-le script `MAJ-SoundBlend-v6.9.32.bat`, placé à la racine du dépôt, copie les fichiers depuis le dossier
-`src-v6.9.32` extrait, vérifie les modifications locales, puis crée un
-commit si nécessaire et envoie sur `main`. Lis la notice avant de l'exécuter : le script
-n'a pas été testé sous Windows dans l'environnement de préparation. Il ne
-modifie pas ton workflow `.github/workflows/pages.yml`.
+Sauvegarde tes modifications et compare les fichiers de la nouvelle source
+avec ceux de ton dépôt avant de les remplacer. Préserve tes réglages personnels
+(notamment `src/config/app.ts` si tu l'as modifié) et ton workflow GitHub.
+Teste `npm ci` puis `npm run build`, vérifie le diff Git et effectue toi-même
+le commit et l'envoi. Aucun script d'envoi automatique n'est fourni ici.
 
 Après publication, vérifie l'onglet **Actions**, puis **Réglages →
-SoundBlend AI · v6.9.32**. Si l'ancienne version reste visible, ferme et
+SoundBlend AI · v6.9.33**. Si l'ancienne version reste visible, ferme et
 rouvre tous les onglets de l'application.
 
 ---
@@ -252,7 +254,8 @@ rouvre tous les onglets de l'application.
 ## Et si je préfère ne pas passer par GitHub ?
 
 **Cloudflare Pages** fait la même chose en plus court, sans dépôt : on
-glisse le dossier `dist/` (fourni) sur `dash.cloudflare.com`, et
+glisse le site compilé pour `/` (archive séparée `SoundBlend-v6.9.33-site.zip`,
+ou dossier `dist/` produit par `npm run build`) sur `dash.cloudflare.com`, et
 l'adresse `https://soundblend.pages.dev` existe. Gratuit, bande passante
 illimitée.
 

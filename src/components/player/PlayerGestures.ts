@@ -64,6 +64,10 @@ export const usePlayerSheet = (opts: Opts) => {
   /* les valeurs que le doigt manipule : en ref, pour ne pas dépendre
      d'un rendu — un geste rapide envoie plus d'événements que de frames */
   const yRef = useRef(y);
+  // La hauteur peut changer entre le départ et la fin d'une fermeture
+  // (rotation, clavier). On conserve la cible décidée au départ au lieu de
+  // la comparer à la nouvelle hauteur au moment de transitionend.
+  const closingY = useRef<number | null>(null);
   const dxRef = useRef(0);
   const mixRef = useRef(0);
   const setYBoth = (v: number) => { yRef.current = v; setY(v); };
@@ -98,6 +102,7 @@ export const usePlayerSheet = (opts: Opts) => {
   /* ═══ ouvrir / fermer ═══ */
 
   const open = useCallback(() => {
+    closingY.current = null;
     setSettling(false);
     setMounted(true);
     /* on part de la position rangée, puis on monte. Deux frames : la
@@ -119,15 +124,21 @@ export const usePlayerSheet = (opts: Opts) => {
      retiraient l'entrée, on en retirait deux : le lecteur se refermait…
      puis l'app revenait à l'accueil. */
   const close = useCallback(() => {
+    const target = H();
+    closingY.current = target;
     setSettling(true);
-    setYBoth(H());
+    setYBoth(target);
   }, [H]);
 
   /* la transition vient de finir : soit on est ouvert, soit on démonte */
   const onSettled = useCallback(() => {
     setSettling(false);
-    if (yRef.current >= H() - 1) setMounted(false);
-  }, [H]);
+    const target = closingY.current;
+    if (target !== null && yRef.current >= target - 1) {
+      closingY.current = null;
+      setMounted(false);
+    }
+  }, []);
 
   /* ═══ le doigt sur la feuille ═══ */
 
@@ -169,6 +180,7 @@ export const usePlayerSheet = (opts: Opts) => {
       /* horizontal seulement si le doigt est parti de la pochette et que
          le geste est franchement horizontal */
       d.axis = d.inStage && Math.abs(rawX) > Math.abs(rawY) * 1.15 ? 'x' : 'y';
+      closingY.current = null; // le nouveau geste interrompt une ancienne cible
       setDragging(true);
       setSettling(false);
     }
@@ -285,6 +297,7 @@ export const usePlayerSheet = (opts: Opts) => {
     if (d.axis === 'y') {
       const h = H();
       const closeIt = yRef.current > h * 0.26 || (fast && d.vy > 0 && yRef.current > 24);
+      closingY.current = closeIt ? h : null;
       setSettling(true);
       if (closeIt) setYBoth(h); else setYBoth(0);
       return;
@@ -298,7 +311,10 @@ export const usePlayerSheet = (opts: Opts) => {
     setSettling(true);
     setDxBoth(0);
     setMixBoth(0);
-    setYBoth(yRef.current > H() * 0.5 ? H() : 0);
+    const h = H();
+    const closeIt = yRef.current > h * 0.5;
+    closingY.current = closeIt ? h : null;
+    setYBoth(closeIt ? h : 0);
     opts.onCoverProgress?.(0);
   }, [H, opts]);
 
@@ -344,6 +360,7 @@ export const usePlayerSheet = (opts: Opts) => {
       if (dy > -3) return;
       if (Math.abs(e.clientX - b.x0) > Math.abs(dy) * 1.2) { b.down = false; return; }
       b.claimed = true;
+      closingY.current = null;
       /* la feuille apparaît à la hauteur exacte du doigt */
       setMounted(true);
       setDragging(true);
@@ -373,8 +390,9 @@ export const usePlayerSheet = (opts: Opts) => {
        Fermer demande toujours plus : c'est le sens de l'erreur. */
     const monte = h - yRef.current;
     const vif = b.vy < -0.28;
-    if (monte > h * 0.055 || (vif && monte > 12)) setYBoth(0);
-    else setYBoth(h);
+    const ouvre = monte > h * 0.055 || (vif && monte > 12);
+    closingY.current = ouvre ? null : h;
+    if (ouvre) setYBoth(0); else setYBoth(h);
   }, [H]);
 
   /* si la fenêtre change de hauteur, on recale une feuille rangée */

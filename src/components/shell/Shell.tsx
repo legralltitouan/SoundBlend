@@ -127,6 +127,11 @@ const AvatarButton: React.FC<{ variant: 'rail' | 'top' | 'bar' }> = ({ variant }
   const { setView } = useUI();
   const { userProfile, isAuthenticated } = useData();
   const size = variant === 'rail' ? 30 : 32;
+  // Ces hooks doivent aussi exister avant la connexion : l'avatar peut
+  // passer de déconnecté à connecté sans être démonté.
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const [avatarRetry, setAvatarRetry] = useState(false);
+  useEffect(() => { setAvatarFailed(false); setAvatarRetry(false); }, [userProfile?.avatarUrl]);
 
   if (!isAuthenticated) {
     return (
@@ -149,9 +154,6 @@ const AvatarButton: React.FC<{ variant: 'rail' | 'top' | 'bar' }> = ({ variant }
      et on réessaie une fois avec la version `?sz=` forcée — c'est la
      même photo servie autrement, souvent la seule qui réponde. */
   const initial = (userProfile?.name || '?').trim().charAt(0).toUpperCase();
-  const [avatarFailed, setAvatarFailed] = useState(false);
-  const [avatarRetry, setAvatarRetry] = useState(false);
-  useEffect(() => { setAvatarFailed(false); setAvatarRetry(false); }, [userProfile?.avatarUrl]);
 
   const avatarSrc = userProfile?.avatarUrl
     ? (avatarRetry

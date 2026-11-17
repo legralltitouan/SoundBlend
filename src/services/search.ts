@@ -23,7 +23,7 @@ export type Video = { videoId: string; title: string; artist: string; durationSe
 /* Vérifiés vivants : deux seulement répondent encore en 2026. Les autres
    sont gardés en dernier recours — un hôte mort coûte une coupure de 9 s
    et une erreur CORS dans la console, donc ils passent après. */
-const PIPED_HOSTS = [
+export const PIPED_HOSTS = [
   'https://pipedapi.ducks.party',
   'https://api.piped.private.coffee',
   'https://pipedapi.adminforge.de',

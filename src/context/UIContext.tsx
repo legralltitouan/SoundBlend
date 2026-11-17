@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import type { Track } from '../types';
 import type { Design, Mode } from './prefs';
 import { getDesign, getMode, applyTheme, choisirMode } from './prefs';
 
@@ -13,6 +14,12 @@ type ModalName =
   | 'account'
   | null;
 
+/** Les feuilles d'action passent aussi au-dessus du lecteur plein écran. */
+export type ActionSheet =
+  | { kind: 'block'; track: Track }
+  | { kind: 'exclusions'; focusSearch: boolean };
+type ActiveActionSheet = ActionSheet & { instance: number };
+
 interface UIContextType {
   design: Design;
   mode: Mode;
@@ -26,6 +33,10 @@ interface UIContextType {
   modalData: any;
   openModal: (name: Exclude<ModalName, null>, data?: any) => void;
   closeModal: () => void;
+
+  actionSheet: ActiveActionSheet | null;
+  openActionSheet: (sheet: ActionSheet, opener?: HTMLElement | null) => void;
+  closeActionSheet: () => void;
 
   toast: string | null;
   showToast: (msg: string) => void;
@@ -49,6 +60,28 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const [view, setViewState] = useState<ViewName>('library');
   const [modal, setModal] = useState<ModalName>(null);
   const [modalData, setModalData] = useState<any>(null);
+  const [actionSheet, setActionSheet] = useState<ActiveActionSheet | null>(null);
+  const sheetIsOpen = useRef(false);
+  const sheetSerial = useRef(0);
+  const sheetOpener = useRef<HTMLElement | null>(null);
+  const openActionSheet = useCallback((sheet: ActionSheet, opener?: HTMLElement | null) => {
+    if (!sheetIsOpen.current) {
+      sheetOpener.current = opener || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    }
+    sheetIsOpen.current = true;
+    // Chaque ouverture est une nouvelle instance, même si une sortie est
+    // encore animée : son état et son focus ne doivent jamais être recyclés.
+    setActionSheet({ ...sheet, instance: ++sheetSerial.current });
+  }, []);
+  const closeActionSheet = useCallback(() => {
+    if (!sheetIsOpen.current) return;
+    sheetIsOpen.current = false;
+    setActionSheet(null);
+    const opener = sheetOpener.current;
+    sheetOpener.current = null;
+    // À la fermeture (y compris retour système), revenir au bouton d'origine.
+    requestAnimationFrame(() => { if (!sheetIsOpen.current && opener?.isConnected) opener.focus({ preventScroll: true }); });
+  }, []);
   const [toast, setToast] = useState<string | null>(null);
   const [onboarded, setOnboarded] = useState<boolean>(() => {
     try { return localStorage.getItem('soundblend_onboarded') === '1'; } catch { return false; }
@@ -68,14 +101,18 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     applyTheme(design, mode);
   }, [design, mode]);
 
-  // Échap ferme la modale ouverte
+  // Échap ferme d'abord la feuille au premier plan, jamais celle derrière.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setModal(null);
+      if (e.key !== 'Escape') return;
+      if (sheetIsOpen.current) {
+        e.preventDefault();
+        closeActionSheet();
+      } else setModal(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [closeActionSheet]);
 
   /* une synchro vient d'apporter un mode (ou des goûts) : l'écran se
      remet à l'heure sans qu'on ait à recharger */
@@ -88,11 +125,11 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     return () => window.removeEventListener('sb:sync-applied', onSync);
   }, []);
 
-  // verrouille le scroll quand une modale est ouverte
+  // Les deux niveaux partagent le verrou : fermer l'un ne libère pas l'autre.
   useEffect(() => {
-    document.body.style.overflow = modal ? 'hidden' : '';
+    document.body.style.overflow = modal || actionSheet ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
-  }, [modal]);
+  }, [modal, actionSheet]);
 
   const [task, setTask] = useState<string | null>(null);
 
@@ -127,6 +164,9 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         setModal(name);
       },
       closeModal: () => setModal(null),
+      actionSheet,
+      openActionSheet,
+      closeActionSheet,
       toast,
       showToast,
       task,
@@ -135,7 +175,7 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       finishOnboarding,
       restartOnboarding,
     }),
-    [design, mode, view, modal, modalData, toast, setView, showToast, task, onboarded, finishOnboarding, restartOnboarding],
+    [design, mode, view, modal, modalData, actionSheet, openActionSheet, closeActionSheet, toast, setView, showToast, task, onboarded, finishOnboarding, restartOnboarding],
   );
 
   return <UIContext.Provider value={value}>{children}</UIContext.Provider>;

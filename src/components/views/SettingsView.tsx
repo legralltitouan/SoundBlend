@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   KeyRound, ShieldCheck, Check, ExternalLink, Palette, MonitorSmartphone,
-  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, Cloud, Ban, X,
+  Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, Cloud, Ban, ListMusic, ChevronRight,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
@@ -9,13 +9,12 @@ import { Button, ModeSwitch } from '../ui';
 import { inspectModels } from '../../services/gemini';
 import { useInstall, InstallHint, installPossible } from '../../lib/pwa';
 import { clientIdGoogle, GEMINI_API_KEY } from '../../config/app';
-import { getExclusionRecords } from '../../services/storage';
 
 /* Réglages : apparence (clair / sombre), compte YouTube, clés & API.
    Le modèle Gemini n'est plus un choix : la cascade est automatique. */
 export const SettingsView: React.FC = () => {
-  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState, exclusions, blockTrack, unblockExclusion } = useData();
-  const { mode, toggleMode, showToast, restartOnboarding } = useUI();
+  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState, exclusions } = useData();
+  const { mode, toggleMode, showToast, restartOnboarding, openActionSheet } = useUI();
   const pwa = useInstall();
   /* aucune clé par défaut : si elles manquent, on le dit ici, en clair,
      au lieu de laisser l'app échouer au premier appel */
@@ -31,17 +30,7 @@ export const SettingsView: React.FC = () => {
   ].filter(Boolean);
 
   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
-  const [banArtist, setBanArtist] = useState('');
-  const [banTitle, setBanTitle] = useState('');
   useEffect(() => setGeminiKey(settings.geminiApiKey || ''), [settings.geminiApiKey]);
-  const records = getExclusionRecords().filter((r) => !r.deleted);
-  const addBan = (kind: 'track' | 'artist') => {
-    try {
-      blockTrack({ artist: banArtist, title: banTitle }, kind);
-      setBanTitle(''); if (kind === 'artist') setBanArtist('');
-      showToast(kind === 'artist' ? 'Artiste bloqué.' : 'Musique bloquée.');
-    } catch (e: any) { showToast(e?.message || 'Impossible de bloquer.'); }
-  };
 
   /* ── le diagnostic du moteur ──
      On demande à l'API, avec la clé saisie, ce qu'elle sait faire. Ce
@@ -217,23 +206,17 @@ export const SettingsView: React.FC = () => {
 
       <div id="exclusions">
         <Card icon={<Ban size={17} />} title="Exclusions" sub="Ces musiques et artistes ne seront plus proposés. Synchronisés avec ton compte Google quand tu es connecté.">
-          <p className="sb-field-note" style={{ marginTop: 0 }}>
-            {exclusions.tracks.length} musique(s) · {exclusions.artists.length} artiste(s). Bloquer une musique ne bloque pas automatiquement son artiste.
-            Les anciens pouces ne sont pas convertis en blocages.
-          </p>
-          {records.length ? <div className="sb-exclusion-list">
-            {records.map((r) => <div className="sb-exclusion-row" key={r.id}>
-              <span><strong>{r.kind === 'artist' ? r.artist : r.title}</strong><small>{r.kind === 'artist' ? 'Artiste' : `Musique · ${r.artist}`}</small></span>
-              <button className="chip" aria-label={`Débloquer ${r.kind === 'artist' ? r.artist : r.title}`} onClick={() => { unblockExclusion(r.id); showToast('Exclusion retirée.'); }}><X size={14} /> Débloquer</button>
-            </div>)}
-          </div> : <p className="sb-field-note">Aucune exclusion pour le moment.</p>}
-          <div className="sb-exclusion-add">
-            <label>Artiste<input value={banArtist} onChange={(e) => setBanArtist(e.target.value)} placeholder="Nom de l’artiste" /></label>
-            <label>Musique <span className="ink-3">(pour bloquer un titre)</span><input value={banTitle} onChange={(e) => setBanTitle(e.target.value)} placeholder="Titre du morceau" /></label>
-            <div className="sb-exclusion-buttons">
-              <button className="chip" disabled={!banArtist.trim() || !banTitle.trim()} onClick={() => addBan('track')}>Bloquer cette musique</button>
-              <button className="chip" disabled={!banArtist.trim()} onClick={() => addBan('artist')}>Bloquer cet artiste</button>
-            </div>
+          <div className="sb-exclusions-entry">
+            <button type="button" className="sb-exclusions-entry__button" aria-label="Afficher la liste des exclusions" onClick={(e) => openActionSheet({ kind: 'exclusions', focusSearch: false }, e.currentTarget)}>
+              <span className="sb-exclusions-entry__icon"><ListMusic size={18} /></span>
+              <span className="sb-exclusions-entry__text"><strong>Afficher la liste des exclusions</strong><small>{exclusions.tracks.length} musique{exclusions.tracks.length !== 1 ? 's' : ''} · {exclusions.artists.length} artiste{exclusions.artists.length !== 1 ? 's' : ''}</small></span>
+              <ChevronRight size={17} aria-hidden />
+            </button>
+            <button type="button" className="sb-exclusions-entry__button" aria-label="Ajouter une exclusion" onClick={(e) => openActionSheet({ kind: 'exclusions', focusSearch: true }, e.currentTarget)}>
+              <span className="sb-exclusions-entry__icon sb-exclusions-entry__icon--accent"><Plus size={18} /></span>
+              <span className="sb-exclusions-entry__text"><strong>Ajouter une exclusion</strong><small>Rechercher sur YouTube Music</small></span>
+              <ChevronRight size={17} aria-hidden />
+            </button>
           </div>
         </Card>
       </div>
@@ -265,7 +248,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.32
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.33
         </span>
       </div>
     </div>

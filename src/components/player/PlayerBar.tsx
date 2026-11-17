@@ -203,7 +203,7 @@ export const PlayerBar: React.FC = () => {
                identique. Le glissement est vertical, la profondeur ne
                sert à rien : `translate` fait exactement le même geste. */
             style={{ transform: `translate(0, ${sheet.y}px)` }}
-            onTransitionEnd={(e) => { if (e.propertyName === 'transform') sheet.onSettled(); }}
+            onTransitionEnd={(e) => { if (e.target === e.currentTarget && e.propertyName === 'transform') sheet.onSettled(); }}
           >
             <div className="nowplaying-ambience" aria-hidden>
               {/* trois couches : la teinte du morceau courant, puis celles
