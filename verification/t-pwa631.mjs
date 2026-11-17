@@ -10,8 +10,8 @@ const p=await context.newPage(); const errors=[];p.on('pageerror',e=>errors.push
 let checks=0; const check=(b,n)=>{assert.ok(b,n);checks++;console.log('  ✓ '+n)};
 try {
  await p.goto(new URL('manifest.webmanifest', base).href);
- const initialCaches = await p.evaluate(async()=>{await caches.open('une-autre-application');await caches.open('sb-v6-9-31-shell');await caches.open('sb-v6-9-32-shell');await caches.open('sb-v6-9-33-shell');return caches.keys();});
- assert.ok(initialCaches.includes('une-autre-application')&&initialCaches.includes('sb-v6-9-31-shell')&&initialCaches.includes('sb-v6-9-32-shell')&&initialCaches.includes('sb-v6-9-33-shell'),'préparation des caches de test');
+ const initialCaches = await p.evaluate(async()=>{await caches.open('une-autre-application');await caches.open('sb-v6-9-31-shell');await caches.open('sb-v6-9-32-shell');await caches.open('sb-v6-9-33-shell');await caches.open('sb-v6-9-34-shell');return caches.keys();});
+ assert.ok(initialCaches.includes('une-autre-application')&&initialCaches.includes('sb-v6-9-31-shell')&&initialCaches.includes('sb-v6-9-32-shell')&&initialCaches.includes('sb-v6-9-33-shell')&&initialCaches.includes('sb-v6-9-34-shell'),'préparation des caches de test');
  await p.goto(base); await p.evaluate(()=>{localStorage.setItem('soundblend_onboarded','1');localStorage.setItem('soundblend_exclusions_v1',JSON.stringify([{id:'artist:hors ligne',kind:'artist',artist:'Hors ligne',updatedAt:Date.now(),deleted:false}]))});
  // waitForFunction ne réévalue pas correctement une fonction async renvoyant
  // une promesse fausse. Ici on attend donc explicitement, avec une échéance,
@@ -22,18 +22,18 @@ try {
      const r = await navigator.serviceWorker.getRegistration();
      const c = navigator.serviceWorker.controller;
      const keys = await caches.keys();
-     if (r?.active?.scriptURL.includes('sw.js') && r.active.state === 'activated' && c?.state === 'activated' && !keys.includes('sb-v6-9-31-shell') && !keys.includes('sb-v6-9-32-shell') && !keys.includes('sb-v6-9-33-shell')) return;
+     if (r?.active?.scriptURL.includes('sw.js') && r.active.state === 'activated' && c?.state === 'activated' && !keys.includes('sb-v6-9-31-shell') && !keys.includes('sb-v6-9-32-shell') && !keys.includes('sb-v6-9-33-shell') && !keys.includes('sb-v6-9-34-shell')) return;
      await new Promise(resolve => setTimeout(resolve, 50));
    }
    throw new Error(`Service worker ou nettoyage des anciens caches non prêt : ${(await caches.keys()).join(', ')}`);
  });
  const before=await p.evaluate(async()=>{
-   const keys=await caches.keys();const shell=await caches.open('sb-v6-9-34-shell');const req=await shell.keys();
+   const keys=await caches.keys();const shell=await caches.open('sb-v6-9-35-shell');const req=await shell.keys();
    const manifest=await (await fetch('manifest.webmanifest')).json();
    return {keys,requests:req.map(r=>new URL(r.url).pathname),manifest};
  });
- check(before.keys.includes('sb-v6-9-34-shell'),'service worker de la nouvelle version activé');
- const anciensCachesNettoyes = before.keys.includes('une-autre-application') && !before.keys.includes('sb-v6-9-31-shell') && !before.keys.includes('sb-v6-9-32-shell') && !before.keys.includes('sb-v6-9-33-shell');
+ check(before.keys.includes('sb-v6-9-35-shell'),'service worker de la nouvelle version activé');
+ const anciensCachesNettoyes = before.keys.includes('une-autre-application') && !before.keys.includes('sb-v6-9-31-shell') && !before.keys.includes('sb-v6-9-32-shell') && !before.keys.includes('sb-v6-9-33-shell') && !before.keys.includes('sb-v6-9-34-shell');
  if (!anciensCachesNettoyes) console.error('Caches observés :', before.keys.join(', '));
  check(anciensCachesNettoyes,'anciens caches SoundBlend nettoyés sans effacer celui des autres applications');
  check(before.requests.some(x=>x.endsWith('/index.html'))&&before.requests.some(x=>x.endsWith('.js'))&&before.requests.some(x=>x.endsWith('.css')),'page et ressources compilées préchargées');

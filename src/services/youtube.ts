@@ -90,6 +90,18 @@ export type PlayableVideo = {
   /** Identité renvoyée par YouTube, à contrôler aussi après résolution. */
   sourceTitle?: string; sourceArtist?: string;
 };
+
+/** Un élément de playlist, distinct de la vidéo : deux occurrences de la
+    même vidéo ont deux identifiants d'élément et ne doivent pas être perdues. */
+export type PlaylistSnapshotItem = { itemId: string; videoId: string };
+export type PlaylistMove = { itemId: string; position: number };
+export type AssistantCatalogTrack = Track & { youtubeTitle: string; youtubeChannel: string };
+/** Tenir compte aussi de l'identité brute de la chaîne et de la vidéo,
+    notamment lorsqu'une exclusion est ajoutée après la recherche. */
+export const isAssistantTrackExcluded = (track: Track): boolean => {
+  const raw = track as Partial<AssistantCatalogTrack>;
+  return isExcluded(track) || (!!raw.youtubeTitle && isExcluded({ videoId: track.videoId, title: raw.youtubeTitle, artist: raw.youtubeChannel }));
+};
 const findCache = new Map<string, { at: number; val: PlayableVideo | null }>();
 const FIND_TTL = 60 * 60 * 1000;
 
@@ -382,9 +394,10 @@ export class YouTubeService {
    */
   public async fetchPlaylistTracks(
     playlistId: string,
-    onProgress?: (loaded: number) => void
+    onProgress?: (loaded: number) => void,
+    options: { fresh?: boolean } = {},
   ): Promise<Track[]> {
-    if (playlistTracksCache.has(playlistId)) {
+    if (!options.fresh && playlistTracksCache.has(playlistId)) {
       return playlistTracksCache.get(playlistId)!;
     }
 
@@ -964,10 +977,13 @@ export class YouTubeService {
   private async apiRequest(c: { token: string; serial: number; revision: number }, url: string, init: RequestInit = {}): Promise<{ resp: Response; data: any }> {
     this.assertSession(c.token, c.serial, c.revision);
     const controller = new AbortController(); this.operations.add(controller);
+    const callerSignal = init.signal;
+    const abortFromCaller = () => controller.abort();
+    if (callerSignal?.aborted) controller.abort(); else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => { controller.abort(); reject(new Error('Délai YouTube dépassé. L’opération peut être partielle ; réessaie.')); }, 12000);
+        timer = setTimeout(() => { controller.abort(); reject(new Error('Délai YouTube dépassé. L’opération peut être partielle : vérifie YouTube avant une nouvelle tentative.')); }, 12000);
       });
       const work = (async () => {
         const headers = new Headers(init.headers); headers.set('Authorization', `Bearer ${c.token}`);
@@ -981,10 +997,10 @@ export class YouTubeService {
       this.assertSession(c.token, c.serial, c.revision);
       if (result.resp.status === 401) { this.invalidateToken(c.token); throw new Error('Session YouTube expirée. Reconnecte-toi.'); }
       return result;
-    } finally { if (timer) clearTimeout(timer); this.operations.delete(controller); }
+    } finally { if (timer) clearTimeout(timer); callerSignal?.removeEventListener('abort', abortFromCaller); this.operations.delete(controller); }
   }
   private apiError(action: string, resp: Response): Error {
-    return new Error(`${action} (YouTube HTTP ${resp.status}). L’opération peut être partielle ; réessaie.`);
+    return new Error(`${action} (YouTube HTTP ${resp.status}). L’opération peut être partielle : vérifie YouTube avant une nouvelle tentative.`);
   }
 
   public async createPlaylist(title: string, description: string, isPrivate = true): Promise<string> {
@@ -1056,6 +1072,155 @@ export class YouTubeService {
     } while (pageToken);
     return out;
   }
+  /** Recherche explicite de l'assistant : liée au compte et sans cache de
+      réponse entre comptes. Chaque appel YouTube consomme du quota. */
+  public async searchAssistantCatalog(query: string): Promise<AssistantCatalogTrack[]> {
+    const q = query.trim().slice(0, 180);
+    if (q.length < 2) throw new Error('Précise le titre ou l’artiste à rechercher.');
+    const c = this.captureSession();
+    const url = `${YOUTUBE_API_BASE}/search?part=snippet&type=video&videoCategoryId=10&maxResults=8&q=${encodeURIComponent(q)}`;
+    const { resp, data } = await this.apiRequest(c, url);
+    if (!resp.ok) throw this.apiError('Recherche musicale refusée', resp);
+    if (!Array.isArray(data?.items)) throw new Error('Réponse de recherche YouTube illisible.');
+    const items = [...data.items].sort((a: any, b: any) =>
+      Number(/-\s*Topic$/i.test(String(b?.snippet?.channelTitle || '')))
+      - Number(/-\s*Topic$/i.test(String(a?.snippet?.channelTitle || ''))));
+    return items.flatMap((item: any): AssistantCatalogTrack[] => {
+      const videoId = item?.id?.videoId;
+      if (typeof videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return [];
+      const raw = decodeEntities(String(item?.snippet?.title || ''));
+      const cleaned = cleanTitle(raw);
+      const channelRaw = decodeEntities(String(item?.snippet?.videoOwnerChannelTitle || item?.snippet?.channelTitle || ''));
+      const channel = channelRaw.replace(/\s*-\s*Topic$/i, '');
+      const track: AssistantCatalogTrack = { id: `yt-${videoId}`, videoId, title: cleaned.title || raw,
+        artist: cleaned.artist || channel || 'Artiste inconnu', thumbnailUrl: item?.snippet?.thumbnails?.medium?.url || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+        durationSeconds: 0, videoUrl: `https://www.youtube.com/watch?v=${videoId}`, youtubeTitle: raw, youtubeChannel: channelRaw };
+      return track.title && !isAssistantTrackExcluded(track) ? [track] : [];
+    });
+  }
+
+  /** Appliquer uniquement un plan approuvé à la playlist d'origine.
+      Chaque écriture est précédée d'une relecture de l'état attendu ; la
+      dernière fenêtre avant écriture n'est toutefois pas atomique. */
+  public async applyAssistantPlaylistEdits(
+    playlistId: string,
+    snapshot: PlaylistSnapshotItem[],
+    edits: { removeItemIds: string[]; moves: PlaylistMove[]; additions: Track[] },
+    onProgress?: (message: string) => void,
+    signal?: AbortSignal,
+  ): Promise<{ removed: number; moved: number; added: number }> {
+    const c = this.captureSession();
+    if (!/^[A-Za-z0-9_-]{2,200}$/.test(playlistId)) throw new Error('Identifiant de playlist invalide.');
+    if (!Array.isArray(snapshot) || snapshot.length > 5000 || snapshot.some((x) => !x?.itemId || !/^[A-Za-z0-9_-]{11}$/.test(x.videoId))
+      || new Set(snapshot.map((x) => x.itemId)).size !== snapshot.length) throw new Error('État initial de playlist invalide ; aucune modification envoyée.');
+    const removeIds = edits.removeItemIds;
+    if (!Array.isArray(removeIds) || new Set(removeIds).size !== removeIds.length || removeIds.some((id) => !snapshot.some((x) => x.itemId === id))) {
+      throw new Error('Un retrait ne correspond pas à la playlist ; aucune modification envoyée.');
+    }
+    if (!Array.isArray(edits.moves) || !Array.isArray(edits.additions) || removeIds.length + edits.moves.length + edits.additions.length > 25) {
+      throw new Error('Cette proposition dépasse 25 modifications : demande des étapes plus petites.');
+    }
+    const simulate = snapshot.filter((x) => !removeIds.includes(x.itemId));
+    for (const move of edits.moves) {
+      const at = simulate.findIndex((x) => x.itemId === move.itemId);
+      if (at < 0 || !Number.isInteger(move.position) || move.position < 0 || move.position >= simulate.length) {
+        throw new Error('Un déplacement ne correspond pas à la playlist ; aucune modification envoyée.');
+      }
+      const [item] = simulate.splice(at, 1); simulate.splice(move.position, 0, item);
+    }
+    const videos = new Set(simulate.map((x) => x.videoId));
+    for (const t of edits.additions) {
+      if (!/^[A-Za-z0-9_-]{11}$/.test(t?.videoId || '') || videos.has(t.videoId) || isAssistantTrackExcluded(t)) {
+        throw new Error('Un titre à ajouter est invalide, déjà présent ou bloqué ; aucune modification envoyée.');
+      }
+      videos.add(t.videoId);
+    }
+    let expected = snapshot.map((x) => ({ ...x }));
+    let removed = 0, moved = 0, added = 0;
+    const check = async () => {
+      this.assertSession(c.token, c.serial, c.revision);
+      if (signal?.aborted) throw new Error('Opération interrompue. Vérifie la playlist : elle peut être partiellement modifiée.');
+      const actual = await this.getPlaylistItems(playlistId);
+      this.assertSession(c.token, c.serial, c.revision);
+      if (signal?.aborted) throw new Error('Opération interrompue. Vérifie la playlist : elle peut être partiellement modifiée.');
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+        throw new Error('La playlist a changé depuis l’aperçu. Arrête et demande une nouvelle proposition ; des changements précédents peuvent déjà avoir été appliqués.');
+      }
+    };
+    try {
+      await check();
+      for (const itemId of removeIds) {
+        await check();
+        const { resp } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?id=${encodeURIComponent(itemId)}`, { method: 'DELETE', signal });
+        if (!resp.ok) throw this.apiError('Retrait d’un titre refusé', resp);
+        expected = expected.filter((x) => x.itemId !== itemId); removed++;
+        onProgress?.(`Retrait ${removed}/${removeIds.length}`);
+      }
+      for (const move of edits.moves) {
+        const at = expected.findIndex((x) => x.itemId === move.itemId);
+        if (at === move.position) continue;
+        await check();
+        const item = expected[at];
+        const { resp } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?part=snippet`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, signal,
+          body: JSON.stringify({ id: item.itemId, snippet: { playlistId, position: move.position, resourceId: { kind: 'youtube#video', videoId: item.videoId } } }),
+        });
+        if (!resp.ok) throw this.apiError('Déplacement d’un titre refusé', resp);
+        expected.splice(at, 1); expected.splice(move.position, 0, item); moved++;
+        onProgress?.(`Déplacement ${moved}/${edits.moves.length}`);
+      }
+      for (const t of edits.additions) {
+        if (isAssistantTrackExcluded(t)) throw new Error('Un titre a été bloqué entre-temps. Vérifie la playlist avant de réessayer.');
+        await check();
+        const { resp, data } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?part=snippet`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+          body: JSON.stringify({ snippet: { playlistId, position: expected.length, resourceId: { kind: 'youtube#video', videoId: t.videoId } } }),
+        });
+        if (!resp.ok) throw this.apiError('Ajout d’un titre refusé', resp);
+        if (typeof data?.id !== 'string' || !data.id) throw new Error('YouTube n’a pas confirmé l’ajout. Vérifie la playlist avant de réessayer.');
+        expected.push({ itemId: data.id, videoId: t.videoId }); added++;
+        onProgress?.(`Ajout ${added}/${edits.additions.length}`);
+      }
+      await check();
+      return { removed, moved, added };
+    } finally { playlistTracksCache.delete(playlistId); }
+  }
+
+  /** Remplir une copie privée fraîchement créée sans dédupliquer les
+      occurrences volontairement présentes dans la playlist d'origine. */
+  public async fillAssistantCopy(playlistId: string, tracks: Track[], onProgress?: (done: number, total: number) => void, additions: Track[] = [], signal?: AbortSignal): Promise<void> {
+    const c = this.captureSession();
+    if (!/^[A-Za-z0-9_-]{2,200}$/.test(playlistId) || !Array.isArray(tracks) || tracks.length > 150
+      || tracks.some((t) => !/^[A-Za-z0-9_-]{11}$/.test(t?.videoId || ''))) {
+      throw new Error('Copie invalide ou trop longue (150 titres maximum).');
+    }
+    if (signal?.aborted) throw new Error('Opération interrompue. Vérifie la copie sur YouTube.');
+    if (additions.some((t) => isAssistantTrackExcluded(t))) throw new Error('Un ajout est maintenant bloqué. La copie ne sera pas remplie.');
+    const before = await this.getPlaylistItems(playlistId); this.assertSession(c.token, c.serial, c.revision);
+    if (signal?.aborted) throw new Error('Opération interrompue. Vérifie la copie sur YouTube.');
+    if (before.length) throw new Error('La nouvelle playlist n’est pas vide. Vérifie-la avant de continuer.');
+    try {
+      for (let i = 0; i < tracks.length; i++) {
+        this.assertSession(c.token, c.serial, c.revision);
+        if (signal?.aborted) throw new Error('Opération interrompue. La copie peut être partielle ; vérifie-la.');
+        if (additions.some((t) => isAssistantTrackExcluded(t))) throw new Error('Un ajout a été bloqué entre-temps. La copie peut être partielle ; vérifie-la.');
+        const { resp, data } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?part=snippet`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+          body: JSON.stringify({ snippet: { playlistId, position: i, resourceId: { kind: 'youtube#video', videoId: tracks[i].videoId } } }),
+        });
+        if (!resp.ok) throw this.apiError(`Ajout ${i + 1}/${tracks.length} refusé`, resp);
+        if (typeof data?.id !== 'string' || !data.id) throw new Error('YouTube n’a pas confirmé un ajout. La copie peut être partielle ; vérifie-la.');
+        onProgress?.(i + 1, tracks.length);
+      }
+      if (signal?.aborted) throw new Error('Opération interrompue. Vérifie la copie sur YouTube.');
+      const final = await this.getPlaylistItems(playlistId); this.assertSession(c.token, c.serial, c.revision);
+      if (signal?.aborted) throw new Error('Opération interrompue. Vérifie la copie sur YouTube.');
+      if (JSON.stringify(final.map((x) => x.videoId)) !== JSON.stringify(tracks.map((x) => x.videoId))) {
+        throw new Error('YouTube n’a pas confirmé le contenu et l’ordre de la copie. Vérifie-la avant de réessayer.');
+      }
+    } finally { playlistTracksCache.delete(playlistId); }
+  }
+
   public async removePlaylistItem(itemId: string): Promise<boolean> {
     const c = this.captureSession();
     const { resp } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?id=${encodeURIComponent(itemId)}`, { method: 'DELETE' });

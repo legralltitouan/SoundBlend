@@ -1,4 +1,4 @@
-# Vérifications facultatives — SoundBlend 6.9.34
+# Vérifications facultatives — SoundBlend 6.9.35
 
 Ces scripts ouvrent des profils Chromium temporaires. Sauf indication contraire, Google OAuth, Drive, Gemini, YouTube et le lecteur sont **simulés** : aucun compte ni aucune clé réelle n'est utilisé. Ils ne prouvent pas une fusion atomique sur Drive, la disponibilité des services ou le comportement de tous les navigateurs. Exécuter les scripts **séquentiellement**.
 
@@ -16,7 +16,7 @@ Sur Linux, Chromium peut demander des bibliothèques système supplémentaires (
 
 ## Comptes, stockage, synchronisation et export — sources
 
-Dans un premier terminal, laisser ouvert `npm run dev`. Dans un second :
+Dans un premier terminal, laisser ouvert `npm run dev`. Après avoir modifié des fichiers source, **redémarrer Vite avant ces suites** : le rechargement à chaud peut créer deux instances d'un module partagé et fausser les tests qui l'importent directement. Dans un second terminal :
 
 ```sh
 node verification/t-collections631.mjs
@@ -46,13 +46,16 @@ node verification/t-resolution631.mjs
 node verification/t-youtube-bibliotheque631.mjs
 node verification/t-assistant631.mjs
 node verification/t-assistant-erreurs631.mjs
+node verification/t-assistant635.mjs
+node verification/t-assistant-vocal635.mjs
+node verification/t-assistant-web635.mjs
 node verification/t-connexion-avatar633.mjs
 node verification/t-exclusions633.mjs
 node verification/t-orb631.mjs
 node verification/t-pochettes-diagnostics632.mjs
 ```
 
-Les tests de l'Assistant couvrent notamment une bibliothèque de plus de 500 titres et le refus d'une page YouTube. Exclusions couvre clavier, tailles d'écran, repli réseau et réponses tardives ; l'animation et les pochettes peuvent écrire des images dans `verification/captures/`.
+Les tests de l'Assistant couvrent notamment une bibliothèque de plus de 500 titres, les propositions, les copies, les retraits et réordonnancements, les annulations, les changements de compte, les exclusions, la recherche et les erreurs. Le vocal utilise le graphe audio Chromium réel avec un micro factice et un WebSocket simulé. La recherche Google Search, les modèles Gemini et YouTube sont simulés ; ces tests ne valident pas de services ni comptes réels. Exclusions couvre clavier, tailles d'écran, repli réseau et réponses tardives ; l'animation et les pochettes peuvent écrire des images dans `verification/captures/`.
 
 ## Site compilé et PWA
 
@@ -71,10 +74,13 @@ node verification/t-site-comptes634.mjs
 node verification/t-export-reprise634.mjs
 node verification/t-onboarding634.mjs
 node verification/t-pwa631.mjs
-node verification/t-pwa-navigation634.mjs
+node verification/t-pwa-navigation635.mjs
 node verification/t-player630-rigoureux.mjs
 node verification/t-assistant631.mjs
 node verification/t-assistant-erreurs631.mjs
+node verification/t-assistant635.mjs
+node verification/t-assistant-vocal635.mjs
+node verification/t-assistant-web635.mjs
 node verification/t-connexion-avatar633.mjs
 node verification/t-exclusions633.mjs
 node verification/t-visuel632.mjs
@@ -82,14 +88,14 @@ node verification/t-visuel632.mjs
 
 Sous PowerShell : `$env:SOUNDBLEND_URL='http://localhost:4173/'`. Le test visuel utilise aussi le serveur de sources sur 5173. Les tests PWA activent un **vrai service worker** dans un profil temporaire : ils vérifient le rechargement hors ligne et la conservation de la page en cache lors d'un déploiement incomplet. Le test lecteur utilise deux faux lecteurs, pas les iframes YouTube réelles.
 
-Pour tester la mise à jour du **vrai site compilé 6.9.33** vers la 6.9.34, conserver séparément `SoundBlend-v6.9.33-site.zip`, installer l'utilitaire `unzip`, puis :
+Pour tester la mise à jour du **vrai site compilé 6.9.34** vers la 6.9.35, conserver séparément `SoundBlend-v6.9.34-site.zip`, installer l'utilitaire `unzip`, puis :
 
 ```sh
-export SOUNDBLEND_PREVIOUS_SITE_ZIP=/chemin/vers/SoundBlend-v6.9.33-site.zip
-node verification/t-pwa-migration634.mjs
+export SOUNDBLEND_PREVIOUS_SITE_ZIP=/chemin/vers/SoundBlend-v6.9.34-site.zip
+node verification/t-pwa-migration635.mjs
 ```
 
-L'ancien paquet n'est pas inclus dans la source 6.9.34. On peut aussi définir `SOUNDBLEND_PREVIOUS_SITE_DIR` sur le répertoire extrait. L'essai utilise son propre serveur local temporaire : il simule un téléchargement raté, réessaie, vérifie les caches et recharge réellement les deux versions hors ligne. Il ne garantit pas tous les états possibles de cache propres à chaque hébergeur.
+L'ancien paquet n'est pas inclus dans la source 6.9.35. On peut aussi définir `SOUNDBLEND_PREVIOUS_SITE_DIR` sur le répertoire extrait. L'essai utilise son propre serveur local temporaire : il simule un téléchargement raté, réessaie, vérifie les caches et recharge réellement les deux versions hors ligne. Il ne garantit pas tous les états possibles de cache propres à chaque hébergeur.
 
 Les tests de migration et de navigation utilisent le chemin de `SOUNDBLEND_URL` pour déterminer leur point de montage, et lisent le site courant depuis `dist/` (ou le dossier indiqué par `SOUNDBLEND_CURRENT_SITE_DIR`). Ils refusent une compilation dont la base ne correspond pas. Ils n'envoient pas de requêtes au serveur indiqué dans l'URL : ils servent eux-mêmes les fichiers sur un port local temporaire. `SOUNDBLEND_BASE_PATH`, si défini, remplace le chemin de l'URL.
 
@@ -101,17 +107,17 @@ BASE_PATH=/SoundBlend/ npm run preview -- --port 4181
 # Dans le second terminal :
 export SOUNDBLEND_URL=http://localhost:4181/SoundBlend/
 node verification/t-pwa631.mjs
-node verification/t-pwa-navigation634.mjs
+node verification/t-pwa-navigation635.mjs
 node verification/t-site-comptes634.mjs
 node verification/t-export-reprise634.mjs
 node verification/t-onboarding634.mjs
 ```
 
-Pour le test de **migration en sous-dossier**, l'ancienne version doit aussi être compilée pour cette même base : le ZIP 6.9.33 de site déjà compilé pour `/` ne convient pas. Décompresser séparément la source 6.9.33, y exécuter `npm ci` puis `BASE_PATH=/SoundBlend/ npm run build`. Avec l'URL ci-dessus et la compilation 6.9.34 sous `/SoundBlend/` toujours présente dans `dist/` :
+Pour le test de **migration en sous-dossier**, l'ancienne version doit aussi être compilée pour cette même base : le ZIP 6.9.34 de site déjà compilé pour `/` ne convient pas. Décompresser séparément la source 6.9.34, y exécuter `npm ci` puis `BASE_PATH=/SoundBlend/ npm run build`. Avec l'URL ci-dessus et la compilation 6.9.35 sous `/SoundBlend/` toujours présente dans `dist/` :
 
 ```sh
-export SOUNDBLEND_PREVIOUS_SITE_DIR=/chemin/vers/la-source-6.9.33/dist
-node verification/t-pwa-migration634.mjs
+export SOUNDBLEND_PREVIOUS_SITE_DIR=/chemin/vers/la-source-6.9.34/dist
+node verification/t-pwa-migration635.mjs
 ```
 
 Pour compiler dans un autre dossier que `dist/`, indiquer ce dossier avec `SOUNDBLEND_CURRENT_SITE_DIR` aux tests de migration et de navigation. Le ZIP de site livré est compilé pour la racine `/`, pas pour ce sous-dossier.
