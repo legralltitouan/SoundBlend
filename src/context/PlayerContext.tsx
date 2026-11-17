@@ -76,6 +76,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const abandonnes = useRef<Set<string>>(new Set());
 
   const playerRef = useRef<any>(null);
+  const providerAlive = useRef(true);
   /* l'intention de lecture : « je veux que ça joue », décidée par la
      personne, jamais par un événement du lecteur (voir plus bas) */
   const wantedPlay = useRef(false);
@@ -154,6 +155,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const ensurePlayer = (videoId: string) => {
+    if (!providerAlive.current || !videoId) return;
     if (playerRef.current?.loadVideoById) {
       playerRef.current.loadVideoById(videoId);
       playerRef.current.playVideo?.();
@@ -165,6 +167,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       let tries = 0;
       const t = setInterval(() => {
         tries += 1;
+        if (!providerAlive.current || !pendingVideo.current) { clearInterval(t); return; }
         if (window.YT?.Player) {
           clearInterval(t);
           ensurePlayer(pendingVideo.current!);
@@ -587,6 +590,17 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
      met pas une iframe DANS la div, il **remplace** la div par l'iframe */
   const cadreClip = useRef<Element | null>(null);
 
+  useEffect(() => {
+    providerAlive.current = true;
+    return () => {
+      providerAlive.current = false; wantedPlay.current = false; pendingVideo.current = null;
+      try { playerRef.current?.pauseVideo?.(); playerRef.current?.destroy?.(); } catch { /* lecteur déjà parti */ }
+      try { clipPlayer.current?.pauseVideo?.(); clipPlayer.current?.destroy?.(); } catch { /* idem */ }
+      playerRef.current = null; clipPlayer.current = null;
+      document.getElementById('youtube-player-host')?.remove();
+    };
+  }, []);
+
   /* on détruit le lecteur du clip et on retire son cadre */
   const demontrerClip = () => {
     const ancien = clipPlayer.current;
@@ -611,6 +625,7 @@ export const PlayerProvider: React.FC<{ children: React.ReactNode }> = ({ childr
        · l'API **remplace** la div par l'iframe : on retient l'iframe
          (`getIframe()`), pas la div. */
   const monterClip = () => {
+    if (!providerAlive.current) return;
     const cadre = clipSlot.current;
     if (!cadre || modeRef.current !== 'clip') return;
     const id = clipIdRef.current;

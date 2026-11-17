@@ -21,9 +21,9 @@ const results = await page.evaluate(async () => {
   localStorage.setItem('soundblend_seen_tracks', JSON.stringify(['journal non daté']));
   localStorage.setItem('soundblend_recent_blends', JSON.stringify([old]));
   s.migrateLegacyData();
-  check('les anciens pouces sont supprimés et non convertis en exclusions', !localStorage.getItem('soundblend_taste_memory') && !localStorage.getItem('soundblend_ratings_v1') && s.getExclusionRecords().length===0);
+  check('les anciens pouces restent conservés séparément et ne deviennent pas des exclusions', !!localStorage.getItem('soundblend_taste_memory') && !!localStorage.getItem('soundblend_ratings_v1') && s.getExclusionRecords().length===0);
   check('les copies de pouce sont retirées des blends', !('userRating' in s.getStoredBlends()[0].tracks[0]));
-  check('le vieux journal sans date n’interdit rien', !localStorage.getItem('soundblend_seen_tracks'));
+  check('le vieux journal sans date est conservé mais ignoré', !!localStorage.getItem('soundblend_seen_tracks') && s.getDiscoveryHistory().length===0);
   s.learnDiscoveriesFromBlends(s.getStoredBlends());
   check('la migration reconstitue les découvertes datées des blends valides', s.isRecentlyProposed(t('Avant','Origine')));
 

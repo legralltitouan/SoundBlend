@@ -1,5 +1,6 @@
 import type { AppSettings, BlendTombstone, DiscoveryRecord, ExclusionRecord, Exclusions, GeneratedBlend, Track } from '../types';
 import { cleanTitle, norm, sameTrack } from '../lib/track';
+import { scopedGetItem, scopedSetItem } from './accountScope';
 
 /* Données privées, sur cet appareil puis dans le dossier appData de Drive.
    Les anciens avis ne deviennent jamais des exclusions : un pouce sur un
@@ -14,12 +15,14 @@ const MIGRATION_KEY = 'soundblend_no_ratings_migration_v1';
 export const FOURTEEN_DAYS = 14 * 24 * 60 * 60 * 1000;
 
 const read = <T,>(key: string, fallback: T): T => {
-  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) as T : fallback; }
+  try { const raw = scopedGetItem(key); return raw ? JSON.parse(raw) as T : fallback; }
   catch { return fallback; }
 };
-const write = (key: string, value: unknown) => {
-  try { localStorage.setItem(key, JSON.stringify(value)); }
-  catch (e) { console.warn('Stockage local indisponible :', e); }
+/** Les actions utilisateur ne doivent jamais annoncer un succès si le
+    navigateur a refusé l'écriture (quota, stockage interdit, etc.). */
+const write = (key: string, value: unknown): void => {
+  try { scopedSetItem(key, JSON.stringify(value)); }
+  catch { throw new Error('Stockage local indisponible ou plein : modification non enregistrée.'); }
 };
 const notify = () => { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('sb:data-changed')); };
 
@@ -28,11 +31,24 @@ export const getStoredSettings = (): AppSettings => {
   const s = read<Partial<AppSettings>>(SETTINGS_KEY, {});
   return { googleClientId: s.googleClientId || '', youtubeApiKey: s.youtubeApiKey || '', geminiApiKey: s.geminiApiKey || '' };
 };
-export const getSettingsAt = (): number => Number(read(SETTINGS_AT_KEY, 0)) || 0;
-/** `distantAt` conserve la date de l'autre appareil, sans simuler un clic. */
+export const getSettingsAt = (): number => {
+  const settings = read<{ _updatedAt?: number }>(SETTINGS_KEY, {});
+  return Number(settings._updatedAt) || Number(read(SETTINGS_AT_KEY, 0)) || 0;
+};
+/** Valeur et date dans une même écriture atomique de localStorage. */
 export const saveStoredSettings = (s: AppSettings, distantAt?: number): void => {
-  write(SETTINGS_KEY, s);
-  write(SETTINGS_AT_KEY, distantAt === undefined ? Math.max(Date.now(), getSettingsAt() + 1) : distantAt);
+  const at = distantAt === undefined ? Math.max(Date.now(), getSettingsAt() + 1) : distantAt;
+  write(SETTINGS_KEY, { ...s, _updatedAt: at, _pending: distantAt === undefined });
+  if (distantAt === undefined) notify();
+};
+export const settingsEnAttente = (): boolean => !!read<{ _pending?: boolean }>(SETTINGS_KEY, {})._pending;
+export const rebaserSettings = (at: number): void => {
+  write(SETTINGS_KEY, { ...getStoredSettings(), _updatedAt: at, _pending: true });
+};
+export const confirmerSettings = (at: number): void => {
+  if (settingsEnAttente() && getSettingsAt() === at) {
+    write(SETTINGS_KEY, { ...getStoredSettings(), _updatedAt: at, _pending: false });
+  }
 };
 
 const withoutRating = (t: Track): Track => {
@@ -46,15 +62,13 @@ export const cleanBlend = (b: GeneratedBlend): GeneratedBlend => ({
   tracks: Array.isArray(b.tracks) ? b.tracks.map(withoutRating) : [],
 });
 
-/** Migration non ambiguë : aucune ancienne note n'est importée en blocage. */
+/** Les anciennes données restent sur l'appareil, sans être importées ou
+    supprimées. Les anciens pouces ne deviennent jamais des exclusions. */
 export const migrateLegacyData = (): void => {
   try {
-    if (localStorage.getItem(MIGRATION_KEY)) return;
-    for (const key of ['soundblend_taste_memory', 'soundblend_ratings_v1', 'soundblend_seen_tracks', 'soundblend_portrait_v1']) localStorage.removeItem(key);
-    const old = read<GeneratedBlend[]>(BLENDS_KEY, []);
-    if (Array.isArray(old)) write(BLENDS_KEY, old.filter(Boolean).map(cleanBlend));
-    localStorage.setItem(MIGRATION_KEY, '1');
-  } catch { /* on ne transforme jamais les anciens pouces en exclusions */ }
+    if (scopedGetItem(MIGRATION_KEY)) return;
+    scopedSetItem(MIGRATION_KEY, '1');
+  } catch { /* la migration non destructive peut être retentée plus tard */ }
 };
 
 const artistNorm = (s: string) => norm((s || '').replace(/\s*[-–—]\s*topic$/i, '').replace(/\s+official$/i, ''));
@@ -89,6 +103,31 @@ export const mergeExclusionRecords = (a: ExclusionRecord[] = [], b: ExclusionRec
   return [...byId.values()].sort((x, y) => x.id.localeCompare(y.id));
 };
 export const writeExclusionRecords = (records: ExclusionRecord[]): void => write(EXCLUSIONS_KEY, mergeExclusionRecords(records));
+/** Les marqueurs sont purement locaux, jamais interprétés dans le Drive. */
+export const exclusionPourDrive = (r: ExclusionRecord): ExclusionRecord => {
+  const { _pending, ...remote } = r; return remote;
+};
+const memeExclusion = (a: ExclusionRecord, b: ExclusionRecord): boolean =>
+  a.id === b.id && a.kind === b.kind && a.artist === b.artist && (a.title || '') === (b.title || '')
+  && (a.videoId || '') === (b.videoId || '') && a.deleted === b.deleted;
+export const fusionnerExclusionsAvecGestesLocaux = (local: ExclusionRecord[], remote: ExclusionRecord[]): ExclusionRecord[] => {
+  const latest = mergeExclusionRecords(remote.map(exclusionPourDrive));
+  const rebased = local.map((r) => {
+    const other = latest.find((x) => x.id === r.id);
+    if (!r._pending || !other || other.updatedAt < r.updatedAt || memeExclusion(r, other)) return r;
+    return { ...r, updatedAt: other.updatedAt + 1 };
+  });
+  return mergeExclusionRecords(rebased, latest);
+};
+export const confirmerExclusions = (sent: ExclusionRecord[]): void => {
+  const records = getExclusionRecords(); let changed = false;
+  const next = records.map((r) => {
+    const s = sent.find((x) => x.id === r.id);
+    if (!r._pending || !s || r.updatedAt !== s.updatedAt || !memeExclusion(r, s)) return r;
+    changed = true; return exclusionPourDrive(r);
+  });
+  if (changed) writeExclusionRecords(next);
+};
 export const getExclusions = (): Exclusions => {
   const active = getExclusionRecords().filter((r) => !r.deleted);
   return { tracks: active.filter((r) => r.kind === 'track'), artists: active.filter((r) => r.kind === 'artist').map((r) => r.artist) };
@@ -100,7 +139,7 @@ export const block = (t: { title?: string; artist?: string; videoId?: string }, 
   const records = getExclusionRecords();
   const id = recordKey(kind, t);
   const old = records.find((r) => r.id === id);
-  const record: ExclusionRecord = { id, kind, artist, ...(kind === 'track' ? { title, videoId: t.videoId || undefined } : {}), updatedAt: Math.max(Date.now(), (old?.updatedAt || 0) + 1), deleted: false };
+  const record: ExclusionRecord = { id, kind, artist, ...(kind === 'track' ? { title, videoId: t.videoId || undefined } : {}), updatedAt: Math.max(Date.now(), (old?.updatedAt || 0) + 1), deleted: false, _pending: true };
   writeExclusionRecords([...records.filter((r) => r.id !== id), record]);
   notify();
   return record;
@@ -109,7 +148,7 @@ export const unblock = (id: string): void => {
   const records = getExclusionRecords();
   const old = records.find((r) => r.id === id);
   if (!old || old.deleted) return;
-  writeExclusionRecords([...records.filter((r) => r.id !== id), { ...old, deleted: true, updatedAt: Math.max(Date.now(), old.updatedAt + 1) }]);
+  writeExclusionRecords([...records.filter((r) => r.id !== id), { ...old, deleted: true, updatedAt: Math.max(Date.now(), old.updatedAt + 1), _pending: true }]);
   notify();
 };
 /** S'applique à la suggestion ET au résultat YouTube réel. */
@@ -163,7 +202,9 @@ export const learnDiscoveriesFromBlends = (blends: GeneratedBlend[]): void => {
       records.push({ title: t.title, artist: t.artist, videoId: t.videoId, shownAt: at });
     }
   }
-  writeDiscoveryHistory(mergeDiscoveryHistory(getDiscoveryHistory(), records));
+  const before = getDiscoveryHistory();
+  const next = mergeDiscoveryHistory(before, records);
+  if (JSON.stringify(before) !== JSON.stringify(next)) writeDiscoveryHistory(next);
 };
 
 export const getBlendTombstones = (): Record<string, BlendTombstone> => {
@@ -185,34 +226,58 @@ export const getStoredBlends = (): GeneratedBlend[] => {
   const deleted = getBlendTombstones();
   const now = Date.now();
   const valid = raw.filter((b) => b && b.id && !deleted[b.id] && Number.isFinite(Date.parse(b.expiresAt)) && Date.parse(b.expiresAt) > now).map(cleanBlend);
-  if (valid.length !== raw.length || raw.some((b) => (b?.tracks || []).some((t: any) => 'userRating' in t))) write(BLENDS_KEY, valid);
+  // La lecture ne modifie pas l'archive historique ni les données expirées.
+  // Le nettoyage des champs obsolètes ne s'applique qu'à la copie utilisée.
   return valid;
 };
 export const writeStoredBlends = (blends: GeneratedBlend[]): void => write(BLENDS_KEY, blends.map(cleanBlend));
+export const blendPourDrive = (b: GeneratedBlend): GeneratedBlend => { const { _pending, ...remote } = cleanBlend(b); return remote; };
+export const confirmerBlends = (sent: GeneratedBlend[]): void => {
+  let changed = false;
+  const next = getStoredBlends().map((b) => {
+    const s = sent.find((x) => x.id === b.id);
+    if (!b._pending || !s || b.updatedAt !== s.updatedAt || JSON.stringify(blendPourDrive(b)) !== JSON.stringify(blendPourDrive(s))) return b;
+    changed = true; return blendPourDrive(b);
+  });
+  if (changed) writeStoredBlends(next);
+};
 export const saveBlendToStorage = (blend: GeneratedBlend): GeneratedBlend => {
-  const old = getStoredBlends().find((b) => b.id === blend.id);
-  const b = cleanBlend({ ...blend, updatedAt: Math.max(Date.now(), (old?.updatedAt || 0) + 1) });
-  writeStoredBlends([b, ...getStoredBlends().filter((x) => x.id !== b.id)]);
+  const existing = getStoredBlends();
+  const old = existing.find((b) => b.id === blend.id);
+  const b = cleanBlend({ ...blend, updatedAt: Math.max(Date.now(), (old?.updatedAt || 0) + 1), _pending: true });
+  writeStoredBlends([b, ...existing.filter((x) => x.id !== b.id)]);
   notify();
   return b;
 };
 export const deleteStoredBlend = (id: string): void => {
   const existing = getStoredBlends();
   const b = existing.find((x) => x.id === id);
-  if (b) {
-    const tombstones = getBlendTombstones();
-    tombstones[id] = { at: Date.now(), expiresAt: Date.parse(b.expiresAt) };
-    writeBlendTombstones(tombstones);
-  }
-  writeStoredBlends(existing.filter((x) => x.id !== id));
+  if (!b) return;
+  // La pierre tombale est l'opération décisive, écrite atomiquement avant
+  // tout nettoyage. Elle empêche la résurrection par un ancien appareil.
+  const tombstones = getBlendTombstones();
+  tombstones[id] = { at: Math.max(Date.now(), (b.updatedAt || 0) + 1), expiresAt: Date.parse(b.expiresAt) };
+  writeBlendTombstones(tombstones);
+  try { writeStoredBlends(existing.filter((x) => x.id !== id)); } catch { /* déjà masqué par la pierre tombale */ }
   notify();
 };
 
 /* Portrait technique du curateur. Il n'est pas une liste d'avis. */
 const PORTRAIT_KEY = 'soundblend_portrait_v1';
-export type SoundPortrait = { style: string; genres: string[]; textures: string[]; avoid: string[]; energy: string; at: string };
+export type SoundPortrait = { style: string; genres: string[]; textures: string[]; avoid: string[]; energy: string; at: string; _pending?: boolean };
 export const getStoredPortrait = (): SoundPortrait | null => {
   const p = read<SoundPortrait | null>(PORTRAIT_KEY, null);
   return p && typeof p.style === 'string' ? p : null;
 };
-export const saveStoredPortrait = (p: SoundPortrait): void => write(PORTRAIT_KEY, p);
+export const portraitPourDrive = (p: SoundPortrait): SoundPortrait => { const { _pending, ...remote } = p; return remote; };
+export const saveStoredPortrait = (p: SoundPortrait, distant = false): void => {
+  const previous = getStoredPortrait();
+  const at = distant ? p.at : new Date(Math.max(Date.parse(p.at) || Date.now(), (Date.parse(previous?.at || '') || 0) + 1)).toISOString();
+  write(PORTRAIT_KEY, { ...portraitPourDrive(p), at, _pending: !distant });
+  if (!distant) notify();
+};
+export const rebaserPortrait = (p: SoundPortrait, at: number): void => write(PORTRAIT_KEY, { ...p, at: new Date(at).toISOString(), _pending: true });
+export const confirmerPortrait = (sent: SoundPortrait | null | undefined): void => {
+  const p = getStoredPortrait();
+  if (p?._pending && sent && JSON.stringify(portraitPourDrive(p)) === JSON.stringify(portraitPourDrive(sent))) write(PORTRAIT_KEY, portraitPourDrive(p));
+};

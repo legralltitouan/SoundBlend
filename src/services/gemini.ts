@@ -1,5 +1,6 @@
 import { BlendConfig, Exclusions, Track, TrackCategory, Playlist, GeneratedBlend, type DiscoveryRecord } from '../types';
 import { getStoredSettings, getDiscoveryHistory, isRecentlyProposed, isExcluded, recentArtists, getStoredPortrait } from './storage';
+import { accountRevision, assertAccountRevision } from './accountScope';
 import { matchesVideoIdentity, youtubeService, withTimeout, type PlayableVideo } from './youtube';
 import { dedupeTracks, uniqueByVideo } from '../lib/dedupe';
 import { matchesAsked, norm, cleanTitle } from '../lib/track';
@@ -497,11 +498,13 @@ export type AssistantReply = {
 export class GeminiService {
   /** Conversation sans effet de bord : elle ne lance jamais la génération. */
   public async converse(messages: AssistantMessage[], playlists: Playlist[], blends: GeneratedBlend[], exclusions: Exclusions): Promise<AssistantReply> {
+    const revision = accountRevision();
     const apiKey = cleGemini(getStoredSettings().geminiApiKey);
     if (!apiKey) throw new Error('Ajoute une clé Gemini dans Réglages pour utiliser l’assistant.');
     let models: string[];
     try { models = await engineQueue(apiKey); }
     catch (e: any) { throw new Error(`Impossible de joindre Gemini : ${explain(e)}.`); }
+    assertAccountRevision(revision);
     if (!models.length) throw new Error('Aucun modèle de texte Gemini disponible pour cette clé.');
     const compactTrack = (t: Track) => ({ title: t.title, artist: t.artist, videoId: t.videoId });
     const context = {
@@ -521,8 +524,10 @@ Données : ${JSON.stringify(context)}
 Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "source": {"type":"playlist ou blend", "id":"ID exact"} ou null, "instruction":"consigne musicale fidèle en français", "durationMinutes":45}.`;
     let last: any = null;
     for (const model of models) {
+      assertAccountRevision(revision);
       try {
         const raw = await callModelResilient(model, apiKey, prompt, 0.5, { json: true, budgetMs: 26000 });
+        assertAccountRevision(revision);
         const data = firstJson(raw || '');
         if (!data || typeof data.reply !== 'string' || !data.reply.trim()) continue;
         const source = data.source && (data.source.type === 'playlist' || data.source.type === 'blend') && typeof data.source.id === 'string'
@@ -548,6 +553,9 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "so
     tasteMemory: Exclusions,
     onProgress?: (message: string) => void
   ): Promise<Track[]> {
+    const revision = accountRevision();
+    const originalProgress = onProgress;
+    onProgress = (message) => { assertAccountRevision(revision); originalProgress?.(message); };
     const apiKey = cleGemini(getStoredSettings().geminiApiKey);
     const history = getDiscoveryHistory();
     const recentArtistNames = recentArtists(history);
@@ -622,6 +630,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "so
     let modeleQuiRepond = '';
 
     const call: CallModel = async (prompt, temperature, budgetMs) => {
+      assertAccountRevision(revision);
       let last: any = null;
       let journalier = false;
       /* ── toute la file, jusqu'au dernier ──
@@ -635,12 +644,14 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "so
         if (outOfQuota(step.model)) continue;
         try {
           const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
+          assertAccountRevision(revision);
           if (raw) {
             rememberEngine(step.key, step.model);
             modeleQuiRepond = step.model;
             return raw;
           }
         } catch (e: any) {
+          assertAccountRevision(revision);
           last = e;
           const st = e?.status;
           /* quota : on met ce modèle de côté (10 min) et on essaie la
@@ -682,6 +693,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "so
         quotaOut.clear();
         await new Promise((r) => setTimeout(r, 12000));
         for (const step of chain) {
+          assertAccountRevision(revision);
           if (brokenModels.has(step.model)) continue;
           try {
             const raw = await callModelResilient(step.model, step.key, prompt, temperature, { json: true, budgetMs });
@@ -725,6 +737,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "so
       analysis = known
         ? { fil: known.style, genres: known.genres, textures: known.textures, epoques: [], energie: known.energy, gout: '', eviter: known.avoid }
         : { fil: `Autour de ${seedTracks.map((t) => t.artist).slice(0, 3).join(', ')}`, genres: [], textures: [], epoques: [], energie: '', gout: '', eviter: [] };
+      assertAccountRevision(revision);
       rememberPortrait(toPortrait(analysis, tasteMemory));
     }
     /* les artistes que l'analyse elle-même conseille d'éviter */
@@ -1281,7 +1294,8 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "so
     tasteMemory: Exclusions,
     opts?: { avoidArtists?: string[]; onStep?: (step: ReplaceStep) => void; nonce?: number; instruction?: string },
   ): Promise<Track | null> {
-    const step = (s: ReplaceStep) => opts?.onStep?.(s);
+    const revision = accountRevision();
+    const step = (s: ReplaceStep) => { assertAccountRevision(revision); opts?.onStep?.(s); };
     this.lastEngineNote = '';
     const category = trackToReplace.category || 'fresh';
     step('taste');

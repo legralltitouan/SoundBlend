@@ -12,7 +12,7 @@ C'est celui que je recommande pour commencer. Gratuit, sans carte
 bancaire, **bande passante illimitée**, et on peut déposer les fichiers
 directement depuis le navigateur.
 
-1. Compile l'app pour la racine `/`, ou décompresse l'archive séparée `SoundBlend-v6.9.33-site.zip` qui contient déjà le site compilé. L'archive source ne contient pas de dossier `dist/`.
+1. Compile l'app pour la racine `/`, ou décompresse l'archive séparée `SoundBlend-v6.9.34-site.zip` qui contient déjà le site compilé. L'archive source ne contient pas de dossier `dist/`.
 2. Va sur `dash.cloudflare.com` → crée un compte gratuit.
 3. Menu **Workers & Pages** → **Create** → onglet **Pages** → **Upload assets**.
 4. Donne un nom au projet : `soundblend` → l'adresse sera

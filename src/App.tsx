@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { accountRevision } from './services/accountScope';
 import { AnimatePresence, motion } from 'framer-motion';
 import { UIProvider, useUI } from './context/UIContext';
 import { DataProvider } from './context/DataContext';
@@ -16,7 +17,6 @@ import { ConfigModal } from './components/modals/ConfigModal';
 import { GeneratingOverlay } from './components/modals/GeneratingOverlay';
 import { ActionSheets } from './components/modals/ActionSheets';
 import { PlayerBar } from './components/player/PlayerBar';
-import { Check } from 'lucide-react';
 import { WelcomeFlow } from './components/shell/WelcomeFlow';
 import { Ambience } from './components/shell/Ambience';
 import { InstallBanner } from './components/shell/InstallBanner';
@@ -50,8 +50,7 @@ const Toast: React.FC = () => {
             boxShadow: 'var(--shadow-2)', fontSize: 13, fontWeight: 550,
           }}
         >
-          <Check size={15} />
-          <span>{toast}</span>
+          <span role="status">{toast}</span>
         </motion.div>
       )}
     </AnimatePresence>
@@ -72,10 +71,12 @@ export const AppContent: React.FC = () => {
   if (!onboarded) {
     return (
       <>
-        <Ambience />
+        {/* L'ambiance lit le contexte lecteur ; pendant l'accueil, lui
+            fournir un lecteur inactif sans remonter le parcours à chaque
+            changement de compte. */}
+        <PlayerProvider><Ambience /></PlayerProvider>
         <WelcomeFlow />
         <Toast />
-      <TaskTicker />
       </>
     );
   }
@@ -99,18 +100,20 @@ export const AppContent: React.FC = () => {
   );
 };
 
+/* La conversation, le lecteur et sa file restent sur cet appareil et sont
+   remis à zéro lors d'un changement de compte : aucun état en mémoire de A
+   ne doit devenir la session de B. */
+const AccountBoundContent: React.FC = () => {
+  const { onboarded } = useUI();
+  const [revision, setRevision] = useState(accountRevision);
+  useEffect(() => {
+    const onAccount = () => setRevision(accountRevision());
+    window.addEventListener('sb:account-changed', onAccount);
+    return () => window.removeEventListener('sb:account-changed', onAccount);
+  }, []);
+  if (!onboarded) return <AppContent />;
+  return <PlayerProvider key={revision}><ReplaceQueueProvider><AppContent /></ReplaceQueueProvider></PlayerProvider>;
+};
 export default function App() {
-  return (
-    <UIProvider>
-      <DataProvider>
-        <PlayerProvider>
-          {/* la file des remplacements vit au-dessus des écrans : elle
-              continue quand on change de vue */}
-          <ReplaceQueueProvider>
-            <AppContent />
-          </ReplaceQueueProvider>
-        </PlayerProvider>
-      </DataProvider>
-    </UIProvider>
-  );
+  return <UIProvider><DataProvider><AccountBoundContent /></DataProvider></UIProvider>;
 }

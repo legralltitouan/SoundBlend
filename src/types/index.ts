@@ -45,8 +45,9 @@ export interface GeneratedBlend {
   description: string;
   createdAt: string;
   expiresAt: string; // ISO string 14 days later
-  /** Dernière modification locale, pour réconcilier les appareils. */
+  /** Dernière version connue ; _pending reste local et n'est pas envoyé. */
   updatedAt?: number;
+  _pending?: boolean;
   instruction?: string;
   seedTracks: Track[];
   tracks: Track[];
@@ -90,6 +91,8 @@ export interface ExclusionRecord {
   videoId?: string;
   updatedAt: number;
   deleted: boolean;
+  /** Marque locale d'un geste pas encore confirmé sur Drive. */
+  _pending?: boolean;
 }
 
 export interface Exclusions {

@@ -1,70 +1,67 @@
-/* Préférences visuelles : un seul langage (YouTube Music) × mode (clair / sombre).
-   Appliquées sur <html> via data-mode, lues par les CSS. */
+/* Préférences visuelles indépendantes pour chaque compte et pour l'espace
+   local sans compte. Le thème n'est jamais copié d'un espace à l'autre. */
+import { scopedGetItem, scopedSetItem } from '../services/accountScope';
 
 export type Design = 'ytm';
 export type Mode = 'light' | 'dark';
-
-const THEME_KEY = 'soundblend_theme';
 const MODE_KEY = 'soundblend_mode';
-/* quand le mode a été choisi, à la main, sur cet appareil. C'est ce qui
-   permet à la synchro de trancher entre deux appareils sans écraser un
-   choix récent par un réglage ancien. */
 const MODE_AT_KEY = 'soundblend_mode_at';
+const MODE_RECORD = 'soundblend_mode_v2';
+type ModeRecord = { mode: Mode; at: number; pending?: boolean };
 
-/* Design unique : le langage visuel de l'app mobile (YouTube Music).
-   Les anciennes peaux Apple / Material ont disparu — on force 'ytm'
-   même si un ancien réglage traîne dans le navigateur. */
-export function getDesign(): Design {
-  return 'ytm';
-}
-
-export function getMode(): Mode {
+export function getDesign(): Design { return 'ytm'; }
+const modeRecord = (): ModeRecord | null => {
   try {
-    const v = localStorage.getItem(MODE_KEY);
-    if (v === 'dark' || v === 'light') return v;
-  } catch { /* ignore */ }
+    const value = JSON.parse(scopedGetItem(MODE_RECORD) || 'null');
+    if ((value?.mode === 'light' || value?.mode === 'dark') && Number.isFinite(value.at)) return value;
+  } catch { /* ancienne préférence, ou stockage indisponible */ }
+  return null;
+};
+const saveMode = (r: ModeRecord): void => {
+  try { scopedSetItem(MODE_RECORD, JSON.stringify(r)); }
+  catch { throw new Error('Stockage local indisponible ou plein : choix du thème non enregistré.'); }
+};
+export function getMode(): Mode {
+  const record = modeRecord();
+  if (record) return record.mode;
+  try {
+    const old = scopedGetItem(MODE_KEY);
+    if (old === 'dark' || old === 'light') return old;
+  } catch { /* utiliser le mode de l'appareil */ }
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
-
-/** l'heure du dernier choix de mode fait sur cet appareil (0 = jamais) */
 export function getModeAt(): number {
-  try { return parseInt(localStorage.getItem(MODE_AT_KEY) || '0', 10) || 0; } catch { return 0; }
+  const record = modeRecord();
+  if (record) return record.at;
+  try { return parseInt(scopedGetItem(MODE_AT_KEY) || '0', 10) || 0; } catch { return 0; }
 }
+export function modeEnAttente(): boolean { return !!modeRecord()?.pending; }
 
-export function applyTheme(design: Design, mode: Mode) {
+/** Appliquer au DOM ne constitue pas une écriture ni un choix utilisateur. */
+export function applyTheme(_design: Design, mode: Mode): void {
   const html = document.documentElement;
   html.dataset.mode = mode;
-  html.classList.toggle('dark', mode === 'dark');   // pour les composants Tailwind (NoiseBackground)
+  html.classList.toggle('dark', mode === 'dark');
   html.style.colorScheme = mode;
-  try {
-    localStorage.setItem(THEME_KEY, design);
-    localStorage.setItem(MODE_KEY, mode);
-    /* pas de date ici : appliquer un thème au démarrage n'est pas un
-       choix. Seul un clic compte (voir plus bas). */
-  } catch { /* ignore */ }
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) {
-    const dark = mode === 'dark';
-    meta.setAttribute('content', dark ? '#0a0a0a' : '#ffffff');
-  }
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mode === 'dark' ? '#0a0a0a' : '#ffffff');
 }
-
-/** un clic sur l'interrupteur : le choix est daté, il gagnera la synchro */
-export function choisirMode(mode: Mode) {
+export function choisirMode(mode: Mode): void {
+  // Valeur, horloge et marque d'envoi dans une seule écriture locale.
+  saveMode({ mode, at: Math.max(Date.now(), getModeAt() + 1), pending: true });
   applyTheme(getDesign(), mode);
-  try { localStorage.setItem(MODE_AT_KEY, String(Date.now())); } catch { /* ignore */ }
   window.dispatchEvent(new CustomEvent('sb:data-changed'));
 }
-
-/** le mode vient d'un autre appareil : on l'applique en reprenant
-    **sa** date, si bien que les deux appareils s'accordent et qu'aucun
-    des deux ne « gagne » indéfiniment en réécrivant l'autre. */
-export function appliquerModeDistant(mode: Mode, at?: number) {
+export function appliquerModeDistant(mode: Mode, at = 0): void {
+  saveMode({ mode, at });
   applyTheme(getDesign(), mode);
-  if (at && at > 0) {
-    try { localStorage.setItem(MODE_AT_KEY, String(at)); } catch { /* ignore */ }
-  }
 }
-
-// applique immédiatement au premier import (évite un flash de thème)
+/** Un choix local non envoyé ne disparaît pas devant une horloge distante
+    plus rapide : il est placé après la version qu'on vient d'observer. */
+export function rebaserMode(at: number): void {
+  saveMode({ mode: getMode(), at, pending: true });
+}
+export function confirmerMode(at: number): void {
+  const r = modeRecord();
+  if (r?.pending && r.at === at) saveMode({ mode: r.mode, at: r.at });
+}
 applyTheme(getDesign(), getMode());

@@ -1,56 +1,62 @@
-# Vérifications facultatives — SoundBlend 6.9.33
+# Vérifications facultatives — SoundBlend 6.9.34
 
-Ces tests utilisent Node.js, Playwright et Chromium. Ils ouvrent des profils de navigateur temporaires et simulent les API pour les parcours fonctionnels. Ils ne se connectent pas à ton compte Google et n'envoient pas de vraie requête Gemini. Les essais réels facultatifs de la recherche Piped et du lecteur YouTube sont décrits plus bas.
+Ces scripts ouvrent des profils Chromium temporaires. Sauf indication contraire, Google OAuth, Drive, Gemini, YouTube et le lecteur sont **simulés** : aucun compte ni aucune clé réelle n'est utilisé. Ils ne prouvent pas une fusion atomique sur Drive, la disponibilité des services ou le comportement de tous les navigateurs. Exécuter les scripts **séquentiellement**.
 
 ## Préparer
 
-Depuis la racine du projet extrait :
+Depuis la racine du projet extrait, avec Node.js 20.19+ ou 22.12+ :
 
 ```sh
-npm install
-npm install --no-save --no-package-lock playwright@1.65.0
-npx playwright install chromium
+npm ci
+npm install --no-save playwright@1.65.0
+node node_modules/playwright/cli.js install chromium
 ```
 
-Le paquet Playwright n'est nécessaire que pour les tests. Sur Linux, son installation peut demander des bibliothèques système supplémentaires (`npx playwright install-deps chromium`).
+Sur Linux, Chromium peut demander des bibliothèques système supplémentaires (`node node_modules/playwright/cli.js install-deps chromium`). Pour un navigateur déjà installé, définir `CHROMIUM_PATH` sur son exécutable.
 
-## Tests sur les sources
+## Comptes, stockage, synchronisation et export — sources
 
-Dans un premier terminal, lancer et laisser ouvert :
-
-```sh
-npm run dev
-```
-
-Dans un second terminal :
+Dans un premier terminal, laisser ouvert `npm run dev`. Dans un second :
 
 ```sh
 node verification/t-collections631.mjs
 node verification/t-drive631.mjs
+node verification/t-audit-comptes633.mjs
+node verification/t-audit-deux-appareils633.mjs
+node verification/t-audit-horloge633.mjs
+node verification/t-audit-playlist633.mjs
+node verification/t-races-comptes634.mjs
+node verification/t-sync-delais-onglets634.mjs
+node verification/t-drive-corrompu634.mjs
+node verification/t-migration-legacy634.mjs
+node verification/t-auth-expiration634.mjs
+node verification/t-export-reprise634.mjs
+node verification/t-onboarding634.mjs
+```
+
+Ces tests couvrent notamment l'isolation A/B et des données historiques, deux appareils, les changements de compte en vol, les horloges, les délais et fichiers Drive invalides, le quota, l'expiration et la reprise YouTube. Le scénario de création YouTube dont le lien n'a pas pu être enregistré est testé avec et sans stockage de secours, y compris après rechargement. Pour accélérer les essais de délai, le délai de production de 12 secondes est ramené à environ 120 ms dans le navigateur de test. Par défaut, ces scripts utilisent `http://localhost:5173/` ; `SOUNDBLEND_DEV_URL` choisit une autre adresse.
+
+## Autres parcours — sources
+
+Avec le même serveur :
+
+```sh
 node verification/t-curateur631.mjs
 node verification/t-resolution631.mjs
 node verification/t-youtube-bibliotheque631.mjs
+node verification/t-assistant631.mjs
+node verification/t-assistant-erreurs631.mjs
+node verification/t-connexion-avatar633.mjs
+node verification/t-exclusions633.mjs
 node verification/t-orb631.mjs
 node verification/t-pochettes-diagnostics632.mjs
-node verification/t-exclusions633.mjs
-node verification/t-connexion-avatar633.mjs
 ```
 
-Ils visent par défaut `http://localhost:5173/`. Si le serveur utilise un autre port, régler `SOUNDBLEND_DEV_URL` sur son adresse. L'animation sauvegarde une capture dans `verification/captures/`. Le test de délai accélère à 100 ms un délai réseau de production de 12 secondes ; les requêtes sont simulées. Le test pochettes/diagnostics vérifie notamment les résolutions, les réponses réseau tardives et la conservation de messages émis dans le même tour JavaScript.
+Les tests de l'Assistant couvrent notamment une bibliothèque de plus de 500 titres et le refus d'une page YouTube. Exclusions couvre clavier, tailles d'écran, repli réseau et réponses tardives ; l'animation et les pochettes peuvent écrire des images dans `verification/captures/`.
 
-Le test Exclusions simule Piped et le lecteur : il couvre les onglets, l'ajout et le retrait indépendants, les doublons, le rapprochement de variantes de titres, la panne et le repli réseau, les réponses tardives, le clavier, le retour Android, les thèmes et plusieurs tailles d'écran, y compris un changement de hauteur pendant la fermeture du lecteur. Il ne démontre pas la disponibilité permanente des instances publiques. Il fonctionne aussi sur le site compilé avec `SOUNDBLEND_URL`. Le test connexion/avatar simule Google et vérifie connexion, déconnexion et conservation des exclusions locales sans rechargement.
+## Site compilé et PWA
 
-Une vérification complémentaire de la composition, du sélecteur et des petits écrans utilise **à la fois** le serveur de sources et le site compilé (voir ci-dessous) :
-
-```sh
-node verification/t-visuel632.mjs
-```
-
-`SOUNDBLEND_DEV_URL` désigne le serveur de sources, `SOUNDBLEND_URL` le site compilé. Les pochettes sont des couleurs simulées, les lecteurs YouTube sont simulés et seul le cycle de texte est accéléré pour le test. Il vérifie notamment les contrastes sur 48 palettes dans chaque thème, les deux directions du geste, les diagnostics, le mouvement réduit et plusieurs tailles d'écran. Il ne prouve pas l'apparence des éléments natifs YouTube.
-
-## Tests sur le site compilé
-
-Dans un terminal, compiler puis laisser ouvert le serveur de prévisualisation :
+Compiler pour la racine et laisser ouvert le serveur de prévisualisation :
 
 ```sh
 npm run build
@@ -61,30 +67,57 @@ Dans un second terminal, sur macOS/Linux :
 
 ```sh
 export SOUNDBLEND_URL=http://localhost:4173/
+node verification/t-site-comptes634.mjs
+node verification/t-export-reprise634.mjs
+node verification/t-onboarding634.mjs
+node verification/t-pwa631.mjs
+node verification/t-pwa-navigation634.mjs
+node verification/t-player630-rigoureux.mjs
 node verification/t-assistant631.mjs
 node verification/t-assistant-erreurs631.mjs
+node verification/t-connexion-avatar633.mjs
+node verification/t-exclusions633.mjs
+node verification/t-visuel632.mjs
+```
+
+Sous PowerShell : `$env:SOUNDBLEND_URL='http://localhost:4173/'`. Le test visuel utilise aussi le serveur de sources sur 5173. Les tests PWA activent un **vrai service worker** dans un profil temporaire : ils vérifient le rechargement hors ligne et la conservation de la page en cache lors d'un déploiement incomplet. Le test lecteur utilise deux faux lecteurs, pas les iframes YouTube réelles.
+
+Pour tester la mise à jour du **vrai site compilé 6.9.33** vers la 6.9.34, conserver séparément `SoundBlend-v6.9.33-site.zip`, installer l'utilitaire `unzip`, puis :
+
+```sh
+export SOUNDBLEND_PREVIOUS_SITE_ZIP=/chemin/vers/SoundBlend-v6.9.33-site.zip
+node verification/t-pwa-migration634.mjs
+```
+
+L'ancien paquet n'est pas inclus dans la source 6.9.34. On peut aussi définir `SOUNDBLEND_PREVIOUS_SITE_DIR` sur le répertoire extrait. L'essai utilise son propre serveur local temporaire : il simule un téléchargement raté, réessaie, vérifie les caches et recharge réellement les deux versions hors ligne. Il ne garantit pas tous les états possibles de cache propres à chaque hébergeur.
+
+Les tests de migration et de navigation utilisent le chemin de `SOUNDBLEND_URL` pour déterminer leur point de montage, et lisent le site courant depuis `dist/` (ou le dossier indiqué par `SOUNDBLEND_CURRENT_SITE_DIR`). Ils refusent une compilation dont la base ne correspond pas. Ils n'envoient pas de requêtes au serveur indiqué dans l'URL : ils servent eux-mêmes les fichiers sur un port local temporaire. `SOUNDBLEND_BASE_PATH`, si défini, remplace le chemin de l'URL.
+
+Pour vérifier une compilation en sous-dossier GitHub Pages, adapter la base à son dépôt, puis relancer les tests compatibles ci-dessus avec l'URL correspondante :
+
+```sh
+BASE_PATH=/SoundBlend/ npm run build
+BASE_PATH=/SoundBlend/ npm run preview -- --port 4181
+# Dans le second terminal :
+export SOUNDBLEND_URL=http://localhost:4181/SoundBlend/
 node verification/t-pwa631.mjs
-node verification/t-player630-rigoureux.mjs
+node verification/t-pwa-navigation634.mjs
+node verification/t-site-comptes634.mjs
+node verification/t-export-reprise634.mjs
+node verification/t-onboarding634.mjs
 ```
 
-Sous PowerShell, remplacer la première ligne par `$env:SOUNDBLEND_URL='http://localhost:4173/'`. `SOUNDBLEND_URL` choisit le site compilé pour ces tests ; sans elle, le test PWA et le test lecteur utilisent déjà le port 4173, tandis que les deux tests Assistant utilisent le serveur de développement sur 5173. Le test Assistant sauvegarde une capture de l'écran de composition.
-
-Le test PWA active un **vrai service worker dans un profil temporaire** et recharge l'interface après avoir coupé le réseau. Le test lecteur utilise deux faux lecteurs YouTube, des horloges et des sauts asynchrones ; il ne prouve pas le comportement du service YouTube réel. Tous les scénarios Assistant, bibliothèque et Drive utilisent des réponses simulées, y compris l'essai sur 550 titres.
-
-## Recherche d'exclusions réelle (facultatif)
+Pour le test de **migration en sous-dossier**, l'ancienne version doit aussi être compilée pour cette même base : le ZIP 6.9.33 de site déjà compilé pour `/` ne convient pas. Décompresser séparément la source 6.9.33, y exécuter `npm ci` puis `BASE_PATH=/SoundBlend/ npm run build`. Avec l'URL ci-dessus et la compilation 6.9.34 sous `/SoundBlend/` toujours présente dans `dist/` :
 
 ```sh
-node verification/t-exclusions-reel633.mjs
+export SOUNDBLEND_PREVIOUS_SITE_DIR=/chemin/vers/la-source-6.9.33/dist
+node verification/t-pwa-migration634.mjs
 ```
 
-Ce test envoie les requêtes « Daft Punk One More Time » et « Daft Punk » à Piped. Il ajoute puis retire un titre et un artiste dans un profil navigateur temporaire, sans compte Google. La disponibilité des instances, les résultats et l'accès réseau peuvent varier ; un échec ne suffit pas à conclure que l'interface est défectueuse. Un essai ponctuel de cette version a reçu les deux résultats et réussi l'ajout et le retrait.
+Pour compiler dans un autre dossier que `dist/`, indiquer ce dossier avec `SOUNDBLEND_CURRENT_SITE_DIR` aux tests de migration et de navigation. Le ZIP de site livré est compilé pour la racine `/`, pas pour ce sous-dossier.
 
-## Test YouTube réel (facultatif)
+## Réseau réel — facultatif
 
-```sh
-node verification/t-youtube-reel630.mjs
-```
+`node verification/t-exclusions-reel633.mjs` interroge des instances Piped publiques pour « Daft Punk One More Time » et « Daft Punk », dans un profil temporaire sans compte. Les réponses et la disponibilité peuvent varier ; un échec peut venir du réseau ou du service.
 
-Ce test charge de vraies iframes YouTube et force la même vidéo d'exemple dans les deux lecteurs afin de comparer leurs horloges. Il a besoin d'Internet, peut échouer selon le réseau et ne vérifie ni un compte Premium ni les pixels dans tous les environnements. Ne pas le confondre avec le test simulé ci-dessus. L'essai de la 6.9.32 dans l'environnement de livraison n'a pas démarré et est non concluant. Une sonde séparée avec un seul lecteur visible a reçu une demande de connexion anti-robot de YouTube, sans prouver l'unique cause de l'échec de SoundBlend. Les tests, même réussis, ne valident pas la conformité aux règles YouTube : l'architecture existante avec deux lecteurs dont un caché doit être revue (voir le README principal).
-
-Pour utiliser un navigateur Chromium déjà installé, définir `CHROMIUM_PATH` sur son exécutable ; sinon Playwright utilise son propre navigateur. Ces variables sont réservées aux tests.
+`node verification/t-youtube-reel630.mjs` ouvre de vraies iframes YouTube et ne vérifie ni un compte Premium ni la conformité réglementaire. L'essai antérieur dans l'environnement de livraison n'a pas démarré et reste **non concluant**. L'architecture héritée à deux lecteurs, dont un masqué, doit être revue avant de revendiquer sa conformité aux règles YouTube : voir le README principal.

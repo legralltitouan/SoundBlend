@@ -1,6 +1,7 @@
 import { Playlist, Track, UserProfile } from '../types';
 import { MOCK_PLAYLISTS } from '../data/mockData';
 import { artistMatches, getStoredSettings, isExcluded } from './storage';
+import { accountRevision, selectAccountScope } from './accountScope';
 import { cleanTitle, matchesAsked, norm } from '../lib/track';
 import type { Video } from './search';
 import { pipedSearch, verifyVideo } from './search';
@@ -60,6 +61,7 @@ const JOUABLE_TTL = 60 * 60 * 1000;
 const TOKEN_KEY = 'soundblend_yt_token';
 const TOKEN_EXP_KEY = 'soundblend_yt_token_exp';
 const USER_KEY = 'soundblend_yt_user';
+const AUTH_KEY = 'soundblend_google_session_v2';
 
 /* ── la mémoire des clips : un morceau ne change pas de clip d'une
    écoute à l'autre, et on ne refait pas la recherche à chaque ouverture du
@@ -115,183 +117,198 @@ declare global {
 
 export class YouTubeService {
   private accessToken: string | null = null;
-  private tokenClient: any = null;
+  private owner: string | null = null;
+  private profile: UserProfile | null = null;
+  private expiresAt = 0;
+  private serial = 0;
+  private attempt = 0;
+  private expiredNotified = false;
+  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private cancelLogin: (() => void) | null = null;
+  private operations = new Set<AbortController>();
+  private restoreWarning = '';
+  private abortOperations(): void { this.operations.forEach((c) => c.abort()); this.operations.clear(); }
 
   constructor() {
-    this.restoreToken();
-  }
-
-  private restoreToken(): void {
-    const token = localStorage.getItem(TOKEN_KEY);
-    const exp = localStorage.getItem(TOKEN_EXP_KEY);
-    if (token && exp) {
-      const expTime = parseInt(exp, 10);
-      if (Date.now() < expTime) {
-        this.accessToken = token;
-      } else {
-        this.logout();
-      }
-    }
-  }
-
-  public isAuthenticated(): boolean {
-    if (!this.accessToken) return false;
-    const exp = localStorage.getItem(TOKEN_EXP_KEY);
-    if (!exp) return false;
-    return Date.now() < parseInt(exp, 10);
-  }
-
-  public getAccessToken(): string | null {
-    return this.accessToken;
-  }
-
-  public getUserProfile(): UserProfile | null {
+    // sessionStorage est propre à l'onglet : changer de compte dans un autre
+    // onglet ne change ni son jeton ni sa portée de stockage locale.
     try {
-      const user = localStorage.getItem(USER_KEY);
-      return user ? JSON.parse(user) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Préparer la fenêtre de connexion Google.
-   *
-   * Le même identifiant de jeton sert à deux choses : lire les playlists
-   * YouTube, et ranger un petit fichier de goûts dans l'espace privé du
-   * Drive (voir `drive.ts`). Un seul consentement pour les deux.
-   */
-  public async initOAuth(clientId: string): Promise<void> {
-    if (typeof window === 'undefined') return;
-
-    return new Promise((resolve) => {
-      const checkGIS = () => {
-        if (window.google?.accounts?.oauth2) {
-          try {
-            this.tokenClient = window.google.accounts.oauth2.initTokenClient({
-              client_id: clientId,
-              scope: SCOPE_YOUTUBE,
-              callback: async (resp: any) => {
-                if (resp.access_token) {
-                  this.accessToken = resp.access_token;
-                  const expiresIn = (resp.expires_in || 3600) * 1000;
-                  localStorage.setItem(TOKEN_KEY, resp.access_token);
-                  localStorage.setItem(TOKEN_EXP_KEY, (Date.now() + expiresIn).toString());
-
-                  // Fetch basic user profile
-                  await this.fetchUserProfile(resp.access_token);
-                }
-              },
-            });
-            resolve();
-          } catch (e) {
-            console.warn('GIS initTokenClient warning:', e);
-            resolve();
-          }
-        } else {
-          setTimeout(checkGIS, 150);
-        }
-      };
-      checkGIS();
+      const s = JSON.parse(sessionStorage.getItem(AUTH_KEY) || 'null');
+      if (s && typeof s.token === 'string' && typeof s.owner === 'string'
+          && /^[A-Za-z0-9._-]{1,128}$/.test(s.owner) && Number.isFinite(s.expiresAt)) {
+        this.accessToken = s.token; this.owner = s.owner; this.expiresAt = s.expiresAt;
+        this.profile = s.profile || null;
+        selectAccountScope(s.owner);
+        this.armExpiry();
+      }
+    } catch { /* pas de session fiable : rester dans l'espace local */ }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && this.owner && !this.isAuthenticated()) this.notifyExpired();
     });
   }
-
-  private async fetchUserProfile(token: string): Promise<UserProfile | null> {
+  private persistSession(): void {
     try {
-      const resp = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const profile: UserProfile = {
-          name: data.name || 'Utilisateur YouTube',
-          email: data.email || '',
-          avatarUrl: data.picture || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80',
-        };
-        localStorage.setItem(USER_KEY, JSON.stringify(profile));
-        return profile;
-      }
-    } catch (e) {
-      console.warn('Failed to fetch user profile:', e);
+      if (this.owner && this.accessToken) sessionStorage.setItem(AUTH_KEY, JSON.stringify({
+        token: this.accessToken, owner: this.owner, expiresAt: this.expiresAt, profile: this.profile,
+      }));
+      else sessionStorage.removeItem(AUTH_KEY);
+    } catch { /* la session reste en mémoire jusqu'à la fermeture de l'onglet */ }
+  }
+  private armExpiry(): void {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    if (!this.owner || !this.accessToken) return;
+    const delay = Math.max(0, this.expiresAt - Date.now());
+    this.expiryTimer = setTimeout(() => {
+      if (this.isAuthenticated()) this.armExpiry(); else this.notifyExpired();
+    }, Math.min(delay + 5, 2147483000));
+  }
+  private notifyExpired(): void {
+    if (this.expiredNotified || !this.owner) return;
+    this.expiredNotified = true;
+    this.expiresAt = 0; this.persistSession();
+    this.serial++; this.abortOperations();
+    window.dispatchEvent(new CustomEvent('sb:auth-expired'));
+  }
+  /** Un refus 401 invalide le jeton, sans changer d'espace de données. */
+  public invalidateToken(token: string | null): void {
+    if (!token || token !== this.accessToken) return;
+    this.expiresAt = 0; this.persistSession(); this.notifyExpired();
+  }
+  public isAuthenticated(): boolean { return !!this.owner && !!this.accessToken && Date.now() < this.expiresAt; }
+  public getAccessToken(): string | null { return this.isAuthenticated() ? this.accessToken : null; }
+  public getUserProfile(): UserProfile | null { return this.profile; }
+  public accountId(): string | null { return this.owner; }
+  public sessionRevision(): number { return this.serial; }
+  public getRestoreWarning(): string { return this.restoreWarning; }
+  private assertSession(token: string | null, serial: number, scopeRevision: number): void {
+    if (!token || token !== this.accessToken || serial !== this.serial || scopeRevision !== accountRevision() || !this.isAuthenticated()) {
+      throw new Error('La session Google a changé ou a expiré pendant cette opération. Reconnecte-toi et réessaie.');
     }
-    return null;
   }
 
-  /**
-   * Ouvrir la fenêtre Google et attendre le consentement.
-   */
-  public login(clientId?: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      /* la promesse n'est réglée qu'une fois : soit le jeton arrive, soit
-         Google refuse en le disant. Une promesse qui ne se règle jamais
-         laisserait l'écran tourner indéfiniment sur « connexion en
-         cours » — c'est exactement ce qui arrivait quand la fenêtre
-         Google se refermait sans rien renvoyer. */
-      let regle = false;
-      const reussi = (t: string) => { if (!regle) { regle = true; resolve(t); } };
-      const echoue = (e: Error) => { if (!regle) { regle = true; reject(e); } };
-
-      const settings = getStoredSettings();
-      const effectiveClientId = clientId || settings.googleClientId;
-      if (!window.google?.accounts?.oauth2) {
-        echoue(new Error("La fenêtre Google n'est pas encore prête. Vérifie ta connexion, puis réessaie."));
-        return;
-      }
-
-      if (!effectiveClientId) {
-        echoue(new Error("Cette installation n'a pas d'identifiant Google : la connexion ne peut pas s'ouvrir."));
-        return;
-      }
-
-      this.tokenClient = window.google.accounts.oauth2.initTokenClient({
-        client_id: effectiveClientId,
-        scope: SCOPE_YOUTUBE,
-        callback: async (resp: any) => {
-          if (resp.error) {
-            echoue(new Error(resp.error_description || resp.error));
-            return;
-          }
-          if (resp.access_token) {
-            this.accessToken = resp.access_token;
-            const expiresIn = (resp.expires_in || 3600) * 1000;
-            localStorage.setItem(TOKEN_KEY, resp.access_token);
-            localStorage.setItem(TOKEN_EXP_KEY, (Date.now() + expiresIn).toString());
-            await this.fetchUserProfile(resp.access_token);
-            reussi(resp.access_token);
-          } else {
-            echoue(new Error("Google n'a pas renvoyé de jeton d'accès."));
-          }
-        },
-      });
-
-      /* la fenêtre Google peut aussi être simplement fermée : dans ce
-         cas aucun retour n'arrive, et l'écran ne doit pas rester bloqué */
-      setTimeout(() => echoue(new Error("La connexion a été interrompue avant la fin. Réessaie.")), 90000);
-
-      this.tokenClient.requestAccessToken({ prompt: 'consent' });
+  /** Aucun nom ni adresse ne sert à identifier un compte : l'ID stable est
+      obtenu auprès de Google avec LE jeton qui sera utilisé pour la synchro. */
+  private async verifiedProfile(token: string): Promise<{ id: string; profile: UserProfile }> {
+    const { resp, data } = await fetchLibrary('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
     });
-  }
-
-  /* ── le jeton, offert à qui en a besoin ──
-     La synchro du Drive passe par ici : elle réclame le jeton seulement
-     quand elle en a un usage, et seulement s'il existe. */
-  public async jeton(): Promise<string | null> {
-    return this.isAuthenticated() ? this.accessToken : null;
-  }
-
-  public logout(): void {
-    if (this.accessToken && window.google?.accounts?.oauth2) {
-      try {
-        window.google.accounts.oauth2.revoke(this.accessToken, () => {});
-      } catch (e) {
-        console.warn('Revoke token error:', e);
-      }
+    if (!resp.ok || typeof data?.id !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(data.id)) {
+      throw new Error('Impossible de vérifier l’identité Google. Aucune donnée n’a été envoyée : reconnecte-toi et réessaie.');
     }
-    this.accessToken = null;
+    return { id: data.id, profile: {
+      name: data.name || 'Compte Google', email: data.email || '', avatarUrl: data.picture || '',
+    } };
+  }
+  private activate(token: string, expiresAt: number, id: string, profile: UserProfile): void {
+    window.dispatchEvent(new CustomEvent('sb:auth-changing'));
+    this.serial++; this.abortOperations();
     playlistTracksCache.clear();
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(TOKEN_EXP_KEY);
-    localStorage.removeItem(USER_KEY);
+    this.owner = id; this.profile = profile; this.accessToken = token; this.expiresAt = expiresAt;
+    this.expiredNotified = false; this.restoreWarning = '';
+    selectAccountScope(id);
+    this.persistSession(); this.armExpiry();
+    // Après une connexion vérifiée, l'ancien jeton global ne doit plus
+    // réapparaître dans un nouvel onglet à la place du compte choisi.
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); localStorage.removeItem(USER_KEY); } catch { /* ignore */ }
+    window.dispatchEvent(new CustomEvent('sb:auth-changed'));
+  }
+
+  /** Mise à jour depuis l'ancien jeton partagé : on vérifie d'abord son
+      identité. Les données historiques sans compte restent séparées. */
+  public async restoreLegacySession(): Promise<boolean> {
+    if (this.owner) return this.isAuthenticated();
+    let token: string | null = null, expiresAt = 0;
+    try { token = localStorage.getItem(TOKEN_KEY); expiresAt = Number(localStorage.getItem(TOKEN_EXP_KEY)); } catch { return false; }
+    if (!token) return false;
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      this.restoreWarning = 'L’ancienne session Google a expiré ou sa durée est inconnue : reconnecte ton compte.';
+      return false;
+    }
+    const attempt = ++this.attempt;
+    try {
+      const verified = await this.verifiedProfile(token);
+      if (attempt !== this.attempt || this.owner) return false;
+      if (expiresAt <= Date.now()) {
+        this.restoreWarning = 'L’ancienne session Google a expiré pendant sa vérification : reconnecte ton compte.';
+        return false;
+      }
+      this.activate(token, expiresAt, verified.id, verified.profile);
+      try {
+        if (localStorage.getItem(TOKEN_KEY) === token) {
+          localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); localStorage.removeItem(USER_KEY);
+        }
+      } catch { /* sans conséquence sur l'isolation */ }
+      return true;
+    } catch {
+      if (attempt === this.attempt) this.restoreWarning = 'Ancienne session non vérifiée : reconnecte ton compte pour activer la synchronisation.';
+      return false;
+    }
+  }
+
+  public async initOAuth(_clientId: string): Promise<void> {
+    // Le client GIS est créé au moment du clic, avec le callback de cette
+    // tentative seulement. Aucun callback de préparation ne peut connecter.
+  }
+  public login(clientId?: string): Promise<string> {
+    this.cancelLogin?.();
+    const attempt = ++this.attempt;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const finish = (error?: Error, token?: string) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); this.cancelLogin = null;
+        if (error) reject(error); else resolve(token!);
+      };
+      this.cancelLogin = () => finish(new Error('La connexion a été interrompue.'));
+      const effectiveClientId = clientId || getStoredSettings().googleClientId;
+      if (!window.google?.accounts?.oauth2) { finish(new Error("La fenêtre Google n'est pas encore prête. Vérifie ta connexion, puis réessaie.")); return; }
+      if (!effectiveClientId) { finish(new Error("Cette installation n'a pas d'identifiant Google : la connexion ne peut pas s'ouvrir.")); return; }
+      timer = setTimeout(() => finish(new Error('La connexion a été interrompue avant la fin. Réessaie.')), 90000);
+      try {
+        const client = window.google.accounts.oauth2.initTokenClient({
+          client_id: effectiveClientId, scope: SCOPE_YOUTUBE,
+          callback: async (resp: any) => {
+            if (settled || attempt !== this.attempt) return;
+            if (resp.error || !resp.access_token) { finish(new Error(resp.error_description || resp.error || "Google n'a pas renvoyé de jeton d'accès.")); return; }
+            try {
+              // expires_in commence à la réception du jeton, pas après la
+              // lecture du profil qui peut prendre plusieurs secondes.
+              const seconds = Number(resp.expires_in);
+              if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('Google a renvoyé un jeton expiré ou sans durée fiable.');
+              const expiresAt = Date.now() + seconds * 1000;
+              if (!Number.isFinite(expiresAt)) throw new Error('Google a renvoyé un jeton expiré ou sans durée fiable.');
+              const verified = await this.verifiedProfile(resp.access_token);
+              if (settled || attempt !== this.attempt) return;
+              if (expiresAt <= Date.now()) throw new Error('Le jeton Google a expiré pendant la vérification. Reconnecte-toi.');
+              this.activate(resp.access_token, expiresAt, verified.id, verified.profile);
+              finish(undefined, resp.access_token);
+            } catch (e) { finish(e instanceof Error && /identité Google|jeton.*expiré|jeton.*durée/.test(e.message) ? e : new Error('Impossible de vérifier l’identité Google. Aucune donnée n’a été envoyée : reconnecte-toi et réessaie.')); }
+          },
+          error_callback: () => finish(new Error('La connexion Google a été interrompue. Réessaie.')),
+        });
+        client.requestAccessToken({ prompt: 'consent' });
+      } catch { finish(new Error('Impossible d’ouvrir la connexion Google. Réessaie.')); }
+    });
+  }
+  public async jeton(): Promise<string | null> { return this.getAccessToken(); }
+  public logout(): void {
+    this.attempt++; this.cancelLogin?.();
+    window.dispatchEvent(new CustomEvent('sb:auth-changing'));
+    const token = this.accessToken;
+    this.serial++; this.abortOperations();
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = null;
+    this.accessToken = null; this.owner = null; this.profile = null; this.expiresAt = 0;
+    this.expiredNotified = false;
+    playlistTracksCache.clear(); this.persistSession();
+    // Ne pas réutiliser une ancienne session globale lors d'un rechargement.
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); localStorage.removeItem(USER_KEY); } catch { /* ignore */ }
+    selectAccountScope(null);
+    window.dispatchEvent(new CustomEvent('sb:auth-changed'));
+    if (token && window.google?.accounts?.oauth2) {
+      try { window.google.accounts.oauth2.revoke(token, () => {}); } catch { /* déjà expiré */ }
+    }
   }
 
   /**
@@ -303,6 +320,7 @@ export class YouTubeService {
     }
 
     const token = this.accessToken;
+    const serial = this.serial, revision = accountRevision();
     try {
       const allPlaylists: Playlist[] = [];
       let nextPageToken = '';
@@ -319,10 +337,11 @@ export class YouTubeService {
             Accept: 'application/json',
           },
         });
+        this.assertSession(token, serial, revision);
 
         if (!resp.ok) {
           if (resp.status === 401) {
-            if (this.accessToken === token) this.logout();
+            this.invalidateToken(token);
             throw new Error("Session YouTube expirée. Veuillez vous reconnecter.");
           }
           throw new Error(`Impossible de lire la bibliothèque YouTube (HTTP ${resp.status}). Vérifie les autorisations du compte, puis réessaie.`);
@@ -349,7 +368,7 @@ export class YouTubeService {
         if (nextPageToken) seenPages.add(nextPageToken);
       } while (nextPageToken);
 
-      if (this.accessToken !== token || !this.isAuthenticated()) throw new Error('La session Google a changé pendant la lecture de la bibliothèque. Reconnecte-toi et réessaie.');
+      this.assertSession(token, serial, revision);
       return allPlaylists;
     } catch (e) {
       console.warn('Impossible de charger les playlists YouTube :', e);
@@ -379,6 +398,7 @@ export class YouTubeService {
     }
 
     const token = this.accessToken;
+    const serial = this.serial, revision = accountRevision();
     try {
       const allTracks: Track[] = [];
       let nextPageToken = '';
@@ -396,12 +416,13 @@ export class YouTubeService {
             Accept: 'application/json',
           },
         });
+        this.assertSession(token, serial, revision);
 
         if (!resp.ok) {
           // Une page refusée ne doit pas être mémorisée comme playlist vide
           // ou complète : l’assistant doit pouvoir signaler l’échec et réessayer.
           if (resp.status === 401) {
-            if (this.accessToken === token) this.logout();
+            this.invalidateToken(token);
             throw new Error('Session YouTube expirée. Veuillez vous reconnecter.');
           }
           throw new Error(`Impossible de lire la playlist YouTube (page ${pageCount}, HTTP ${resp.status}). Vérifie la connexion et les autorisations, puis réessaie.`);
@@ -446,7 +467,7 @@ export class YouTubeService {
 
       // Une déconnexion pendant la lecture ne doit pas réintroduire dans
       // le cache les morceaux du compte précédent.
-      if (this.accessToken !== token || !this.isAuthenticated()) throw new Error('La session Google a changé pendant la lecture de la playlist. Reconnecte-toi et réessaie.');
+      this.assertSession(token, serial, revision);
       playlistTracksCache.set(playlistId, allTracks);
       return allTracks;
     } catch (e) {
@@ -933,238 +954,161 @@ export class YouTubeService {
     return { tracks: [], error: lastError };
   }
 
-  /**
-   * Create a new YouTube playlist
-   */
-  public async createPlaylist(title: string, description: string, isPrivate: boolean = true): Promise<string> {
-    if (!this.isAuthenticated()) {
-      return 'mock-created-pl-' + Date.now();
-    }
-
-    const url = `${YOUTUBE_API_BASE}/playlists?part=snippet,status`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        snippet: {
-          title,
-          description,
-        },
-        status: {
-          privacyStatus: isPrivate ? 'private' : 'public',
-        },
-      }),
-    });
-
-    if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.error?.message || "Impossible de créer la playlist sur YouTube");
-    }
-
-    const data = await resp.json();
-    return data.id;
+  private captureSession(): { token: string; serial: number; revision: number } {
+    const token = this.getAccessToken();
+    if (!token) throw new Error('Session Google expirée ou non connectée. Reconnecte-toi pour utiliser YouTube.');
+    return { token, serial: this.serial, revision: accountRevision() };
+  }
+  /** Toutes les mutations sont liées au jeton capturé et interrompues au
+      changement de compte ; une requête déjà reçue par Google peut avoir agi. */
+  private async apiRequest(c: { token: string; serial: number; revision: number }, url: string, init: RequestInit = {}): Promise<{ resp: Response; data: any }> {
+    this.assertSession(c.token, c.serial, c.revision);
+    const controller = new AbortController(); this.operations.add(controller);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => { controller.abort(); reject(new Error('Délai YouTube dépassé. L’opération peut être partielle ; réessaie.')); }, 12000);
+      });
+      const work = (async () => {
+        const headers = new Headers(init.headers); headers.set('Authorization', `Bearer ${c.token}`);
+        const resp = await fetch(url, { ...init, headers, signal: controller.signal, cache: 'no-store' });
+        const text = await resp.text();
+        let data: any = null;
+        if (text) { try { data = JSON.parse(text); } catch { /* une réponse non JSON reste une erreur explicite */ } }
+        return { resp, data };
+      })();
+      const result = await Promise.race([work, deadline]);
+      this.assertSession(c.token, c.serial, c.revision);
+      if (result.resp.status === 401) { this.invalidateToken(c.token); throw new Error('Session YouTube expirée. Reconnecte-toi.'); }
+      return result;
+    } finally { if (timer) clearTimeout(timer); this.operations.delete(controller); }
+  }
+  private apiError(action: string, resp: Response): Error {
+    return new Error(`${action} (YouTube HTTP ${resp.status}). L’opération peut être partielle ; réessaie.`);
   }
 
-  /**
-   * Renommer une playlist, et/ou changer sa visibilité.
-   *
-   * YouTube ne sépare pas les deux : la même requête `playlists.update`
-   * porte le titre (snippet) et la confidentialité (status). On envoie
-   * donc les deux à chaque fois — c'est aussi ce qui garantit qu'un
-   * renommage ne rend pas publique une playlist privée par accident.
-   */
-  public async updatePlaylistMeta(
-    playlistId: string,
-    meta: { title: string; privacy?: 'private' | 'public'; description?: string },
-  ): Promise<boolean> {
-    if (!this.isAuthenticated() || playlistId.startsWith('mock-')) return false;
+  public async createPlaylist(title: string, description: string, isPrivate = true): Promise<string> {
+    const c = this.captureSession();
+    const { resp, data } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlists?part=snippet,status`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snippet: { title, description }, status: { privacyStatus: isPrivate ? 'private' : 'public' } }),
+    });
+    if (!resp.ok) throw this.apiError('Création de la playlist refusée', resp);
+    if (typeof data?.id !== 'string' || !data.id) throw new Error('YouTube n’a pas confirmé l’identifiant de la playlist créée. Vérifie ta bibliothèque avant de réessayer.');
+    return data.id;
+  }
+  public async updatePlaylistMeta(playlistId: string, meta: { title: string; privacy?: 'private' | 'public'; description?: string }): Promise<boolean> {
+    const c = this.captureSession();
     const body: any = { id: playlistId, snippet: { title: meta.title } };
     if (meta.description) body.snippet.description = meta.description;
     if (meta.privacy) body.status = { privacyStatus: meta.privacy };
-
-    const resp = await fetch(`${YOUTUBE_API_BASE}/playlists?part=snippet,status`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${this.accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    const { resp } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlists?part=snippet,status`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
-    if (!resp.ok) {
-      console.warn('updatePlaylistMeta a échoué', await resp.text());
-      return false;
-    }
-    return true;
+    if (!resp.ok) throw this.apiError('Modification du titre ou de la visibilité refusée', resp);
+    playlistTracksCache.delete(playlistId); return true;
   }
-
-  /**
-   * Add tracks to a playlist
-   */
-  public async addTracksToPlaylist(
-    playlistId: string,
-    tracks: Track[],
-    onProgress?: (index: number, total: number) => void
-  ): Promise<void> {
-    if (!this.isAuthenticated() || playlistId.startsWith('mock-')) {
-      for (let i = 0; i < tracks.length; i++) {
-        await new Promise((r) => setTimeout(r, 120));
-        onProgress?.(i + 1, tracks.length);
-      }
-      return;
+  /** Le contenu ne suffit pas : relire aussi le titre et la confidentialité
+      avant d'affirmer que l'export ou la mise à jour est vérifié. */
+  public async getPlaylistMeta(playlistId: string): Promise<{ title: string; privacy: string }> {
+    const c = this.captureSession();
+    const url = `${YOUTUBE_API_BASE}/playlists?part=snippet,status&id=${encodeURIComponent(playlistId)}`;
+    const { resp, data } = await this.apiRequest(c, url);
+    if (!resp.ok) throw this.apiError('Lecture des métadonnées de la playlist refusée', resp);
+    const item = Array.isArray(data?.items) ? data.items.find((x: any) => x?.id === playlistId) : null;
+    if (typeof item?.snippet?.title !== 'string' || typeof item?.status?.privacyStatus !== 'string') {
+      throw new Error('YouTube n’a pas confirmé le titre et la visibilité de la playlist. Vérifie puis réessaie.');
     }
-
-    for (let i = 0; i < tracks.length; i++) {
-      const track = tracks[i];
-      let videoId = track.videoId;
-
-      if (!videoId) {
-        const resolved = await this.resolveVideoId(track.title, track.artist);
-        /* introuvable : on saute ce morceau plutôt que d'envoyer une vidéo
-           qui n'a rien à voir dans la playlist de l'utilisateur */
-        if (!resolved) { onProgress?.(i + 1, tracks.length); continue; }
-        videoId = resolved;
-      }
-
-      const url = `${YOUTUBE_API_BASE}/playlistItems?part=snippet`;
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          snippet: {
-            playlistId: playlistId,
-            resourceId: {
-              kind: 'youtube#video',
-              videoId: videoId,
-            },
-          },
-        }),
+    return { title: item.snippet.title, privacy: item.status.privacyStatus };
+  }
+  public async addTracksToPlaylist(playlistId: string, tracks: Track[], onProgress?: (index: number, total: number) => void): Promise<void> {
+    const c = this.captureSession();
+    const unique = tracks.filter((t, i, arr) => !t.videoId || arr.findIndex((x) => x.videoId === t.videoId) === i);
+    if (unique.some((t) => !t.videoId)) throw new Error('Un morceau n’a pas d’identifiant YouTube : ajout incomplet.');
+    for (let i = 0; i < unique.length; i++) {
+      const track = unique[i];
+      const { resp } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?part=snippet`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snippet: { playlistId, resourceId: { kind: 'youtube#video', videoId: track.videoId } } }),
       });
-
-      if (!resp.ok) {
-        console.warn(`Failed to add track ${track.title} to playlist:`, await resp.text());
-      }
-
-      onProgress?.(i + 1, tracks.length);
-      await new Promise((r) => setTimeout(r, 200));
+      if (!resp.ok) throw this.apiError(`Ajout de « ${track.title} » refusé`, resp);
+      playlistTracksCache.delete(playlistId); onProgress?.(i + 1, unique.length);
     }
   }
-
-  /** Les morceaux actuellement dans une playlist distante (pour la comparer). */
   public async getPlaylistItems(playlistId: string): Promise<{ itemId: string; videoId: string }[]> {
-    if (!this.isAuthenticated() || playlistId.startsWith('mock-')) return [];
-    const out: { itemId: string; videoId: string }[] = [];
+    const c = this.captureSession();
+    const out: { itemId: string; videoId: string }[] = []; const pages = new Set<string>();
     let pageToken = '';
-    for (let page = 0; page < 4; page++) {
-      const url = `${YOUTUBE_API_BASE}/playlistItems?part=id,snippet&playlistId=${playlistId}&maxResults=50${pageToken ? `&pageToken=${pageToken}` : ''}`;
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${this.accessToken}` } });
-      if (!resp.ok) break;
-      const data = await resp.json();
-      (data.items || []).forEach((it: any) => {
+    do {
+      const url = `${YOUTUBE_API_BASE}/playlistItems?part=id,snippet&playlistId=${encodeURIComponent(playlistId)}&maxResults=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+      const { resp, data } = await this.apiRequest(c, url);
+      if (!resp.ok) throw this.apiError('Lecture de la playlist refusée', resp);
+      if (!data || !Array.isArray(data.items)) throw new Error('Réponse YouTube illisible : la playlist n’a pas été vérifiée.');
+      for (const it of data.items) {
         const vid = it?.snippet?.resourceId?.videoId;
-        if (vid) out.push({ itemId: it.id, videoId: vid });
-      });
+        if (typeof it?.id !== 'string' || typeof vid !== 'string' || !vid) throw new Error('Un élément YouTube est inaccessible : la playlist ne peut pas être vérifiée sans risque.');
+        out.push({ itemId: it.id, videoId: vid });
+      }
+      if (data.nextPageToken != null && typeof data.nextPageToken !== 'string') throw new Error('Pagination YouTube invalide : playlist non vérifiée.');
       pageToken = data.nextPageToken || '';
-      if (!pageToken) break;
-    }
+      if (pageToken && (pages.has(pageToken) || pages.size >= 150)) throw new Error('Pagination YouTube invalide ou trop longue : playlist non vérifiée.');
+      if (pageToken) pages.add(pageToken);
+    } while (pageToken);
     return out;
   }
-
   public async removePlaylistItem(itemId: string): Promise<boolean> {
-    if (!this.isAuthenticated()) return false;
-    const resp = await fetch(`${YOUTUBE_API_BASE}/playlistItems?id=${itemId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${this.accessToken}` },
-    });
-    return resp.ok;
+    const c = this.captureSession();
+    const { resp } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?id=${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+    if (!resp.ok) throw this.apiError('Retrait d’un titre refusé', resp);
+    playlistTracksCache.clear(); return true;
   }
-
-  /**
-   * Remet une playlist distante au diapason du blend — contenu ET ordre.
-   *
-   * · un morceau ajouté dans le blend est ajouté à la playlist ;
-   * · un morceau retiré est retiré ;
-   * · un morceau déplacé est déplacé.
-   *
-   * YouTube n'a pas de « déplacer » : pour réordonner, on retire l'élément
-   * puis on le réinsère à son rang (position 0, 1, 2…). Les identifiants
-   * d'éléments changeant à chaque mutation, on relit la playlist avant
-   * chaque geste : un identifiant périmé supprimerait le mauvais morceau.
-   */
-  public async syncPlaylist(
-    playlistId: string,
-    tracks: Track[],
-    onProgress?: (message: string, pct: number) => void,
-  ): Promise<{ added: number; removed: number; moved: number }> {
-    /* la cible : les morceaux du blend, dans l'ordre, sans doublon */
-    const target: string[] = [];
-    const seen = new Set<string>();
-    tracks.forEach((t) => {
-      if (!t.videoId || seen.has(t.videoId)) return;
-      seen.add(t.videoId);
-      target.push(t.videoId);
-    });
-
-    /* 1. les morceaux qui ne sont plus voulus partent d'abord */
-    let removed = 0;
+  /** Lecture complète, modifications comptées uniquement après confirmation,
+      puis relecture de l'ordre exact. Un refus laisse la signature inchangée. */
+  public async syncPlaylist(playlistId: string, tracks: Track[], onProgress?: (message: string, pct: number) => void): Promise<{ added: number; removed: number; moved: number }> {
+    const c = this.captureSession();
+    if (tracks.some((t) => !t.videoId)) throw new Error('Un morceau n’a pas d’identifiant YouTube : mise à jour incomplète.');
+    const target = [...new Set(tracks.map((t) => t.videoId))];
+    const wanted = new Set(target);
+    let removed = 0, added = 0, moved = 0;
     const initial = await this.getPlaylistItems(playlistId);
-    const toRemove = initial.filter((c) => !seen.has(c.videoId));
+    this.assertSession(c.token, c.serial, c.revision);
+    const kept = new Set<string>();
+    const toRemove = initial.filter((item) => {
+      if (!wanted.has(item.videoId) || kept.has(item.videoId)) return true;
+      kept.add(item.videoId); return false;
+    });
     for (let i = 0; i < toRemove.length; i++) {
-      if (await this.removePlaylistItem(toRemove[i].itemId)) removed++;
+      this.assertSession(c.token, c.serial, c.revision);
+      await this.removePlaylistItem(toRemove[i].itemId); this.assertSession(c.token, c.serial, c.revision); removed++;
       onProgress?.('Retrait des morceaux qui ne sont plus dans le blend…', Math.round(((i + 1) / Math.max(1, toRemove.length + target.length)) * 100));
-      await new Promise((r) => setTimeout(r, 150));
     }
-
-    /* 2. on replace chaque morceau à son rang, en relisant l'état courant */
-    let added = 0;
-    let moved = 0;
     for (let i = 0; i < target.length; i++) {
-      const want = target[i];
-      const list = await this.getPlaylistItems(playlistId);
-      const ids = list.map((x) => x.videoId);
-      if (ids[i] === want) continue;                    // déjà à sa place
-
+      this.assertSession(c.token, c.serial, c.revision);
+      const list = await this.getPlaylistItems(playlistId); this.assertSession(c.token, c.serial, c.revision);
+      const ids = list.map((x) => x.videoId), want = target[i];
+      if (ids[i] === want) continue;
       const at = ids.indexOf(want);
-      if (at >= 0) {
-        await this.removePlaylistItem(list[at].itemId);  // présent mais ailleurs
-        moved++;
-      } else {
-        added++;                                         // absent
-      }
-      await this.insertPlaylistItem(playlistId, want, i);
+      if (at >= 0) { await this.removePlaylistItem(list[at].itemId); this.assertSession(c.token, c.serial, c.revision); }
+      await this.insertPlaylistItem(playlistId, want, i, c);
+      if (at >= 0) moved++; else added++;
       onProgress?.('Mise à jour de la playlist YouTube Music…', Math.round(((i + 1) / Math.max(1, target.length)) * 100));
-      await new Promise((r) => setTimeout(r, 120));
     }
-
+    const final = await this.getPlaylistItems(playlistId); this.assertSession(c.token, c.serial, c.revision);
+    if (JSON.stringify(final.map((x) => x.videoId)) !== JSON.stringify(target)) {
+      throw new Error('YouTube n’a pas confirmé le contenu et l’ordre de la playlist. Vérifie puis réessaie.');
+    }
     return { added, removed, moved };
   }
-
-  /** Insère un morceau à une position précise ; renvoie l'élément créé. */
-  private async insertPlaylistItem(playlistId: string, videoId: string, position: number): Promise<string | null> {
-    if (!this.isAuthenticated()) return null;
-    const resp = await fetch(`${YOUTUBE_API_BASE}/playlistItems?part=snippet`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        snippet: {
-          playlistId,
-          position,
-          resourceId: { kind: 'youtube#video', videoId },
-        },
-      }),
+  private async insertPlaylistItem(playlistId: string, videoId: string, position: number, c: { token: string; serial: number; revision: number }): Promise<void> {
+    const { resp, data } = await this.apiRequest(c, `${YOUTUBE_API_BASE}/playlistItems?part=snippet`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snippet: { playlistId, position, resourceId: { kind: 'youtube#video', videoId } } }),
     });
-    if (!resp.ok) {
-      console.warn('insertPlaylistItem a échoué', await resp.text());
-      return null;
-    }
-    const data = await resp.json();
-    return data?.id ?? null;
+    if (!resp.ok) throw this.apiError('Ajout ou déplacement d’un titre refusé', resp);
+    if (!data?.id) throw new Error('YouTube n’a pas confirmé l’ajout : playlist à vérifier.');
+    playlistTracksCache.delete(playlistId);
   }
+
 }
 
 export const youtubeService = new YouTubeService();

@@ -3081,6 +3081,11 @@ html[data-mode='light'] .sb-action-sheet { --sb-sheet-accent: #b80026; --sb-shee
 .sb-block-choice__copy small { margin-top: 4px; color: var(--ink-2); font-size: 11.5px; line-height: 1.3; overflow-wrap: anywhere; }
 .sb-action-footnote { margin: 16px 0 0; text-align: center; color: var(--sb-sheet-muted); font-size: 11.5px; }
 .sb-action-error { color: var(--accent); font-size: 12.5px; }
+.sb-export-recovery { display: grid; gap: 9px; max-width: 560px; margin-top: 12px; font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+.sb-export-recovery p { margin: 0; }
+.sb-export-recovery label { color: var(--ink); font-weight: 600; }
+.sb-export-recovery .field { width: 100%; }
+.sb-export-recovery > .btn { justify-self: start; }
 
 /* Liste, onglets et catalogue des exclusions. */
 .sb-exclusions-header { flex: 0 0 auto; padding: 14px 22px 17px; }
