@@ -46,8 +46,9 @@ const decodeEntities = (s: string) =>
 /* Les droits demandés, en un seul endroit.
    `drive.appdata` ne donne accès qu'à un dossier caché réservé à cette
    application : ni les fichiers de la personne, ni son Drive visible.
-   Google le classe « non sensible » — pas de vérification, pas d'écran
-   d'alerte. C'est ce scope qui permet à la synchro d'exister. */
+   Google classe ce scope « non sensible » ; d'autres droits demandés
+   peuvent nécessiter une vérification ou déclencher un avertissement.
+   C'est ce scope qui permet à la synchro d'exister. */
 const SCOPE_YOUTUBE =
   'https://www.googleapis.com/auth/youtube ' +
   'https://www.googleapis.com/auth/drive.appdata ' +
@@ -419,8 +420,11 @@ export class YouTubeService {
         // Sans error_callback, Google ne signale pas ici de façon fiable une
         // fenêtre bloquée ou fermée. L'aide, Annuler et le délai restent
         // disponibles sans prétendre qu'un compte est connecté.
+        // Comme le diagnostic local P : choisir le compte sans forcer à
+        // chaque fois le consentement. Google peut encore demander l'accord
+        // si nécessaire. Le client et les trois droits restent inchangés.
         // Aucun await avant cet appel : la fenêtre reste liée au clic réel.
-        client.requestAccessToken({ prompt: 'consent' });
+        client.requestAccessToken({ prompt: 'select_account' });
       } catch {
         finish(new GoogleLoginError('opening_failed', 'Impossible d’ouvrir la connexion Google. Réessaie.'));
       }

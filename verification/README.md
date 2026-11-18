@@ -1,6 +1,8 @@
-# Vérifications facultatives — SoundBlend 6.9.38
+# Vérifications facultatives — SoundBlend 6.9.39
 
 Ces scripts ouvrent des profils Chromium temporaires. Sauf indication contraire, Google OAuth, Drive, Gemini, YouTube et le lecteur sont **simulés** : aucun compte ni aucune clé réelle n'est utilisé. Ils ne prouvent pas une fusion atomique sur Drive, la disponibilité des services ou le comportement de tous les navigateurs. Exécuter les scripts **séquentiellement**.
+
+Les scripts `t-google-connexion638`, `t-pwa638`, `t-pwa-migration638` et `t-pwa-navigation638` sont conservés pour l'historique et attendent l'ancien parcours ou l'ancien cache. Pour la 6.9.39, utiliser les homologues `639` listés ci-dessous.
 
 ## Préparer
 
@@ -22,7 +24,7 @@ Dans un premier terminal, laisser ouvert `npm run dev`. Après avoir modifié de
 node verification/t-collections631.mjs
 node verification/t-drive631.mjs
 node verification/t-audit-comptes633.mjs
-node verification/t-google-connexion638.mjs
+node verification/t-google-connexion639.mjs
 node verification/t-google-mobile638.mjs
 node verification/t-google-races637.mjs
 node verification/t-gis-ancien638.mjs
@@ -40,6 +42,10 @@ node verification/t-onboarding634.mjs
 ```
 
 Ces tests couvrent notamment l'isolation A/B et des données historiques, deux appareils, les changements de compte en vol, les délais et fichiers Drive invalides, l'expiration et la reprise YouTube. Les tests de connexion couvrent absence de retour, annulation, double clic, réponses tardives, identité refusée et changement de compte ; le test de courses importe les sources et nécessite Vite. `t-gis-ancien638.mjs` utilise la bibliothèque GIS publique réelle **sans error_callback**, comme en 6.9.33, mais avec fenêtres, réponses OAuth et identités **fictives** : il n'authentifie aucun compte. Il télécharge GIS avec `curl`, ou utilise `SOUNDBLEND_GIS_SCRIPT_PATH`. Le simulateur dépend de certains détails de GIS et peut nécessiter une adaptation si Google les change ; l'application ne les utilise pas. L'essai de fenêtre bloquée ou fermée vérifie l'aide et l'annulation, pas une détection automatique. Les délais de certains scénarios sont accélérés uniquement dans le navigateur de test. Par défaut, ces scripts utilisent `http://localhost:5173/` ; `SOUNDBLEND_DEV_URL` choisit une autre adresse.
+
+## Comparaison avec le diagnostic P
+
+Avec le serveur de sources et le dossier `../Diagnostic-Google-SoundBlend-selection-compte/` disponible, lancer `node verification/t-comparaison-p639.mjs`. `SOUNDBLEND_P_HTML` indique un autre emplacement de `diagnostic.html`. Ce test sert les deux pages sur une origine commune interceptée, utilise la bibliothèque GIS publique et intercepte l'autorisation avant tout compte : aucun jeton, consentement ou appel Drive/YouTube réel. Il compare neuf paramètres OAuth.
 
 ## Autres parcours — sources
 
@@ -83,14 +89,14 @@ Dans un second terminal, sur macOS/Linux :
 ```sh
 export SOUNDBLEND_URL=http://localhost:4173/
 node verification/t-site-comptes634.mjs
-node verification/t-google-connexion638.mjs
+node verification/t-google-connexion639.mjs
 node verification/t-gis-ancien638.mjs
 node verification/t-export-reprise634.mjs
 node verification/t-onboarding634.mjs
 node verification/t-generation-ui636.mjs
 SOUNDBLEND_REAL_FAILURE=1 node verification/t-generation-erreur-ui636.mjs
-node verification/t-pwa638.mjs
-node verification/t-pwa-navigation638.mjs
+node verification/t-pwa639.mjs
+node verification/t-pwa-navigation639.mjs
 node verification/t-player630-rigoureux.mjs
 node verification/t-assistant631.mjs
 node verification/t-assistant-erreurs631.mjs
@@ -104,14 +110,14 @@ node verification/t-visuel632.mjs
 
 Sous PowerShell : `$env:SOUNDBLEND_URL='http://localhost:4173/'` ; pour le test d'échec du site, définir `$env:SOUNDBLEND_REAL_FAILURE='1'`, lancer le script puis supprimer la variable. Ce mode utilise le moteur compilé avec des réponses Gemini et YouTube simulées ; le mode par défaut remplace le moteur et exige le serveur de sources. Le test visuel utilise aussi le serveur de sources sur 5173. Les tests PWA activent un **vrai service worker** dans un profil temporaire : ils vérifient le rechargement hors ligne et la conservation de la page en cache lors d'un déploiement incomplet. Le test lecteur utilise deux faux lecteurs, pas les iframes YouTube réelles.
 
-Pour tester la mise à jour du **vrai site compilé 6.9.37** vers la 6.9.38, conserver séparément `SoundBlend-v6.9.37-site-racine.zip`, installer `unzip`, puis :
+Pour tester la mise à jour du **vrai site compilé 6.9.38** vers la 6.9.39, conserver séparément `SoundBlend-v6.9.38-site-racine.zip`, installer `unzip`, puis :
 
 ```sh
-export SOUNDBLEND_PREVIOUS_SITE_ZIP=/chemin/vers/SoundBlend-v6.9.37-site-racine.zip
-node verification/t-pwa-migration638.mjs
+export SOUNDBLEND_PREVIOUS_SITE_ZIP=/chemin/vers/SoundBlend-v6.9.38-site-racine.zip
+node verification/t-pwa-migration639.mjs
 ```
 
-L'ancien paquet n'est pas inclus dans la source 6.9.38. `SOUNDBLEND_PREVIOUS_SITE_DIR` peut désigner le répertoire extrait ; `SOUNDBLEND_PREVIOUS_VERSION=6.9.33` ou `6.9.34` sélectionne une autre version dont le site compilé est fourni séparément. L'essai simule un téléchargement raté, vérifie les caches, conserve les espaces A/B et une session fictive, puis recharge les deux versions hors ligne. Il ne garantit pas tous les états possibles de cache.
+L'ancien paquet n'est pas inclus dans la source 6.9.39. `SOUNDBLEND_PREVIOUS_SITE_DIR` peut désigner le répertoire extrait ; `SOUNDBLEND_PREVIOUS_VERSION=6.9.33` ou `6.9.34` sélectionne une autre version dont le site compilé est fourni séparément. L'essai simule un téléchargement raté, vérifie les caches, conserve les espaces A/B et une session fictive, puis recharge les deux versions hors ligne. Il ne garantit pas tous les états possibles de cache.
 
 Les tests de migration et de navigation utilisent le chemin de `SOUNDBLEND_URL` pour déterminer leur point de montage, et lisent le site courant depuis `dist/` (ou le dossier indiqué par `SOUNDBLEND_CURRENT_SITE_DIR`). Ils refusent une compilation dont la base ne correspond pas. Ils n'envoient pas de requêtes au serveur indiqué dans l'URL : ils servent eux-mêmes les fichiers sur un port local temporaire. `SOUNDBLEND_BASE_PATH`, si défini, remplace le chemin de l'URL.
 
@@ -122,10 +128,10 @@ BASE_PATH=/SoundBlend/ npm run build
 BASE_PATH=/SoundBlend/ npm run preview -- --port 4181
 # Dans le second terminal :
 export SOUNDBLEND_URL=http://localhost:4181/SoundBlend/
-node verification/t-pwa638.mjs
-node verification/t-pwa-navigation638.mjs
+node verification/t-pwa639.mjs
+node verification/t-pwa-navigation639.mjs
 node verification/t-site-comptes634.mjs
-node verification/t-google-connexion638.mjs
+node verification/t-google-connexion639.mjs
 node verification/t-gis-ancien638.mjs
 node verification/t-export-reprise634.mjs
 node verification/t-onboarding634.mjs
@@ -133,11 +139,11 @@ node verification/t-generation-ui636.mjs
 SOUNDBLEND_REAL_FAILURE=1 node verification/t-generation-erreur-ui636.mjs
 ```
 
-Pour le test de **migration en sous-dossier**, l'ancienne version doit aussi cibler cette base. Avec l'URL ci-dessus et la 6.9.38 compilée dans `dist/` :
+Pour le test de **migration en sous-dossier**, l'ancienne version doit aussi cibler cette base. Avec l'URL ci-dessus et la 6.9.39 compilée dans `dist/` :
 
 ```sh
-export SOUNDBLEND_PREVIOUS_SITE_ZIP=/chemin/vers/SoundBlend-v6.9.37-site-GitHub-SoundBlend.zip
-node verification/t-pwa-migration638.mjs
+export SOUNDBLEND_PREVIOUS_SITE_ZIP=/chemin/vers/SoundBlend-v6.9.38-site-GitHub-SoundBlend.zip
+node verification/t-pwa-migration639.mjs
 ```
 
 Pour les anciennes versions 6.9.33/6.9.34, recompiler leur source avec `BASE_PATH=/SoundBlend/`, puis définir `SOUNDBLEND_PREVIOUS_VERSION` et `SOUNDBLEND_PREVIOUS_SITE_DIR`. Pour compiler le site courant ailleurs que `dist/`, indiquer son dossier dans `SOUNDBLEND_CURRENT_SITE_DIR`.
@@ -148,7 +154,7 @@ Pour les anciennes versions 6.9.33/6.9.34, recompiler leur source avec `BASE_PAT
 
 ## Réseau réel — facultatif
 
-`node verification/t-ouverture-google-reelle638.mjs` sert localement le site compilé pour `/SoundBlend/` sous l'adresse GitHub interceptée et ouvre la vraie fenêtre Google **sans saisir de compte** ; il ne modifie pas le site distant. `SOUNDBLEND_CURRENT_SITE_DIR` permet d'indiquer le dossier compilé. Ce contrôle ne vérifie pas la connexion après consentement.
+`node verification/t-ouverture-google-reelle639.mjs` sert localement le site compilé pour `/SoundBlend/` sous l'adresse GitHub interceptée et ouvre la vraie fenêtre Google **sans saisir de compte** ; il ne modifie pas le site distant. `SOUNDBLEND_CURRENT_SITE_DIR` permet d'indiquer le dossier compilé. Ce contrôle ne vérifie pas la connexion après consentement.
 
 `node verification/t-exclusions-reel633.mjs` interroge des instances Piped publiques pour « Daft Punk One More Time » et « Daft Punk », dans un profil temporaire sans compte. Les réponses et la disponibilité peuvent varier ; un échec peut venir du réseau ou du service.
 
