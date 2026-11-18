@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useUI } from '../../context/UIContext';
 import { useData } from '../../context/DataContext';
+import { GoogleLoginStatus } from '../ui/GoogleLoginStatus';
 import type { ViewName } from '../../context/UIContext';
 
 const NAV: { id: ViewName; label: string; icon: React.ElementType }[] = [
@@ -83,6 +84,7 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       </header>
 
       <main style={{ paddingBottom: 'calc(var(--bar-h) + 60px)' }}>
+        <GoogleLoginStatus page />
         <motion.div
           key={view}
           initial={{ opacity: 0, y: 8 }}

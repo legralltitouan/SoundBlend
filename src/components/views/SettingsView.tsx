@@ -13,7 +13,7 @@ import { clientIdGoogle, GEMINI_API_KEY } from '../../config/app';
 /* Réglages : apparence (clair / sombre), compte YouTube, clés & API.
    Le modèle Gemini n'est plus un choix : la cascade est automatique. */
 export const SettingsView: React.FC = () => {
-  const { settings, saveSettings, isAuthenticated, userProfile, login, logout, syncState, exclusions } = useData();
+  const { settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, googleLoginPending, login, logout, syncState, exclusions } = useData();
   const { mode, toggleMode, showToast, restartOnboarding, openActionSheet } = useUI();
   const pwa = useInstall();
   /* aucune clé par défaut : si elles manquent, on le dit ici, en clair,
@@ -45,13 +45,22 @@ export const SettingsView: React.FC = () => {
     setProbe({ busy: false, models: r.models, ecartes: r.ecartes, error: r.error });
   };
 
+  const connecting = googleLoginPending;
+  const connect = async () => {
+    if (connecting) return;
+    try { await login(); }
+    catch (e) { showToast(e instanceof Error ? e.message : 'Connexion impossible.'); }
+  };
+  const disconnect = () => {
+    const pending = syncState.enAttente && accountKnown;
+    logout();
+    showToast(pending ? 'Modifications en attente conservées : reconnecte ce même compte pour les envoyer.' : 'Compte déconnecté. Ses données restent séparées sur cet appareil.');
+  };
   const save = () => {
-    saveSettings({
-      googleClientId: settings.googleClientId,
-      youtubeApiKey: settings.youtubeApiKey,
-      geminiApiKey: geminiKey.trim(),
-    });
-    showToast('Réglages enregistrés.');
+    try {
+      saveSettings({ googleClientId: settings.googleClientId, youtubeApiKey: settings.youtubeApiKey, geminiApiKey: geminiKey.trim() });
+      showToast('Réglages enregistrés sur cet appareil.');
+    } catch (e) { showToast(e instanceof Error ? e.message : 'Réglages non enregistrés.'); }
   };
 
   return (
@@ -142,15 +151,13 @@ export const SettingsView: React.FC = () => {
         sub={
           isAuthenticated
             ? `Connecté en tant que ${userProfile?.name || 'ton compte'}`
-            : 'Non connecté — une bibliothèque d’exemple est affichée.'
+            : accountKnown ? `Session expirée pour ${userProfile?.name || 'ce compte'} — données locales conservées.`
+              : 'Non connecté — espace local séparé et bibliothèque d’exemple.'
         }
       >
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {isAuthenticated ? (
-            <Button variant="outline" onClick={logout}>Se déconnecter</Button>
-          ) : (
-            <Button onClick={login}>Connecter mon compte</Button>
-          )}
+          {!isAuthenticated && <Button onClick={() => void connect()} disabled={!authReady || connecting}>{connecting ? 'Connexion en cours…' : accountKnown ? 'Reconnecter ce compte' : 'Connecter mon compte'}</Button>}
+          {accountKnown && <Button variant="outline" onClick={disconnect}>Se déconnecter</Button>}
         </div>
         {!clientIdGoogle(settings.googleClientId) && (
           <p className="sb-field-note" style={{ marginTop: 10 }}>
@@ -160,30 +167,24 @@ export const SettingsView: React.FC = () => {
             utilisent l’app n’ont jamais à s’en occuper.
           </p>
         )}
-        {/* ── la synchro : une ligne, pas un réglage ──
-            Elle se fait toute seule dès qu'il y a un changement, et se
-            rattrape toutes les trois minutes si un envoi a été manqué.
-            Il n'y a donc rien à boutonner — sauf quand Google refuse, et
-            dans ce cas un seul geste suffit. */}
-        {isAuthenticated && (
-          <p className="ink-3 sb-sync-line">
-            <Cloud size={13} strokeWidth={1.7} />
-            <span>
-              {syncState.phase === 'sans-portee'
-                ? 'La synchro demande un accès Drive qui manque à cette connexion.'
-                : syncState.phase === 'erreur'
-                  ? 'Synchro en attente — tes données restent sur cet appareil ; un nouvel essai sera fait quand l’app sera ouverte et connectée.'
-                  : syncState.phase === 'envoi'
-                    ? 'Synchronisation en cours…'
-                    : 'Synchronisation active : exclusions, historique récent, mode, clé Gemini et blends sont échangés avec ton compte.'}
-            </span>
-            {syncState.phase === 'sans-portee' && (
-              <button className="btn-ghost" onClick={login}>Réactiver</button>
-            )}
-          </p>
-        )}
-        {isAuthenticated && <p className="ink-3" style={{ margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.45 }}>
-          Après des changements simultanés, laisse les appareils connectés quelques minutes pour qu’ils se relisent. Drive ne garantit pas une fusion atomique ; hors ligne, l’envoi et le nettoyage attendent la connexion.
+        {authNotice && <p className="sb-field-note" role="status">{authNotice}</p>}
+        {accountKnown && <p className="ink-3 sb-sync-line" role="status">
+          <Cloud size={13} strokeWidth={1.7} />
+          <span>{syncState.phase === 'envoi' ? 'Synchronisation en cours…'
+            : syncState.phase === 'pret' && !syncState.enAttente ? 'Dernière synchronisation vérifiée sur ce compte.'
+              : syncState.message || (syncState.enAttente ? 'Modifications en attente de synchronisation.' : 'Synchronisation en préparation.')}</span>
+        </p>}
+        {accountKnown && isAuthenticated && syncState.phase === 'sans-portee' && <div style={{ marginTop: 8 }}>
+          <button className="btn-ghost" disabled={connecting} onClick={() => void connect()}>Réactiver les autorisations</button>
+        </div>}
+        <p className="ink-3" style={{ margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.45 }}>
+          La synchronisation est automatique après une modification et au retour dans l’application ; les changements distants sont aussi recherchés régulièrement tant que l’app reste ouverte et connectée.
+        </p>
+        <p className="ink-3" style={{ margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.45 }}>
+          Les anciennes données locales restent séparées : elles ne sont jamais importées automatiquement dans un compte. Chaque compte garde ses propres données, y compris sa clé et son thème.
+        </p>
+        {accountKnown && <p className="ink-3" style={{ margin: '8px 0 0', fontSize: 11.5, lineHeight: 1.45 }}>
+          Mets à jour tous les appareils : une ancienne version peut encore mélanger les comptes. Après des changements simultanés, laisse-les se relire ; les conflits sur un même blend sont résolus par version entière, sans garantie de fusion atomique. La durée de 14 jours dépend de l’horloge de l’appareil. Conversation, file et position de lecture ne sont pas synchronisées.
         </p>}
         <p className="ink-3" style={{ margin: '10px 0 0', fontSize: 11.5 }}>
           Une playlist manque ? Vérifie que le compte choisi dans la fenêtre Google est bien celui où se trouvent tes playlists.
@@ -226,9 +227,9 @@ export const SettingsView: React.FC = () => {
         icon={<KeyRound size={17} />}
         title="Clés & API"
         sub={
-          isAuthenticated
-            ? 'La clé est enregistrée en clair dans les données privées de l’application sur ton Drive et suit ton compte sur tes autres appareils.'
-            : 'Stockée uniquement dans ce navigateur.'
+          accountKnown
+            ? 'La clé est stockée en clair dans ce navigateur et dans le fichier privé SoundBlend de ton Drive ; elle n’est pas chiffrée par l’application.'
+            : 'La clé est stockée en clair dans l’espace local de ce navigateur, séparé de tes comptes.'
         }
       >
         {!!missingKeys.length && (
@@ -248,7 +249,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.33
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.38
         </span>
       </div>
     </div>

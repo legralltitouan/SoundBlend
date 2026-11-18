@@ -45,8 +45,9 @@ export interface GeneratedBlend {
   description: string;
   createdAt: string;
   expiresAt: string; // ISO string 14 days later
-  /** Dernière modification locale, pour réconcilier les appareils. */
+  /** Dernière version connue ; _pending reste local et n'est pas envoyé. */
   updatedAt?: number;
+  _pending?: boolean;
   instruction?: string;
   seedTracks: Track[];
   tracks: Track[];
@@ -65,7 +66,27 @@ export interface GeneratedBlend {
   };
   /** par quel moyen ce blend a été composé — dit sur le blend lui-même */
   methode?: BlendMethod;
+  /** Bilan à la création, conservé même après modification du blend. */
+  generation?: BlendGenerationReport;
 }
+
+export type BlendGenerationCounts = { anchor: number; deepDive: number; fresh: number };
+export type BlendGenerationReport = {
+  target: number;
+  /** Parts choisies, avant limitation par le nombre d'amorces. */
+  requested: BlendGenerationCounts;
+  /** Comptes transmis au moteur, après limitation des piliers. */
+  planned?: BlendGenerationCounts;
+  /** Comptes à la première sélection, avant compléments. */
+  before: BlendGenerationCounts;
+  /** Comptes réellement enregistrés après le dernier contrôle. */
+  created: BlendGenerationCounts;
+  /** Compléments au moment de leur sélection, avant un éventuel contrôle final. */
+  added: { anchor: number; fresh: number; neighbour: number };
+  /** Message explicite si une limite ou une répartition incomplète a changé le résultat. */
+  warning: string;
+  cause?: 'quota' | 'other';
+};
 
 /**
  * Comment ce blend a été composé. On le garde sur le blend, pas seulement
@@ -90,6 +111,8 @@ export interface ExclusionRecord {
   videoId?: string;
   updatedAt: number;
   deleted: boolean;
+  /** Marque locale d'un geste pas encore confirmé sur Drive. */
+  _pending?: boolean;
 }
 
 export interface Exclusions {

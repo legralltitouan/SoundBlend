@@ -7,8 +7,7 @@ const ctx=await browser.newContext({serviceWorkers:'block'});
 const p=await ctx.newPage();await p.goto(new URL('verification/test-harness.html',base).href);
 const report=await p.evaluate(async()=>{
  localStorage.clear();
- localStorage.setItem('soundblend_yt_token','old-token');
- localStorage.setItem('soundblend_yt_token_exp',String(Date.now()+3600000));
+ sessionStorage.setItem('soundblend_google_session_v2',JSON.stringify({token:'old-token',owner:'old-user',expiresAt:Date.now()+3600000,profile:{name:'Ancien',email:'',avatarUrl:''}}));
  const {youtubeService:yt,YouTubeService}=await import('/src/services/youtube.ts');
  const realFetch=window.fetch,realTimer=window.setTimeout;
  // Même chemin de production, délai de 12 s accéléré à 100 ms pour le test.
@@ -56,7 +55,7 @@ const report=await p.evaluate(async()=>{
    mode='session';const pending=yt.fetchPlaylistTracks('SESSION').then(value=>({value}),e=>({error:e.message}));
    while(!releaseSession)await new Promise(r=>realTimer(r,1));
    yt.logout();releaseSession();const lostSession=await pending;
-   localStorage.setItem('soundblend_yt_token','new-token');localStorage.setItem('soundblend_yt_token_exp',String(Date.now()+3600000));
+   sessionStorage.setItem('soundblend_google_session_v2',JSON.stringify({token:'new-token',owner:'new-user',expiresAt:Date.now()+3600000,profile:{name:'Nouveau',email:'',avatarUrl:''}}));
    const second=new YouTubeService();mode='newsession';const refreshed=await second.fetchPlaylistTracks('SESSION');
    mode='unauthorized';const unauthorized=await err(()=>second.fetchPlaylistTracks('NOAUTH'));
    return {headersError,headersMs,bodyError,bodyMs,aborts,httpError,pageError,completed,pageRequests,cycleTracks,cycleLists,invalidTracks,invalidLists,

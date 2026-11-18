@@ -14,7 +14,7 @@ import { usePlayer } from '../../context/PlayerContext';
 
 export const HistoryView: React.FC = () => {
   const { recentBlends, removeBlend, setCurrentBlend } = useData();
-  const { setView } = useUI();
+  const { setView, showToast } = useUI();
   const { playTrack } = usePlayer();
   const [confirm, setConfirm] = useState<string | null>(null);
   /* plus de voile au survol : ce détecteur ne servait qu'à lui.
@@ -57,6 +57,7 @@ export const HistoryView: React.FC = () => {
         </p>
       </header>
 
+      {confirm && <p className="ink-3" role="status">Appuie à nouveau sur Supprimer pour confirmer. Une éventuelle playlist YouTube sera conservée.</p>}
       {rows.length > 0 && (
         <div className="sb-list sb-list--roomy">
           <AnimatePresence initial={false}>
@@ -108,8 +109,10 @@ export const HistoryView: React.FC = () => {
                     className="icon-btn sb-danger"
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm === b.id) { removeBlend(b.id); setConfirm(null); }
-                      else setConfirm(b.id);
+                      if (confirm === b.id) {
+                        try { removeBlend(b.id); setConfirm(null); showToast(b.exportedPlaylistId ? 'Blend supprimé. La playlist YouTube est conservée.' : 'Blend supprimé.'); }
+                        catch (err) { showToast(err instanceof Error ? err.message : 'Blend non supprimé.'); }
+                      } else setConfirm(b.id);
                     }}
                     aria-label="Supprimer"
                     title={confirm === b.id ? 'Confirmer la suppression' : 'Supprimer'}

@@ -121,8 +121,16 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       setModeState(getMode());
       setDesignState(getDesign());
     };
+    const onAccount = () => {
+      onSync();
+      // Une feuille ou une sélection ouverte ne doit pas présenter une
+      // ancienne piste au nouveau compte.
+      sheetIsOpen.current = false; sheetOpener.current = null;
+      setActionSheet(null); setModal(null); setModalData(null); setTask(null); setToast(null);
+    };
     window.addEventListener('sb:sync-applied', onSync);
-    return () => window.removeEventListener('sb:sync-applied', onSync);
+    window.addEventListener('sb:account-changed', onAccount);
+    return () => { window.removeEventListener('sb:sync-applied', onSync); window.removeEventListener('sb:account-changed', onAccount); };
   }, []);
 
   // Les deux niveaux partagent le verrou : fermer l'un ne libère pas l'autre.
@@ -147,14 +155,15 @@ export const UIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     () => ({
       design,
       mode,
-      setMode: (m) => { choisirMode(m); setModeState(m); },
-      /* l'interrupteur, c'est un choix : il est daté (voir prefs.ts) pour
-         que la synchro sache à qui obéir entre deux appareils */
-      toggleMode: () => setModeState((m) => {
-        const next = m === 'light' ? 'dark' : 'light';
-        choisirMode(next);
-        return next;
-      }),
+      setMode: (m) => {
+        try { choisirMode(m); setModeState(m); }
+        catch (e) { showToast(e instanceof Error ? e.message : 'Choix du thème non enregistré.'); }
+      },
+      toggleMode: () => {
+        const next = mode === 'light' ? 'dark' : 'light';
+        try { choisirMode(next); setModeState(next); }
+        catch (e) { showToast(e instanceof Error ? e.message : 'Choix du thème non enregistré.'); }
+      },
       view,
       setView,
       modal,

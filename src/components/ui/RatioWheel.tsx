@@ -23,6 +23,8 @@ type Props = {
   onChange: (next: WheelRatio) => void;
   /** le nombre total de titres visé (durée ÷ longueur moyenne) */
   target: number;
+  /** Nombre effectivement demandé, après limitation par les amorces. */
+  counts?: WheelRatio;
   labels: Record<WheelKey, string>;
 };
 
@@ -47,7 +49,7 @@ function normalise(a: number, b: number, c: number): WheelRatio {
   return { anchor: A, deepDive: B, fresh: Math.max(0, 100 - A - B) };
 }
 
-export const RatioWheel: React.FC<Props> = ({ ratio, onChange, target, labels }) => {
+export const RatioWheel: React.FC<Props> = ({ ratio, onChange, target, counts: requestedCounts, labels }) => {
   const trackRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<number | null>(null);
   const [hover, setHover] = useState<WheelKey | null>(null);
@@ -112,12 +114,11 @@ export const RatioWheel: React.FC<Props> = ({ ratio, onChange, target, labels })
     ));
   };
 
-  const counts = {
+  const counts = requestedCounts || {
     anchor: Math.round((ratio.anchor / 100) * target),
     deepDive: Math.round((ratio.deepDive / 100) * target),
-    fresh: 0,
+    fresh: Math.max(0, target - Math.round((ratio.anchor / 100) * target) - Math.round((ratio.deepDive / 100) * target)),
   };
-  counts.fresh = Math.max(0, target - counts.anchor - counts.deepDive);
 
   return (
     <div className="sb-dose">

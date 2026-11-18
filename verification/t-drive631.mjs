@@ -8,7 +8,7 @@ const now=Date.now();
 const track=(title,artist,videoId,category='fresh')=>({id:videoId,title,artist,videoId,category,thumbnailUrl:'',durationSeconds:200});
 const valid={id:'valid',title:'Blend à supprimer',createdAt:new Date(now-3600000).toISOString(),expiresAt:new Date(now+86400000).toISOString(),seedTracks:[],tracks:[{...track('Ancienne découverte','Artiste Z','OLD00000001'),userRating:'disliked'}]};
 const expired={...valid,id:'expired',title:'Périmé',createdAt:new Date(now-16*86400000).toISOString(),expiresAt:new Date(now-86400000).toISOString()};
-const memory={files:new Map([['f1',{schema:1,modifie:new Date().toISOString(),appareil:'ancien',apparence:{mode:'dark',at:now-10000},reglages:{geminiApiKey:'cle-test'},gouts:{dislikedArtists:['Artiste Z']},avis:{x:'disliked'},blends:[valid,expired]}]]),next:2,fail:false,calls:[],raceCountdown:0};
+const memory={files:new Map([['f1',{schema:1,modifie:new Date().toISOString(),appareil:'ancien',apparence:{mode:'dark',at:now-10000},reglages:{geminiApiKey:'cle-test'},gouts:{dislikedArtists:['Artiste Z']},avis:{x:'disliked'},blends:[valid,expired]}]]),next:2,fail:false,calls:[],raceCountdown:0,preflightRemaining:0,preflightSerial:0};
 const ok=[];
 const check=(condition,name)=>{assert.ok(condition,name);ok.push(name);console.log('  ✓ '+name)};
 function content(){return memory.files.get([...memory.files.keys()].sort()[0])}
@@ -17,8 +17,7 @@ async function makeDevice(name) {
   await ctx.addInitScript(({name})=>{
     if(!localStorage.getItem('__device_seed')){
       localStorage.setItem('__device_seed',name);localStorage.setItem('soundblend_onboarded','1');
-      localStorage.setItem('soundblend_yt_token','ya29.fake');localStorage.setItem('soundblend_yt_token_exp',String(Date.now()+3600000));
-      localStorage.setItem('soundblend_yt_user',JSON.stringify({name:'Test',email:'t@example.test',avatarUrl:''}));
+      sessionStorage.setItem('soundblend_google_session_v2',JSON.stringify({token:'ya29.fake',owner:'google-test',expiresAt:Date.now()+3600000,profile:{name:'Test',email:'',avatarUrl:''}}));
     }
   },{name});
   await ctx.route('https://accounts.google.com/**',r=>r.fulfill({status:200,contentType:'application/javascript',body:'window.google={accounts:{oauth2:{initTokenClient:()=>({requestAccessToken(){}})}}};'}));
@@ -61,7 +60,12 @@ async function makeDevice(name) {
     if(id && method==='DELETE'){memory.files.delete(id);return r.fulfill({status:204,headers:cors,body:''});}
     if(id && u.searchParams.get('alt')==='media'){
       if(!memory.files.has(id))return r.fulfill({status:404,headers:cors,body:'{}'});
-      return r.fulfill({status:200,headers:cors,body:JSON.stringify(memory.files.get(id))});
+      const snapshot=structuredClone(memory.files.get(id));
+      if(id==='f1' && memory.preflightRemaining>0){
+        const n=++memory.preflightSerial; memory.preflightRemaining--;
+        memory.files.get(id).exclusions.push({id:`artist:preflight-${n}`,kind:'artist',artist:`Précontrôle ${n}`,updatedAt:Date.now(),deleted:false});
+      }
+      return r.fulfill({status:200,headers:cors,body:JSON.stringify(snapshot)});
     }
     return r.fulfill({status:200,headers:cors,body:JSON.stringify({files:[...memory.files.keys()].map(id=>({id,name:'soundblend.json'}))})});
   });
@@ -70,7 +74,7 @@ async function makeDevice(name) {
 }
 const A=await makeDevice('A');
 const sync=async p=>p.evaluate(async()=> (await import('/src/services/drive.ts')).demarrerSync());
-const state=async p=>p.evaluate(()=>Object.fromEntries(Object.entries(localStorage)));
+const state=async p=>p.evaluate(async()=>{const s=await import('/src/services/storage.ts'),prefs=await import('/src/context/prefs.ts');return {soundblend_exclusions_v1:JSON.stringify(s.getExclusionRecords()),soundblend_settings:JSON.stringify(s.getStoredSettings()),soundblend_mode:prefs.getMode(),soundblend_recent_blends:JSON.stringify(s.getStoredBlends()),soundblend_discoveries_v2:JSON.stringify(s.getDiscoveryHistory())}});
 check(await sync(A.page),'premier échange avec le Drive simulé');
 check(content().schema===2 && !('gouts'in content()) && !('avis'in content()),'migration Drive : anciens avis retirés, sans conversion en bannissement');
 check(content().blends.length===1 && content().blends[0].id==='valid' && !('userRating' in content().blends[0].tracks[0]),'blend expiré réellement retiré du fichier Drive et anciens pouces effacés');
@@ -111,12 +115,19 @@ await A.page.evaluate(async()=>{const s=await import('/src/services/storage.ts')
 await sync(A.page); await sync(B.page);
 check(content().blends.find(x=>x.id==='edited')?.tracks.length===1,'une suppression de titres gagne sur une ancienne copie plus longue');
 
-// Expiration pendant que l’app reste ouverte.
-await A.page.evaluate(async()=>{const s=await import('/src/services/storage.ts');let n=Date.now();s.saveBlendToStorage({id:'short',title:'Expiration imminente',createdAt:new Date(n).toISOString(),expiresAt:new Date(n+1300).toISOString(),seedTracks:[],tracks:[]});});
-await sync(A.page);
-check(content().blends.some(x=>x.id==='short'),'blend éphémère effectivement présent avant expiration');
-await A.page.waitForTimeout(4600);
-check(!content().blends.some(x=>x.id==='short'),'le minuteur retire le blend du JSON Drive après expiration');
+// Expiration pendant que l’app reste ouverte. Laisser le temps à un cycle
+// déjà en cours de se terminer : demarrerSync peut rejoindre ce cycle plutôt
+// que celui qui enverra le nouveau blend. On vérifie d'abord sa présence
+// avant l'échéance, puis on attend la suppression automatique sans resynchroniser.
+const shortUntil=Date.now()+15000;
+await A.page.evaluate(async(until)=>{const s=await import('/src/services/storage.ts');let n=Date.now();s.saveBlendToStorage({id:'short',title:'Expiration imminente',createdAt:new Date(n).toISOString(),expiresAt:new Date(until).toISOString(),seedTracks:[],tracks:[]});},shortUntil);
+while(!content().blends.some(x=>x.id==='short') && Date.now()<shortUntil-3000){
+  await sync(A.page);
+  if(!content().blends.some(x=>x.id==='short'))await A.page.waitForTimeout(100);
+}
+check(Date.now()<shortUntil && content().blends.some(x=>x.id==='short'),'blend éphémère effectivement présent avant expiration');
+while(content().blends.some(x=>x.id==='short') && Date.now()<shortUntil+12000)await A.page.waitForTimeout(100);
+check(Date.now()>=shortUntil && !content().blends.some(x=>x.id==='short'),'le minuteur retire le blend du JSON Drive après expiration');
 
 // Un échec réseau laisse un indicateur durable et un nouvel essai reprend.
 memory.fail=true;
@@ -132,19 +143,28 @@ await A.page.evaluate(async()=>{const s=await import('/src/services/storage.ts')
 await sync(A.page);await sync(B.page);b=await state(B.page);
 check(JSON.parse(b.soundblend_settings).geminiApiKey===''&&b.soundblend_mode==='light','suppression de la clé et changement de thème synchronisés');
 
-// Deux créations concurrentes du même nom : fusion, puis suppression de la copie supplémentaire.
+// Doublons : fusion, mais pas de DELETE non atomique risquant de détruire une écriture concurrente.
 memory.files.set('f9',{schema:2,modifie:new Date().toISOString(),appareil:'autre',exclusions:[{id:'artist:surplus',kind:'artist',artist:'Surplus',updatedAt:Date.now(),deleted:false}],decouvertes:[],suppressionsBlends:{},blends:[]});
 await sync(A.page);
-check(memory.files.size===1&&content().exclusions.some(x=>x.artist==='Surplus'),'doublon Drive relu, fusionné et supprimé après écriture');
+check(memory.files.size===2&&content().exclusions.some(x=>x.artist==='Surplus')&&!memory.calls.some(x=>x.method==='DELETE'),'doublon Drive fusionné et conservé sans DELETE à risque');
 
 memory.files.set('f10',{schema:2,modifie:new Date().toISOString(),appareil:'autre',exclusions:[{id:'artist:copie',kind:'artist',artist:'Copie',updatedAt:Date.now(),deleted:false}],decouvertes:[],suppressionsBlends:{},blends:[]});
-memory.raceCountdown=2;
+memory.raceCountdown=1;
 await sync(A.page);
 check(memory.files.has('f10') && memory.files.get('f10').exclusions.some(x=>x.artist==='Arrivé entre deux'),'doublon modifié après lecture conservé au lieu d’être supprimé');
 check(await A.page.evaluate(async()=> (await import('/src/services/drive.ts')).enAttente()),'relecture supplémentaire planifiée après conflit détecté');
 await sync(A.page);
-check(memory.files.size===1 && content().exclusions.some(x=>x.artist==='Arrivé entre deux'),'modification concurrente relue et fusionnée au cycle suivant');
-// Il reste une fenêtre entre la dernière relecture et DELETE : ce scénario
-// ne peut pas établir une garantie atomique que l’API ne documente pas.
+check(memory.files.size===3 && content().exclusions.some(x=>x.artist==='Arrivé entre deux'),'modification concurrente relue et fusionnée au cycle suivant sans suppression des copies');
+
+memory.preflightRemaining=1;
+check(await sync(A.page),'changement distant pendant la première lecture : nouveau contrôle avant écriture');
+check(content().exclusions.some(x=>x.artist==='Précontrôle 1'),'la modification détectée au précontrôle est effectivement fusionnée avant PATCH');
+const patchesBefore=memory.calls.filter(x=>x.method==='PATCH').length;
+memory.preflightRemaining=6;
+check(!(await sync(A.page)) && await A.page.evaluate(async()=> (await import('/src/services/drive.ts')).enAttente()),'conflits répétés : arrêt borné et état en attente, sans succès fictif');
+check(memory.calls.filter(x=>x.method==='PATCH').length===patchesBefore,'aucun PATCH aveugle après épuisement des contrôles');
+memory.preflightRemaining=0;
+check(await sync(A.page) && content().exclusions.some(x=>x.artist==='Précontrôle 7'),'reprise après stabilisation, modifications concurrentes conservées');
+// Une fenêtre demeure entre la dernière relecture et PATCH : aucune garantie atomique n'est prétendue.
 console.log(`\n${ok.length}/${ok.length} contrôles Drive simulés réussis`);
 await A.ctx.close();await B.ctx.close();await browser.close();
