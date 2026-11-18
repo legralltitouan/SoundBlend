@@ -9,13 +9,14 @@ export const GoogleLoginStatus: React.FC<{ page?: boolean }> = ({ page = false }
 
   const isError = googleLoginState.phase === 'error';
   const message = googleLoginState.phase === 'waiting'
-    ? 'Termine la connexion dans la fenêtre Google. Tu peux annuler ici si nécessaire.'
-    : googleLoginState.phase === 'window-closed'
-      ? 'Google signale que sa fenêtre est peut-être fermée. Si elle est encore ouverte, termine la validation. Si tu viens de valider, attends quelques secondes ; sinon, annule et réessaie.'
+    ? 'Termine la connexion dans la fenêtre Google. Si elle ne s’ouvre pas, autorise les fenêtres pour ce site, puis annule et réessaie.'
+    : googleLoginState.phase === 'waiting-long'
+      ? 'SoundBlend attend toujours la réponse de Google. Si la fenêtre est ouverte, termine la validation ; si elle est fermée sans connexion, tu peux annuler et réessayer.'
       : googleLoginState.phase === 'verifying'
         ? 'Réponse reçue. Vérification du compte auprès de Google…'
         : googleLoginState.phase === 'error' ? googleLoginState.message : '';
-  const code = googleLoginState.phase === 'window-closed' ? 'popup_closed'
+  const code = googleLoginState.phase === 'waiting-long'
+    ? (googleLoginState.googleMessageSeen ? 'attente_message_google' : 'attente_sans_message_google')
     : isError ? googleLoginState.code : '';
   const content = (
     <div className="sb-google-status" data-error={isError}>

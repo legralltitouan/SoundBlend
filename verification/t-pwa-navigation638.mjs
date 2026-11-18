@@ -39,10 +39,10 @@ const p=await ctx.newPage();let n=0;const check=(v,label)=>{assert.ok(v,label);n
 const wait=async(fn,label)=>{const end=Date.now()+20000;while(Date.now()<end){if(await fn())return;await new Promise(r=>setTimeout(r,60));}throw new Error(`Délai dépassé : ${label}`)};
 try{
  await p.goto(base);await p.waitForSelector('.ytm-shell');
- await wait(()=>p.evaluate(async()=>!!navigator.serviceWorker.controller&&(await caches.keys()).includes('sb-v6-9-37-shell')),'service worker actif');
+ await wait(()=>p.evaluate(async()=>!!navigator.serviceWorker.controller&&(await caches.keys()).includes('sb-v6-9-38-shell')),'service worker actif');
  const scope=await p.evaluate(async()=>(await navigator.serviceWorker.getRegistration())?.scope);
  assert.equal(new URL(scope).pathname,basePath,'portée du service worker');
- const cached=()=>p.evaluate(async(index)=>await(await(await caches.open('sb-v6-9-37-shell')).match(index,{ignoreVary:true})).text(),cacheIndex);
+ const cached=()=>p.evaluate(async(index)=>await(await(await caches.open('sb-v6-9-38-shell')).match(index,{ignoreVary:true})).text(),cacheIndex);
  check((await cached())===good,`interface initiale complète sous ${basePath}, mise en cache malgré Vary: Origin`);
  broken=true;await p.goto(base,{waitUntil:'domcontentloaded'});await p.waitForTimeout(300);
  check((await cached())===good,'page réseau référençant un script manquant : ancienne page hors ligne préservée');

@@ -65,7 +65,8 @@ const AUTH_KEY = 'soundblend_google_session_v2';
 
 /** État public du parcours, sans jeton, adresse ni données du compte. */
 export type GoogleLoginState =
-  | { phase: 'idle' | 'waiting' | 'window-closed' | 'verifying' }
+  | { phase: 'idle' | 'waiting' | 'verifying' }
+  | { phase: 'waiting-long'; googleMessageSeen: boolean }
   | { phase: 'error'; code: string; message: string };
 
 class GoogleLoginError extends Error {
@@ -170,6 +171,8 @@ export class YouTubeService {
   private expiredNotified = false;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private cancelLogin: (() => void) | null = null;
+  // Comme en 6.9.33, garder le client de la fenêtre tant qu'elle répond.
+  private loginClient: any = null;
   private loginState: GoogleLoginState = { phase: 'idle' };
   private operations = new Set<AbortController>();
   private restoreWarning = '';
@@ -321,13 +324,26 @@ export class YouTubeService {
     return new Promise((resolve, reject) => {
       let settled = false;
       let responseStarted = false;
-      let popupReportedClosed = false;
+      let googleMessageSeen = false;
+      let client: any = null;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let hintTimer: ReturnType<typeof setTimeout> | undefined;
+      // Diagnostic local seulement : noter l'origine d'un message, sans
+      // lire son contenu, l'enregistrer ou l'utiliser pour se connecter.
+      // Un message Google n'est pas nécessairement la réponse OAuth.
+      const onMessage = (event: MessageEvent) => {
+        if (event.origin !== 'https://accounts.google.com' || settled || responseStarted || attempt !== this.attempt) return;
+        googleMessageSeen = true;
+        if (this.loginState.phase === 'waiting-long') this.setLoginState({ phase: 'waiting-long', googleMessageSeen });
+      };
       const finish = (error?: GoogleLoginError, token?: string) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
+        if (hintTimer) clearTimeout(hintTimer);
+        window.removeEventListener('message', onMessage);
         if (this.cancelLogin === cancel) this.cancelLogin = null;
+        if (this.loginClient === client) this.loginClient = null;
         this.setLoginState(error ? { phase: 'error', code: error.code, message: error.message } : { phase: 'idle' });
         if (error) reject(error); else resolve(token!);
       };
@@ -346,20 +362,27 @@ export class YouTubeService {
         }
         this.setLoginState({ phase: 'waiting' });
         if (settled || attempt !== this.attempt) return;
+        window.addEventListener('message', onMessage);
         timer = setTimeout(() => finish(new GoogleLoginError(
-          popupReportedClosed ? 'popup_closed' : 'timeout',
-          popupReportedClosed
-            ? 'Google a signalé la fermeture de la fenêtre, mais aucune réponse n’est arrivée. Réessaie.'
-            : 'Google n’a pas répondu à temps. Ferme sa fenêtre si elle est encore ouverte, puis réessaie.',
+          'timeout', 'Google n’a pas renvoyé de réponse à temps. Ferme sa fenêtre si elle est encore ouverte, puis réessaie.',
         )), 180000);
-        const client = window.google.accounts.oauth2.initTokenClient({
+        hintTimer = setTimeout(() => {
+          if (!settled && !responseStarted && attempt === this.attempt) this.setLoginState({ phase: 'waiting-long', googleMessageSeen });
+        }, 12500);
+        // Reprise du mode d'ouverture 6.9.33 : le client reste référencé
+        // et aucun error_callback n'est installé. Contrairement à la 6.9.34,
+        // un signal de fermeture ne peut donc pas rejeter le retour Google.
+        // Cela ne garantit pas qu'un résultat perdu nous sera transmis.
+        client = window.google.accounts.oauth2.initTokenClient({
           client_id: effectiveClientId, scope: SCOPE_YOUTUBE,
           callback: async (resp: any) => {
             if (settled || responseStarted || attempt !== this.attempt) return;
             responseStarted = true;
+            window.removeEventListener('message', onMessage);
             // Le délai de la fenêtre ne doit pas interrompre un résultat
             // déjà reçu : la vérification du profil a son propre délai.
             if (timer) { clearTimeout(timer); timer = undefined; }
+            if (hintTimer) { clearTimeout(hintTimer); hintTimer = undefined; }
             if (!resp || typeof resp !== 'object') {
               finish(new GoogleLoginError('invalid_response', 'Google a renvoyé une réponse de connexion invalide. Réessaie.')); return;
             }
@@ -390,24 +413,14 @@ export class YouTubeService {
                 ? e.message : 'Impossible de vérifier l’identité Google (réseau ou délai). Le compte choisi n’a pas été activé.'));
             }
           },
-          error_callback: (error: any) => {
-            if (settled || responseStarted || attempt !== this.attempt) return;
-            if (error?.type === 'popup_closed') {
-              // GIS peut signaler une fermeture avant de livrer la réponse :
-              // ne pas la rejeter. L'annulation explicite et le délai bornent
-              // l'attente ; toute réponse après annulation est ignorée.
-              popupReportedClosed = true;
-              this.setLoginState({ phase: 'window-closed' });
-              return;
-            }
-            if (error?.type === 'popup_failed_to_open') {
-              finish(new GoogleLoginError('popup_failed_to_open', 'La fenêtre Google n’a pas pu s’ouvrir. Autorise les fenêtres pour ce site, puis réessaie.')); return;
-            }
-            finish(new GoogleLoginError('google_error', 'Google a signalé une erreur de connexion. Réessaie.'));
-          },
         });
+        if (settled || attempt !== this.attempt) return;
+        this.loginClient = client;
+        // Sans error_callback, Google ne signale pas ici de façon fiable une
+        // fenêtre bloquée ou fermée. L'aide, Annuler et le délai restent
+        // disponibles sans prétendre qu'un compte est connecté.
         // Aucun await avant cet appel : la fenêtre reste liée au clic réel.
-        if (!settled && attempt === this.attempt) client.requestAccessToken({ prompt: 'consent' });
+        client.requestAccessToken({ prompt: 'consent' });
       } catch {
         finish(new GoogleLoginError('opening_failed', 'Impossible d’ouvrir la connexion Google. Réessaie.'));
       }
