@@ -1,6 +1,16 @@
 <!doctype html>
 <html lang="fr" data-mode="dark">
   <head>
+    <!-- Effacer le fragment OAuth avant le chargement de toute ressource tierce. -->
+    <script>
+      (() => {
+        const p = new URLSearchParams(location.hash.slice(1));
+        if (!p.has('access_token') && !p.has('error')) return;
+        const token = p.get('access_token'), error = p.get('error');
+        window.__sbOAuthReturn = { token, error, state: p.get('state'), scope: p.get('scope'), expiresIn: p.get('expires_in'), receivedAt: Date.now() };
+        history.replaceState(null, '', location.pathname + location.search);
+      })();
+    </script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />

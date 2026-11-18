@@ -162,6 +162,7 @@ const playlistTracksCache = new Map<string, Track[]>();
 declare global {
   interface Window {
     google?: any;
+    __sbOAuthReturn?: { token: string | null; error: string | null; state: string | null; scope: string | null; expiresIn: string | null; receivedAt: number };
     onYouTubeIframeAPIReady?: () => void;
     YT?: any;
   }
@@ -331,7 +332,78 @@ export class YouTubeService {
     // Le client GIS est créé au moment du clic, avec le callback de cette
     // tentative seulement. Aucun callback de préparation ne peut connecter.
   }
+  /** Parcours alternatif expérimental : la page entière revient sur la base
+      autorisée, au lieu de dépendre des messages inter-fenêtres GIS. */
   public login(clientId?: string): Promise<string> {
+    const id = clientId || getStoredSettings().googleClientId;
+    if (!id) {
+      const e = new GoogleLoginError('client_missing', "Cette installation n'a pas d'identifiant Google.");
+      this.setLoginState({ phase: 'error', code: e.code, message: e.message });
+      return Promise.reject(e);
+    }
+    try {
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      const state = Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
+      const redirectUri = new URL(import.meta.env.BASE_URL, window.location.origin).href;
+      sessionStorage.setItem('soundblend_oauth_redirect_pending', JSON.stringify({ state, startedAt: Date.now() }));
+      const params = new URLSearchParams({
+        client_id: id, redirect_uri: redirectUri, response_type: 'token',
+        scope: SCOPE_YOUTUBE, state, prompt: 'select_account',
+      });
+      this.setLoginState({ phase: 'waiting' });
+      window.location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString());
+      // La navigation remplace cette page. Ne pas déclarer de succès avant retour.
+      return new Promise(() => {});
+    } catch {
+      try { sessionStorage.removeItem('soundblend_oauth_redirect_pending'); } catch { /* ignore */ }
+      const e = new GoogleLoginError('opening_failed', 'Impossible de démarrer la connexion Google. Vérifie le stockage du navigateur et réessaie.');
+      this.setLoginState({ phase: 'error', code: e.code, message: e.message });
+      return Promise.reject(e);
+    }
+  }
+
+  /** Traitement unique du retour, avant montage React ou synchronisation. */
+  public async completeRedirectLogin(): Promise<void> {
+    const response = window.__sbOAuthReturn;
+    delete window.__sbOAuthReturn;
+    if (!response) return;
+    let pending: { state?: string; startedAt?: number } | null = null;
+    try {
+      pending = JSON.parse(sessionStorage.getItem('soundblend_oauth_redirect_pending') || 'null');
+      sessionStorage.removeItem('soundblend_oauth_redirect_pending');
+    } catch { /* refus sans marqueur fiable */ }
+    const fail = (e: GoogleLoginError) => this.setLoginState({ phase: 'error', code: e.code, message: e.message });
+    if (!pending || typeof pending.state !== 'string' || !response.state || pending.state !== response.state ||
+        !Number.isFinite(pending.startedAt) || response.receivedAt < pending.startedAt! || response.receivedAt - pending.startedAt! > 600000) {
+      fail(new GoogleLoginError('invalid_state', 'Retour Google non reconnu ou expiré. Aucun compte n’a été activé. Recommence la connexion.')); return;
+    }
+    if (response.error) { fail(googleOAuthError(response.error)); return; }
+    if (!response.token?.trim()) { fail(new GoogleLoginError('token_missing', "Google n’a pas renvoyé de jeton. Recommence la connexion.")); return; }
+    const scopes = new Set((response.scope || '').split(/\s+/));
+    if (!scopes.has('https://www.googleapis.com/auth/youtube') || !scopes.has('https://www.googleapis.com/auth/drive.appdata') ||
+        !(scopes.has('https://www.googleapis.com/auth/userinfo.profile') || scopes.has('profile'))) {
+      fail(new GoogleLoginError('permissions_incomplete', 'Les autorisations YouTube, Drive et profil sont nécessaires. Le compte choisi n’a pas été activé.')); return;
+    }
+    const seconds = Number(response.expiresIn), expiresAt = response.receivedAt + seconds * 1000;
+    if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      fail(new GoogleLoginError('invalid_expiry', 'La durée du jeton Google est invalide ou expirée. Reconnecte-toi.')); return;
+    }
+    const attempt = ++this.attempt;
+    this.setLoginState({ phase: 'verifying' });
+    try {
+      const verified = await this.verifiedProfile(response.token);
+      if (attempt !== this.attempt) return;
+      if (expiresAt <= Date.now()) throw new GoogleLoginError('token_expired', 'Le jeton a expiré pendant la vérification.');
+      if (!this.activate(response.token, expiresAt, verified.id, verified.profile, attempt)) throw new GoogleLoginError('session_changed', 'La session a changé pendant la connexion.');
+      this.setLoginState({ phase: 'idle' });
+    } catch (e) {
+      if (attempt !== this.attempt) return;
+      fail(e instanceof GoogleLoginError ? e : new GoogleLoginError('profile_check', 'Impossible de vérifier le profil Google. Le compte choisi n’a pas été activé.'));
+    }
+  }
+
+  public loginPopup(clientId?: string): Promise<string> {
     // Ne pas ouvrir une seconde fenêtre ni invalider silencieusement la
     // première tentative en cas de double clic ou de changement de vue.
     if (this.cancelLogin) return Promise.reject(new GoogleLoginError('already_pending', 'Une connexion Google est déjà en cours.'));
@@ -409,6 +481,17 @@ export class YouTubeService {
             if (resp.error) { finish(googleOAuthError(resp.error)); return; }
             if (typeof resp.access_token !== 'string' || !resp.access_token.trim()) {
               finish(new GoogleLoginError('token_missing', "Google n'a pas renvoyé de jeton d'accès. Réessaie.")); return;
+            }
+            // Le consentement granulaire peut accorder seulement une partie
+            // des droits. Ne pas activer une session qui paraît complète mais
+            // ne pourrait ni charger YouTube ni synchroniser Drive. Conserver
+            // l'ancien comportement lorsque scope est absent (anciens mocks).
+            if (typeof resp.scope === 'string') {
+              const granted = new Set(resp.scope.trim().split(/\s+/));
+              const required = SCOPE_YOUTUBE.split(/\s+/);
+              if (required.some(scope => !granted.has(scope) && !(scope.endsWith('/userinfo.profile') && granted.has('profile')))) {
+                finish(new GoogleLoginError('permissions_incomplete', 'Les autorisations nécessaires à YouTube, Drive et au profil n’ont pas toutes été accordées. Le compte choisi n’a pas été activé.')); return;
+              }
             }
             this.setLoginState({ phase: 'verifying' });
             if (settled || attempt !== this.attempt) return;
