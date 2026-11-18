@@ -99,8 +99,10 @@ try{
  await other.getByRole('button',{name:'Associer ce lien'}).waitFor();
  check(await other.getByRole('button',{name:'Exporter',exact:true}).count()===0,'autre onglet du même compte averti : pas de second bouton de création');await other.close();
  const b=await ctx.newPage();await b.goto(new URL('?owner=B',base).href);await b.waitForSelector('.ytm-shell');await open(b,'Quota après création');
+ await b.getByRole('button',{name:'Exporter',exact:true}).waitFor();
  check(await b.getByRole('button',{name:'Exporter',exact:true}).isVisible()&&await b.getByRole('button',{name:'Associer ce lien'}).count()===0,'journal de récupération isolé : le compte B ne voit pas la tentative A');await b.close();
  await p.reload({waitUntil:'domcontentloaded'});await p.waitForSelector('.ytm-shell');await open(p,'Quota après création');
+ await p.getByRole('button',{name:'Associer ce lien'}).waitFor();
  check(await p.getByRole('button',{name:'Exporter',exact:true}).count()===0&&await p.getByRole('button',{name:'Associer ce lien'}).isVisible(),'après rechargement et perte du lien en session : création bloquée tant que YouTube n’est pas vérifié');
  await p.getByLabel('Lien ou identifiant de la playlist créée').fill('https://example.org/playlist?list=PL-REPRISE-1');await p.getByRole('button',{name:'Associer ce lien'}).click();await waitAlert(p,'lien de playlist YouTube valide');
  check(!(await saved(p,'quota')).exportedPlaylistId,'un lien non YouTube est refusé sans associer la playlist');

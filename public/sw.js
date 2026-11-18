@@ -14,7 +14,7 @@
    depuis un cache périmé serait pire qu'une absence de réponse.
    ═══════════════════════════════════════════════════════════════ */
 
-const VERSION = 'sb-v6-9-42';
+const VERSION = 'sb-v6-9-45';
 const SHELL = `${VERSION}-shell`;
 
 /* l'interface : la page, le manifeste, les icônes. Les fichiers hachés
@@ -48,17 +48,34 @@ self.addEventListener('install', (e) => {
     if (!response.ok) throw new Error('Interface indisponible pendant la mise à jour.');
     const html = await response.clone().text();
     /* les chemins de Vite sont absolus (/soundblend/assets/…) ou relatifs */
-    const assets = appAssets(html);
-    if (!assets.some((a) => /\.js(?:\?|$)/.test(a)) || !assets.some((a) => /\.css(?:\?|$)/.test(a))) {
+    const htmlAssets = appAssets(html);
+    if (!htmlAssets.some((a) => /\.js(?:\?|$)/.test(a)) || !htmlAssets.some((a) => /\.css(?:\?|$)/.test(a))) {
       throw new Error('Ressources compilées absentes pendant la mise à jour.');
     }
+    // L'HTML ne référence pas les vues chargées à la demande. Leur inventaire
+    // est produit par Vite à chaque compilation et vérifié avant activation.
+    const manifestResponse = await fetch(appUrl('precache-assets.json'), { cache: 'reload' });
+    if (!manifestResponse.ok) throw new Error('Inventaire des ressources indisponible.');
+    const manifest = await manifestResponse.json();
+    if (!Array.isArray(manifest.assets) || !manifest.assets.length || manifest.assets.some(
+      (name) => typeof name !== 'string' || !/^assets\/[A-Za-z0-9._/-]+$/.test(name) || name.split('/').some((part) => part === '..' || part === '.')
+    )) throw new Error('Inventaire des ressources invalide.');
+    const assets = [...new Set(manifest.assets.map((name) => new URL(appUrl(name), self.location.origin).href))];
+    const listed = new Set(assets);
+    if (!htmlAssets.every((url) => listed.has(url))) throw new Error('Interface et inventaire de versions différentes.');
     await c.addAll(PRECACHE.filter((url) => url !== appUrl('index.html')));
-    for (const url of assets) {
-      const asset = await fetch(url, { cache: 'reload' });
-      if (!asset.ok || /text\/html/i.test(asset.headers.get('content-type') || '')) {
-        throw new Error('Une ressource compilée est indisponible pendant la mise à jour.');
-      }
-      await c.put(url, asset);
+    // Quatre téléchargements au maximum : accélérer l'installation sans
+    // déclencher une rafale illimitée. Attendre tout le lot même en cas
+    // d'échec avant de refuser l'activation du nouveau cache.
+    for (let i = 0; i < assets.length; i += 4) {
+      const results = await Promise.allSettled(assets.slice(i, i + 4).map(async (url) => {
+        const asset = await fetch(url, { cache: 'reload' });
+        if (!asset.ok || /text\/html/i.test(asset.headers.get('content-type') || '')) {
+          throw new Error('Une ressource compilée est indisponible pendant la mise à jour.');
+        }
+        await c.put(url, asset);
+      }));
+      if (results.some(result => result.status === 'rejected')) throw new Error('Préchargement incomplet.');
     }
     // La page et les empreintes préchargées proviennent de la même lecture.
     await c.put(appUrl('index.html'), response);

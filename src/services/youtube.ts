@@ -178,7 +178,7 @@ export class YouTubeService {
   private expiredNotified = false;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private cancelLogin: ((replaced?: boolean) => void) | null = null;
-  // Comme en 6.9.33, garder le client de la fenêtre tant qu'elle répond.
+  // Référence utilisée uniquement par l'ancien parcours popup conservé pour les tests historiques.
   private loginClient: any = null;
   private loginState: GoogleLoginState = { phase: 'idle' };
   private operations = new Set<AbortController>();
@@ -332,8 +332,7 @@ export class YouTubeService {
     // Le client GIS est créé au moment du clic, avec le callback de cette
     // tentative seulement. Aucun callback de préparation ne peut connecter.
   }
-  /** Parcours alternatif expérimental : la page entière revient sur la base
-      autorisée, au lieu de dépendre des messages inter-fenêtres GIS. */
+  /** Parcours courant : retour sur la base autorisée, sans message entre fenêtres. */
   public login(clientId?: string): Promise<string> {
     const id = clientId || getStoredSettings().googleClientId;
     if (!id) {
@@ -372,7 +371,7 @@ export class YouTubeService {
     try {
       pending = JSON.parse(sessionStorage.getItem('soundblend_oauth_redirect_pending') || 'null');
       sessionStorage.removeItem('soundblend_oauth_redirect_pending');
-    } catch { /* refus sans marqueur fiable */ }
+    } catch { pending = null; /* impossible de consommer le marqueur : refuser */ }
     const fail = (e: GoogleLoginError) => this.setLoginState({ phase: 'error', code: e.code, message: e.message });
     if (!pending || typeof pending.state !== 'string' || !response.state || pending.state !== response.state ||
         !Number.isFinite(pending.startedAt) || response.receivedAt < pending.startedAt! || response.receivedAt - pending.startedAt! > 600000) {
@@ -403,6 +402,8 @@ export class YouTubeService {
     }
   }
 
+  /** Ancien parcours popup, conservé pour les tests et comparaisons historiques.
+      Les boutons de l’application utilisent login(), par redirection. */
   public loginPopup(clientId?: string): Promise<string> {
     // Ne pas ouvrir une seconde fenêtre ni invalider silencieusement la
     // première tentative en cas de double clic ou de changement de vue.
@@ -1268,7 +1269,13 @@ export class YouTubeService {
   }
   public async addTracksToPlaylist(playlistId: string, tracks: Track[], onProgress?: (index: number, total: number) => void): Promise<void> {
     const c = this.captureSession();
-    const unique = tracks.filter((t, i, arr) => !t.videoId || arr.findIndex((x) => x.videoId === t.videoId) === i);
+    const seen = new Set<string>();
+    const unique = tracks.filter((t) => {
+      if (!t.videoId) return true;
+      if (seen.has(t.videoId)) return false;
+      seen.add(t.videoId);
+      return true;
+    });
     if (unique.some((t) => !t.videoId)) throw new Error('Un morceau n’a pas d’identifiant YouTube : ajout incomplet.');
     for (let i = 0; i < unique.length; i++) {
       const track = unique[i];
@@ -1343,7 +1350,8 @@ export class YouTubeService {
     if (!Array.isArray(snapshot) || snapshot.length > 5000 || snapshot.some((x) => !x?.itemId || !/^[A-Za-z0-9_-]{11}$/.test(x.videoId))
       || new Set(snapshot.map((x) => x.itemId)).size !== snapshot.length) throw new Error('État initial de playlist invalide ; aucune modification envoyée.');
     const removeIds = edits.removeItemIds;
-    if (!Array.isArray(removeIds) || new Set(removeIds).size !== removeIds.length || removeIds.some((id) => !snapshot.some((x) => x.itemId === id))) {
+    const snapshotIds = new Set(snapshot.map((item) => item.itemId));
+    if (!Array.isArray(removeIds) || new Set(removeIds).size !== removeIds.length || removeIds.some((id) => !snapshotIds.has(id))) {
       throw new Error('Un retrait ne correspond pas à la playlist ; aucune modification envoyée.');
     }
     if (!Array.isArray(edits.moves) || !Array.isArray(edits.additions) || removeIds.length + edits.moves.length + edits.additions.length > 25) {

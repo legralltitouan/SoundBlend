@@ -6,8 +6,8 @@ import { useData } from '../../context/DataContext';
 import { GoogleLoginStatus } from '../ui/GoogleLoginStatus';
 
 /* ═══════════════════════════════════════════════════════════════
-   Accueil de première visite — trois temps, une seule décision
-   par écran : le thème, puis le compte, puis c'est parti.
+   Accueil de première visite — quatre temps, une seule décision
+   par écran : le thème, le compte, la clé, puis c'est parti.
    On peut tout à fait continuer sans compte : la bibliothèque
    d'exemple sert de terrain de jeu.
    ═══════════════════════════════════════════════════════════════ */

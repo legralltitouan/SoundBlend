@@ -1,6 +1,6 @@
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
-import path from 'node:path'
+import { defineConfig, type Plugin } from 'vite'
+import { fileURLToPath } from 'node:url'
 
 // https://vite.dev/config/
 /* L'app est servie soit à la racine d'un domaine (Cloudflare Pages,
@@ -14,10 +14,23 @@ import path from 'node:path'
    GitHub Pages. */
 const base = process.env.BASE_PATH || '/';
 
+/** Inventaire des ressources compilées, y compris les vues chargées à la
+ * demande : le service worker doit pouvoir les précharger hors ligne. */
+function precacheManifest(): Plugin {
+  return {
+    name: 'soundblend-precache-manifest',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      const assets = Object.keys(bundle).filter(name => name.startsWith('assets/')).sort();
+      this.emitFile({ type: 'asset', fileName: 'precache-assets.json', source: JSON.stringify({ assets }) });
+    },
+  };
+}
+
 export default defineConfig({
   base,
-  plugins: [react()],
-  resolve: { alias: { '@': path.resolve(__dirname, './src') } },
+  plugins: [react(), precacheManifest()],
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     host: '0.0.0.0',
     // 5173 : le port accepté par la clé YouTube par défaut (restriction de référent)

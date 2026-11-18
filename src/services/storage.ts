@@ -71,7 +71,23 @@ export const migrateLegacyData = (): void => {
   } catch { /* la migration non destructive peut être retentée plus tard */ }
 };
 
-const artistNorm = (s: string) => norm((s || '').replace(/\s*[-–—]\s*topic$/i, '').replace(/\s+official$/i, ''));
+// Normalisations pures très répétées pendant les filtres. Caches bornés en
+// nombre ET en longueur de clé ; titres et artistes restent en mémoire de l’onglet,
+// sans stockage persistant ni mise en commun entre onglets.
+const memoNormalisation = (compute: (value: string) => string) => {
+  const cache = new Map<string, string>();
+  return (value: string): string => {
+    const key = value || '';
+    if (key.length > 512) return compute(key);
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const result = compute(key);
+    if (cache.size >= 1024) cache.delete(cache.keys().next().value!);
+    cache.set(key, result);
+    return result;
+  };
+};
+const artistNorm = memoNormalisation((s) => norm(s.replace(/\s*[-–—]\s*topic$/i, '').replace(/\s+official$/i, '')));
 /** Compare les collaborateurs sans confondre « Air » avec « Air Supply ». */
 export const artistMatches = (candidate: string, blocked: string) => {
   const a = artistNorm(candidate), b = artistNorm(blocked);
@@ -85,7 +101,7 @@ export const artistMatches = (candidate: string, blocked: string) => {
   const parts = withFeatures.split(/\s+(?:feat\.?|ft\.?|featuring|with|avec|vs\.?|and|x)\s+|\s*[,&]\s*/i).map(artistNorm);
   return parts.includes(b);
 };
-const titleNorm = (s: string) => norm(cleanTitle(s || '').title);
+const titleNorm = memoNormalisation((s) => norm(cleanTitle(s).title));
 const recordKey = (kind: 'track' | 'artist', t: { title?: string; artist?: string; videoId?: string }) =>
   kind === 'artist' ? `artist:${artistNorm(t.artist || '')}` : `track:${artistNorm(t.artist || '')}|${titleNorm(t.title || '')}`;
 
@@ -110,10 +126,18 @@ export const exclusionPourDrive = (r: ExclusionRecord): ExclusionRecord => {
 const memeExclusion = (a: ExclusionRecord, b: ExclusionRecord): boolean =>
   a.id === b.id && a.kind === b.kind && a.artist === b.artist && (a.title || '') === (b.title || '')
   && (a.videoId || '') === (b.videoId || '') && a.deleted === b.deleted;
+/** Index de recherche équivalent à Array.find : le premier doublon gagne.
+    Utilisé lors des confirmations pour éviter une recherche quadratique. */
+const indexPremierParId = <T extends { id: string }>(records: T[]): Map<string, T> => {
+  const index = new Map<string, T>();
+  for (const record of records) if (!index.has(record.id)) index.set(record.id, record);
+  return index;
+};
 export const fusionnerExclusionsAvecGestesLocaux = (local: ExclusionRecord[], remote: ExclusionRecord[]): ExclusionRecord[] => {
   const latest = mergeExclusionRecords(remote.map(exclusionPourDrive));
+  const latestById = indexPremierParId(latest);
   const rebased = local.map((r) => {
-    const other = latest.find((x) => x.id === r.id);
+    const other = latestById.get(r.id);
     if (!r._pending || !other || other.updatedAt < r.updatedAt || memeExclusion(r, other)) return r;
     return { ...r, updatedAt: other.updatedAt + 1 };
   });
@@ -121,8 +145,9 @@ export const fusionnerExclusionsAvecGestesLocaux = (local: ExclusionRecord[], re
 };
 export const confirmerExclusions = (sent: ExclusionRecord[]): void => {
   const records = getExclusionRecords(); let changed = false;
+  const sentById = indexPremierParId(sent);
   const next = records.map((r) => {
-    const s = sent.find((x) => x.id === r.id);
+    const s = sentById.get(r.id);
     if (!r._pending || !s || r.updatedAt !== s.updatedAt || !memeExclusion(r, s)) return r;
     changed = true; return exclusionPourDrive(r);
   });
@@ -156,9 +181,10 @@ export const isExcluded = (t: { title?: string; artist?: string; videoId?: strin
   const cleaned = cleanTitle(t.title || '');
   const artists = [t.artist || '', cleaned.artist || ''].filter(Boolean);
   if (exclusions.artists.some((a) => artists.some((candidate) => artistMatches(candidate, a)))) return true;
+  let title: string | undefined;
   return exclusions.tracks.some((r) => {
     if (r.videoId && t.videoId && r.videoId === t.videoId) return true;
-    return !!r.title && titleNorm(r.title) === titleNorm(t.title || '') && artists.some((candidate) => artistMatches(candidate, r.artist));
+    return !!r.title && titleNorm(r.title) === (title ??= titleNorm(t.title || '')) && artists.some((candidate) => artistMatches(candidate, r.artist));
   });
 };
 
@@ -180,8 +206,13 @@ export const mergeDiscoveryHistory = (a: DiscoveryRecord[] = [], b: DiscoveryRec
 export const writeDiscoveryHistory = (h: DiscoveryRecord[]) => write(HISTORY_KEY, mergeDiscoveryHistory(h));
 export const isRecentlyProposed = (t: { title?: string; artist?: string; videoId?: string }, history = getDiscoveryHistory()): boolean => {
   const artists = [t.artist || '', cleanTitle(t.title || '').artist || ''].filter(Boolean);
-  return history.some((h) => !!((h.videoId && t.videoId && h.videoId === t.videoId)
-    || (titleNorm(h.title) !== '' && titleNorm(h.title) === titleNorm(t.title || '') && artists.some((a) => artistMatches(a, h.artist)))));
+  let title: string | undefined;
+  return history.some((h) => {
+    if (h.videoId && t.videoId && h.videoId === t.videoId) return true;
+    const historicalTitle = titleNorm(h.title);
+    return historicalTitle !== '' && historicalTitle === (title ??= titleNorm(t.title || ''))
+      && artists.some((a) => artistMatches(a, h.artist));
+  });
 };
 export const recentArtists = (history = getDiscoveryHistory()): string[] => [...new Set(history.map((h) => h.artist).filter(Boolean))];
 export const recordDiscoveries = (tracks: Track[], shownAt = Date.now(), emit = true): void => {
@@ -225,7 +256,11 @@ export const getStoredBlends = (): GeneratedBlend[] => {
   if (!Array.isArray(raw)) return [];
   const deleted = getBlendTombstones();
   const now = Date.now();
-  const valid = raw.filter((b) => b && b.id && !deleted[b.id] && Number.isFinite(Date.parse(b.expiresAt)) && Date.parse(b.expiresAt) > now).map(cleanBlend);
+  const valid = raw.filter((b) => {
+    if (!b || !b.id || deleted[b.id]) return false;
+    const expiresAt = Date.parse(b.expiresAt);
+    return Number.isFinite(expiresAt) && expiresAt > now;
+  }).map(cleanBlend);
   // La lecture ne modifie pas l'archive historique ni les données expirées.
   // Le nettoyage des champs obsolètes ne s'applique qu'à la copie utilisée.
   return valid;
@@ -234,8 +269,9 @@ export const writeStoredBlends = (blends: GeneratedBlend[]): void => write(BLEND
 export const blendPourDrive = (b: GeneratedBlend): GeneratedBlend => { const { _pending, ...remote } = cleanBlend(b); return remote; };
 export const confirmerBlends = (sent: GeneratedBlend[]): void => {
   let changed = false;
+  const sentById = indexPremierParId(sent);
   const next = getStoredBlends().map((b) => {
-    const s = sent.find((x) => x.id === b.id);
+    const s = sentById.get(b.id);
     if (!b._pending || !s || b.updatedAt !== s.updatedAt || JSON.stringify(blendPourDrive(b)) !== JSON.stringify(blendPourDrive(s))) return b;
     changed = true; return blendPourDrive(b);
   });

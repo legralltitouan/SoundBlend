@@ -1,8 +1,30 @@
-# Vérifications facultatives — SoundBlend 6.9.41
+# Vérifications — SoundBlend 6.9.45
+
+## Tests de la version actuelle
+
+La connexion utilise maintenant une **redirection**, pas la popup GIS. Les anciens tests de connexion `t-google-*`, `t-gis-*` et les tests PWA versionnés 641 décrits plus bas sont conservés comme documentation historique ; ils ne constituent pas une validation de ce parcours ni de ce cache actuel. Les scripts actuels à lancer avec un serveur Vite sont :
+
+```sh
+node verification/t-redirection-experimentale.mjs
+node verification/t-redirection-comptes.mjs
+node verification/t-redirection-expiration643.mjs
+node verification/t-optimisations643.mjs
+node verification/t-optimisations-suite644.mjs
+```
+
+Pour le découpage des vues, `t-pwa-vues-differees645.mjs` vérifie l'ouverture de vues jamais visitées hors ligne ; `t-vue-indisponible645.mjs` vérifie le repli lorsque le module Assistant ne se télécharge pas. `t-precache-concurrence645.mjs` vérifie que les téléchargements du service worker restent bornés à quatre. Le test de migration accepte `SOUNDBLEND_TEST_PWA_FAILURE=lazy`, `manifest-absent` ou `manifest-mismatch` pour simuler différentes mises à jour incomplètes.
+
+Les trois premiers utilisent `SOUNDBLEND_DEV_URL` (par défaut `http://localhost:5180/`) ; le troisième utilise la même variable mais vise par défaut le port 5173. Ils simulent Google, les comptes et les services. Pour tester le site compilé sous `/SoundBlend/`, utiliser `BASE_PATH=/SoundBlend/` à la compilation et au lancement de la prévisualisation, puis `SOUNDBLEND_DEV_URL=http://localhost:4173/SoundBlend/` pour les trois tests de redirection. Le test d'optimisations importe les sources et nécessite Vite en mode développement. Les tests `t-pwa645.mjs` et `t-pwa-navigation645.mjs` contrôlent le site compilé ; `t-pwa-migration645.mjs` demande en plus une compilation séparée de la version précédente.
+
+Les scripts historiques ci-dessous peuvent contenir des hypothèses de version et de flux périmées. Lire leur en-tête avant de les utiliser ; un échec d'un ancien test ne prouve pas à lui seul une régression de la redirection.
+
+---
+
+# Archives des vérifications 6.9.41
 
 Ces scripts ouvrent des profils Chromium temporaires. Sauf indication contraire, Google OAuth, Drive, Gemini, YouTube et le lecteur sont **simulés** : aucun compte ni aucune clé réelle n'est utilisé. Ils ne prouvent pas une fusion atomique sur Drive, la disponibilité des services ou le comportement de tous les navigateurs. Exécuter les scripts **séquentiellement**.
 
-Les scripts de connexion et PWA `638`, `639` et `640` sont conservés pour l'historique et attendent parfois les anciens délais ou caches. Pour la 6.9.41, utiliser les scripts `641` listés ci-dessous. Le test visuel `t-bandeau640.mjs` reste utilisable car ce bandeau n'a pas changé.
+Les scripts de connexion et PWA de cette section sont conservés pour l'historique et attendent parfois les anciens flux, délais ou caches. Le test visuel `t-bandeau640.mjs` reste utilisable car ce bandeau n'a pas changé.
 
 ## Préparer
 

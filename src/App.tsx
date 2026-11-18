@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { accountRevision } from './services/accountScope';
 import { AnimatePresence, motion } from 'framer-motion';
 import { UIProvider, useUI } from './context/UIContext';
@@ -6,12 +6,9 @@ import { DataProvider } from './context/DataContext';
 import { PlayerProvider } from './context/PlayerContext';
 import { Shell } from './components/shell/Shell';
 import { LibraryView } from './components/views/LibraryView';
-import { BlendView } from './components/views/BlendView';
-import { HistoryView } from './components/views/HistoryView';
+import { SettingsView } from './components/views/SettingsView';
 import { TaskTicker } from './components/ui/TaskTicker';
 import { ReplaceQueueProvider } from './context/ReplaceQueueContext';
-import { AssistantView } from './components/views/AssistantView';
-import { SettingsView } from './components/views/SettingsView';
 import { PickerModal } from './components/modals/PickerModal';
 import { ConfigModal } from './components/modals/ConfigModal';
 import { GeneratingOverlay } from './components/modals/GeneratingOverlay';
@@ -22,13 +19,36 @@ import { Ambience } from './components/shell/Ambience';
 import { InstallBanner } from './components/shell/InstallBanner';
 import { BackHandler } from './components/shell/BackHandler';
 
+// Les vues secondaires sont téléchargées à leur première ouverture. Le
+// service worker précharge leurs modules pour conserver la navigation hors ligne.
+const BlendView = lazy(() => import('./components/views/BlendView').then(m => ({ default: m.BlendView })));
+const HistoryView = lazy(() => import('./components/views/HistoryView').then(m => ({ default: m.HistoryView })));
+const AssistantView = lazy(() => import('./components/views/AssistantView').then(m => ({ default: m.AssistantView })));
+
+/** Un échec de téléchargement d'une vue ne doit pas démonter toute la coque. */
+class ViewBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (this.state.failed) return (
+      <div className="sb-assistant-error" role="alert">
+        Cette vue n’a pas pu être chargée. Vérifie ta connexion, puis recharge la page si nécessaire.
+        Les éléments non enregistrés peuvent être perdus lors du rechargement.
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
 const Router: React.FC = () => {
   const { view } = useUI();
-  if (view === 'blend') return <BlendView />;
-  if (view === 'history') return <HistoryView />;
-  if (view === 'assistant') return <AssistantView />;
-  if (view === 'settings') return <SettingsView />;
-  return <LibraryView />;
+  const content = view === 'blend' ? <BlendView />
+    : view === 'history' ? <HistoryView />
+    : view === 'assistant' ? <AssistantView />
+    : view === 'settings' ? <SettingsView /> : <LibraryView />;
+  return <ViewBoundary key={view}>
+    <Suspense fallback={<p role="status">Chargement…</p>}>{content}</Suspense>
+  </ViewBoundary>;
 };
 
 const Toast: React.FC = () => {

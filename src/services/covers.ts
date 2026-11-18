@@ -73,9 +73,11 @@ let hostQuietUntil = 0;
 const acquire = () =>
   new Promise<void>((resolve) => {
     const run = () => {
+      // Réserver le créneau immédiatement : plusieurs appels au cours du
+      // même tour JS ne doivent pas tous voir active === 0 pendant le délai.
+      active++;
       const wait = Math.max(0, MIN_GAP_MS - (Date.now() - lastStart));
       setTimeout(() => {
-        active++;
         lastStart = Date.now();
         resolve();
       }, wait);
@@ -89,13 +91,21 @@ const release = () => {
   if (next) next();
 };
 
-const fetchWithTimeout = async (url: string, ms = 6000) => {
+/** Limite l'ensemble de la réponse, y compris le corps JSON. La file doit
+    progresser même si le serveur envoie les en-têtes puis ne termine jamais. */
+const fetchItunes = async (url: string, ms = 6000): Promise<{ status: number; data: any } | null> => {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await fetch(url, { signal: ctrl.signal });
+    return await Promise.race([
+      (async () => {
+        const resp = await fetch(url, { signal: ctrl.signal });
+        return { status: resp.status, data: resp.ok ? await resp.json() : null };
+      })().catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => { ctrl.abort(); resolve(null); }, ms); }),
+    ]);
   } finally {
-    clearTimeout(t);
+    if (timer) clearTimeout(timer);
   }
 };
 
@@ -113,8 +123,11 @@ const lookupItunes = async (artist: string, title: string): Promise<Cover | null
 
   await acquire();
   try {
-    const resp = await fetchWithTimeout(`https://itunes.apple.com/search?term=${term}&entity=song&limit=25`);
-    if (!resp.ok) {
+    // Un 429 peut avoir été reçu pendant que cette demande patientait.
+    if (Date.now() < hostQuietUntil || Date.now() < (refused.get(k) || 0)) return null;
+    const resp = await fetchItunes(`https://itunes.apple.com/search?term=${term}&entity=song&limit=25`);
+    if (!resp) return null;
+    if (resp.status < 200 || resp.status >= 300) {
       /* 429 : on met ce titre de côté un moment, et on laisse la console
          tranquille — c'est un agrément, pas une panne */
       if (resp.status === 429 || resp.status === 403) {
@@ -123,8 +136,7 @@ const lookupItunes = async (artist: string, title: string): Promise<Cover | null
       }
       return null;
     }
-    const data = await resp.json();
-    const items: any[] = data?.results || [];
+    const items: any[] = resp.data?.results || [];
     if (!items.length) return null;
 
     const nArtist = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -197,16 +209,29 @@ export const youtubeThumb = (videoId?: string, px: 120 | 320 | 480 | 1280 = 320)
   return `https://i.ytimg.com/vi/${videoId}/${name}.jpg`;
 };
 
-/* on vérifie qu'une image existe réellement (les vidéos mortes renvoient 404) */
+/* On partage les vérifications concurrentes d'une même vignette. Une
+   réponse tardive peut toujours actualiser le cache après le délai, comme
+   avant ; elle ne modifie pas le résultat déjà rendu aux appelants. */
 const checked = new Map<string, boolean>();
+const checksInFlight = new Map<string, Promise<boolean>>();
 export const imageExists = (url: string): Promise<boolean> => {
   if (checked.has(url)) return Promise.resolve(checked.get(url)!);
-  return new Promise((resolve) => {
+  const pending = checksInFlight.get(url);
+  if (pending) return pending;
+  const work = new Promise<boolean>((resolve) => {
     const img = new Image();
-    const done = (ok: boolean) => { checked.set(url, ok); resolve(ok); };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const done = (ok: boolean) => {
+      if (timer) clearTimeout(timer);
+      checked.set(url, ok);
+      resolve(ok);
+    };
     img.onload = () => done(img.naturalWidth > 20);
     img.onerror = () => done(false);
+    timer = setTimeout(() => { if (!checked.has(url)) done(false); }, 5000);
     img.src = url;
-    setTimeout(() => { if (!checked.has(url)) done(false); }, 5000);
   });
+  checksInFlight.set(url, work);
+  void work.finally(() => { if (checksInFlight.get(url) === work) checksInFlight.delete(url); });
+  return work;
 };

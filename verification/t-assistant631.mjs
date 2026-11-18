@@ -55,6 +55,7 @@ await ctx.route('https://generativelanguage.googleapis.com/**',async r=>{
 const p=await ctx.newPage();const errors=[];p.on('pageerror',e=>errors.push(e.message));const ok=[];const check=(b,name)=>{assert.ok(b,name);ok.push(name);console.log('  ✓ '+name)};
 await p.goto(base);await p.waitForSelector('.ytm-shell');await p.waitForTimeout(1000);
 await p.locator('.ytm-mobile-bar [aria-label="Assistant"]').click();
+await p.getByRole('heading',{name:'Assistant',exact:true}).waitFor();
 check(await p.getByRole('heading',{name:'Assistant',exact:true}).isVisible(),'navigation Assistant à la place de Goûts');
 const original='Reprends ma playlist YouTube Music Chill Voiture, ajoute du jazz et rends-la plus énergique.';
 await p.locator('#sb-assistant-input').fill(original);await p.getByRole('button',{name:'Envoyer à l’assistant'}).click();

@@ -253,8 +253,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     void syncNow();
     await loadLibrary();
   }, [loadLibrary, syncNow]);
-  // Ces appels au service restent synchrones avec le clic : aucun await
-  // préalable ne doit faire bloquer l'ouverture de la fenêtre Google.
+  // La redirection Google est déclenchée directement par le clic.
   const login = useCallback(() => completeGoogleLogin(youtubeService.login(clientIdGoogle(settings.googleClientId))),
     [completeGoogleLogin, settings.googleClientId]);
   const retryGoogleLogin = useCallback(() => {

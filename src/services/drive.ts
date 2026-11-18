@@ -253,8 +253,11 @@ const appliquerDistant = (d: DonneesSync): void => {
   const deleted = mergeBlendTombstones(getBlendTombstones(), d.suppressionsBlends || {});
   writeBlendTombstones(deleted);
   const remoteBlends = (Array.isArray(d.blends) ? d.blends : []).map(blendPourDrive);
+  // Comme find(), conserver la première entrée en cas de doublon distant.
+  const remoteById = new Map<string, GeneratedBlend>();
+  for (const blend of remoteBlends) if (!remoteById.has(blend.id)) remoteById.set(blend.id, blend);
   const localBlends = getStoredBlends().map((b) => {
-    const other = remoteBlends.find((x) => x.id === b.id);
+    const other = remoteById.get(b.id);
     if (!b._pending || !other) return b;
     const remoteAt = logicalTime(other.updatedAt || Date.parse(other.createdAt) || 0);
     const localAt = logicalTime(b.updatedAt || Date.parse(b.createdAt) || 0);

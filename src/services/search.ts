@@ -20,9 +20,8 @@ export type Video = { videoId: string; title: string; artist: string; durationSe
 
 /* ─────────────── Piped : la recherche sans clé ─────────────── */
 
-/* Vérifiés vivants : deux seulement répondent encore en 2026. Les autres
-   sont gardés en dernier recours — un hôte mort coûte une coupure de 9 s
-   et une erreur CORS dans la console, donc ils passent après. */
+/* Instances publiques indépendantes, interrogées dans cet ordre. Leur
+   disponibilité change : après un échec, elles sont temporairement évitées. */
 export const PIPED_HOSTS = [
   'https://pipedapi.ducks.party',
   'https://api.piped.private.coffee',
@@ -37,12 +36,13 @@ const alive = (h: string) => {
   return !until;
 };
 
-const cut = async <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
+// Limiter aussi la lecture JSON et interrompre la requête encore active.
+const cut = async <T,>(p: Promise<T>, ms: number, fallback: T, controller: AbortController): Promise<T> => {
   let t: any;
   try {
     return await Promise.race([
       p,
-      new Promise<T>((resolve) => { t = setTimeout(() => resolve(fallback), ms); }),
+      new Promise<T>((resolve) => { t = setTimeout(() => { controller.abort(); resolve(fallback); }, ms); }),
     ]);
   } finally {
     clearTimeout(t);
@@ -68,22 +68,40 @@ const toVideos = (items: PipedItem[]): Video[] =>
     }))
     .filter((v) => !!v.videoId);
 
+// Mutualiser uniquement les requêtes simultanées identiques : aucun résultat
+// n'est conservé après la fin, et chaque appelant reçoit sa propre liste.
+const pipedPending = new Map<string, Promise<Video[]>>();
+
 /** Recherche libre, sans clé. `filter` : music_songs (catalogue) ou videos. */
 export const pipedSearch = async (query: string, filter: 'music_songs' | 'videos' = 'music_songs'): Promise<Video[]> => {
-  for (const host of PIPED_HOSTS) {
-    if (!alive(host)) continue;
-    const url = `${host}/search?q=${encodeURIComponent(query)}&filter=${filter}`;
-    const res = await cut(
-      fetch(url, { headers: { Accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      9000,
-      null as any,
-    );
-    if (!res) { hostDown.set(host, Date.now() + 10 * 60 * 1000); continue; }
-    const items: PipedItem[] = Array.isArray(res.items) ? res.items : [];
-    const vids = toVideos(items);
-    if (vids.length) return vids;
+  const key = JSON.stringify([query, filter]);
+  let work = pipedPending.get(key);
+  if (!work) {
+    work = (async () => {
+      for (const host of PIPED_HOSTS) {
+        if (!alive(host)) continue;
+        const url = `${host}/search?q=${encodeURIComponent(query)}&filter=${filter}`;
+        const controller = new AbortController();
+        const res = await cut(
+          fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+          9000,
+          null as any,
+          controller,
+        );
+        if (!res) { hostDown.set(host, Date.now() + 10 * 60 * 1000); continue; }
+        const items: PipedItem[] = Array.isArray(res.items) ? res.items : [];
+        const vids = toVideos(items);
+        if (vids.length) return vids;
+      }
+      return [];
+    })();
+    pipedPending.set(key, work);
   }
-  return [];
+  try {
+    return (await work).map(video => ({ ...video }));
+  } finally {
+    if (pipedPending.get(key) === work) pipedPending.delete(key);
+  }
 };
 
 /* ─────────────── vérifier une vidéo, sans clé ─────────────── */
@@ -112,12 +130,14 @@ export const verifyVideo = async (videoId: string): Promise<VideoCheck> => {
   if (existing) return existing;
   const work = (async (): Promise<VideoCheck> => {
     const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
+    const controller = new AbortController();
     const res = await cut(
-      fetch(url, { headers: { Accept: 'application/json' } })
+      fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal })
         .then((r) => !r.ok ? { __ko: r.status } : r.json())
         .catch(() => null),
       6000,
       null as any,
+      controller,
     );
     if (!res) return null;                     // réseau muet : on ne sait pas
     if (res.__ko) {
@@ -183,8 +203,12 @@ export const artistTracks = async (artist: string): Promise<Video[]> => {
     const extra = found.filter((v) => (v.artist || '').toLowerCase().includes(key));
     // Une seconde recherche vide ne doit pas effacer les une ou deux
     // pistes déjà trouvées ; conserver les deux listes sans doublon vidéo.
-    const merged = [...items, ...extra];
-    items = merged.filter((v, i) => merged.findIndex((x) => x.videoId === v.videoId) === i);
+    const seen = new Set<string>();
+    items = [...items, ...extra].filter((v) => {
+      if (seen.has(v.videoId)) return false;
+      seen.add(v.videoId);
+      return true;
+    });
   }
   voisinCache.set(key, { at: Date.now(), items });
   return items;

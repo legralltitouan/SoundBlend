@@ -11,7 +11,8 @@ export const GoogleLoginStatus: React.FC<{ page?: boolean }> = ({ page = false }
 
   const isError = googleLoginState.phase === 'error';
   const message = googleLoginState.phase === 'waiting'
-    ? 'Termine la connexion dans la fenêtre Google. Si elle ne s’ouvre pas, autorise les fenêtres pour ce site, puis annule et réessaie.'
+    ? 'Redirection vers Google en cours… Si rien ne se passe, recharge cette page puis réessaie.'
+    // waiting-long appartient à l’ancien parcours popup conservé pour comparaison.
     : googleLoginState.phase === 'waiting-long'
       ? 'SoundBlend attend toujours Google : prends ton temps, ce message n’annule pas la connexion. Si la fenêtre Google s’est fermée et que tu n’es toujours pas connecté après quelques secondes, utilise Réessayer et choisis à nouveau ton compte.'
       : googleLoginState.phase === 'verifying'
