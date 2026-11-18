@@ -13,7 +13,7 @@ import { clientIdGoogle, GEMINI_API_KEY } from '../../config/app';
 /* Réglages : apparence (clair / sombre), compte YouTube, clés & API.
    Le modèle Gemini n'est plus un choix : la cascade est automatique. */
 export const SettingsView: React.FC = () => {
-  const { settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, login, logout, syncState, exclusions } = useData();
+  const { settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, googleLoginPending, login, logout, syncState, exclusions } = useData();
   const { mode, toggleMode, showToast, restartOnboarding, openActionSheet } = useUI();
   const pwa = useInstall();
   /* aucune clé par défaut : si elles manquent, on le dit ici, en clair,
@@ -45,13 +45,11 @@ export const SettingsView: React.FC = () => {
     setProbe({ busy: false, models: r.models, ecartes: r.ecartes, error: r.error });
   };
 
-  const [connecting, setConnecting] = useState(false);
+  const connecting = googleLoginPending;
   const connect = async () => {
     if (connecting) return;
-    setConnecting(true);
     try { await login(); }
     catch (e) { showToast(e instanceof Error ? e.message : 'Connexion impossible.'); }
-    finally { setConnecting(false); }
   };
   const disconnect = () => {
     const pending = syncState.enAttente && accountKnown;
@@ -251,7 +249,7 @@ export const SettingsView: React.FC = () => {
         <Button onClick={save}><Check size={16} /> Enregistrer</Button>
         <span style={{ flex: 1 }} />
         <span className="sb-footnote" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
-          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.36
+          <MonitorSmartphone size={13} strokeWidth={1.7} /> SoundBlend AI · v6.9.37
         </span>
       </div>
     </div>

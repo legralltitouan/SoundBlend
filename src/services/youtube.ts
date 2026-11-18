@@ -63,6 +63,39 @@ const TOKEN_EXP_KEY = 'soundblend_yt_token_exp';
 const USER_KEY = 'soundblend_yt_user';
 const AUTH_KEY = 'soundblend_google_session_v2';
 
+/** État public du parcours, sans jeton, adresse ni données du compte. */
+export type GoogleLoginState =
+  | { phase: 'idle' | 'waiting' | 'window-closed' | 'verifying' }
+  | { phase: 'error'; code: string; message: string };
+
+class GoogleLoginError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = 'GoogleLoginError';
+  }
+}
+
+/** Ne jamais afficher la réponse brute de Google : elle peut contenir des
+    informations sensibles. Seuls des codes OAuth connus sont conservés. */
+const googleOAuthError = (code: unknown): GoogleLoginError => {
+  switch (code) {
+    case 'access_denied':
+      return new GoogleLoginError('access_denied', 'Google n’a pas accordé l’autorisation. Le compte choisi n’a pas été activé.');
+    case 'invalid_scope':
+      return new GoogleLoginError('invalid_scope', 'Google refuse les autorisations demandées par cette installation.');
+    case 'invalid_client':
+    case 'unauthorized_client':
+    case 'origin_mismatch':
+    case 'redirect_uri_mismatch':
+      return new GoogleLoginError(code, 'Google refuse la configuration de connexion de cette installation. Vérifie l’identifiant OAuth et l’origine autorisée.');
+    case 'server_error':
+    case 'temporarily_unavailable':
+      return new GoogleLoginError(code, 'Google indique que la connexion est temporairement indisponible. Réessaie plus tard.');
+    default:
+      return new GoogleLoginError('oauth_error', 'Google n’a pas autorisé la connexion. Le compte choisi n’a pas été activé.');
+  }
+};
+
 /* ── la mémoire des clips : un morceau ne change pas de clip d'une
    écoute à l'autre, et on ne refait pas la recherche à chaque ouverture du
    lecteur. Une heure suffit — et un « pas de clip » se retente plus tard,
@@ -137,6 +170,7 @@ export class YouTubeService {
   private expiredNotified = false;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private cancelLogin: (() => void) | null = null;
+  private loginState: GoogleLoginState = { phase: 'idle' };
   private operations = new Set<AbortController>();
   private restoreWarning = '';
   private abortOperations(): void { this.operations.forEach((c) => c.abort()); this.operations.clear(); }
@@ -192,6 +226,15 @@ export class YouTubeService {
   public accountId(): string | null { return this.owner; }
   public sessionRevision(): number { return this.serial; }
   public getRestoreWarning(): string { return this.restoreWarning; }
+  public getLoginState(): GoogleLoginState { return this.loginState; }
+  private setLoginState(state: GoogleLoginState): void {
+    this.loginState = state;
+    window.dispatchEvent(new CustomEvent('sb:google-login-state'));
+  }
+  public cancelPendingLogin(): void { this.cancelLogin?.(); }
+  public dismissLoginError(): void {
+    if (!this.cancelLogin && this.loginState.phase === 'error') this.setLoginState({ phase: 'idle' });
+  }
   private assertSession(token: string | null, serial: number, scopeRevision: number): void {
     if (!token || token !== this.accessToken || serial !== this.serial || scopeRevision !== accountRevision() || !this.isAuthenticated()) {
       throw new Error('La session Google a changé ou a expiré pendant cette opération. Reconnecte-toi et réessaie.');
@@ -204,15 +247,21 @@ export class YouTubeService {
     const { resp, data } = await fetchLibrary('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
     });
-    if (!resp.ok || typeof data?.id !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(data.id)) {
-      throw new Error('Impossible de vérifier l’identité Google. Aucune donnée n’a été envoyée : reconnecte-toi et réessaie.');
+    if (!resp.ok) {
+      throw new Error(`Impossible de vérifier l’identité Google (HTTP ${resp.status}). Le compte choisi n’a pas été activé.`);
+    }
+    if (typeof data?.id !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(data.id)) {
+      throw new Error('Impossible de vérifier l’identité Google : identifiant de compte absent ou invalide. Le compte choisi n’a pas été activé.');
     }
     return { id: data.id, profile: {
       name: data.name || 'Compte Google', email: data.email || '', avatarUrl: data.picture || '',
     } };
   }
-  private activate(token: string, expiresAt: number, id: string, profile: UserProfile): void {
+  private activate(token: string, expiresAt: number, id: string, profile: UserProfile, attempt: number): boolean {
     window.dispatchEvent(new CustomEvent('sb:auth-changing'));
+    // Un écouteur peut déconnecter ou annuler pendant cet événement
+    // synchrone : ne pas réactiver un compte après cette décision.
+    if (attempt !== this.attempt) return false;
     this.serial++; this.abortOperations();
     playlistTracksCache.clear();
     this.owner = id; this.profile = profile; this.accessToken = token; this.expiresAt = expiresAt;
@@ -223,11 +272,14 @@ export class YouTubeService {
     // réapparaître dans un nouvel onglet à la place du compte choisi.
     try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); localStorage.removeItem(USER_KEY); } catch { /* ignore */ }
     window.dispatchEvent(new CustomEvent('sb:auth-changed'));
+    return true;
   }
 
   /** Mise à jour depuis l'ancien jeton partagé : on vérifie d'abord son
       identité. Les données historiques sans compte restent séparées. */
   public async restoreLegacySession(): Promise<boolean> {
+    // Une restauration ne doit pas invalider une fenêtre Google déjà ouverte.
+    if (this.cancelLogin) return false;
     if (this.owner) return this.isAuthenticated();
     let token: string | null = null, expiresAt = 0;
     try { token = localStorage.getItem(TOKEN_KEY); expiresAt = Number(localStorage.getItem(TOKEN_EXP_KEY)); } catch { return false; }
@@ -244,7 +296,7 @@ export class YouTubeService {
         this.restoreWarning = 'L’ancienne session Google a expiré pendant sa vérification : reconnecte ton compte.';
         return false;
       }
-      this.activate(token, expiresAt, verified.id, verified.profile);
+      if (!this.activate(token, expiresAt, verified.id, verified.profile, attempt)) return false;
       try {
         if (localStorage.getItem(TOKEN_KEY) === token) {
           localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_EXP_KEY); localStorage.removeItem(USER_KEY);
@@ -262,45 +314,103 @@ export class YouTubeService {
     // tentative seulement. Aucun callback de préparation ne peut connecter.
   }
   public login(clientId?: string): Promise<string> {
-    this.cancelLogin?.();
+    // Ne pas ouvrir une seconde fenêtre ni invalider silencieusement la
+    // première tentative en cas de double clic ou de changement de vue.
+    if (this.cancelLogin) return Promise.reject(new GoogleLoginError('already_pending', 'Une connexion Google est déjà en cours.'));
     const attempt = ++this.attempt;
     return new Promise((resolve, reject) => {
       let settled = false;
-      let timer: ReturnType<typeof setTimeout>;
-      const finish = (error?: Error, token?: string) => {
+      let responseStarted = false;
+      let popupReportedClosed = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (error?: GoogleLoginError, token?: string) => {
         if (settled) return;
-        settled = true; clearTimeout(timer); this.cancelLogin = null;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (this.cancelLogin === cancel) this.cancelLogin = null;
+        this.setLoginState(error ? { phase: 'error', code: error.code, message: error.message } : { phase: 'idle' });
         if (error) reject(error); else resolve(token!);
       };
-      this.cancelLogin = () => finish(new Error('La connexion a été interrompue.'));
-      const effectiveClientId = clientId || getStoredSettings().googleClientId;
-      if (!window.google?.accounts?.oauth2) { finish(new Error("La fenêtre Google n'est pas encore prête. Vérifie ta connexion, puis réessaie.")); return; }
-      if (!effectiveClientId) { finish(new Error("Cette installation n'a pas d'identifiant Google : la connexion ne peut pas s'ouvrir.")); return; }
-      timer = setTimeout(() => finish(new Error('La connexion a été interrompue avant la fin. Réessaie.')), 90000);
+      const cancel = () => {
+        if (!settled && attempt === this.attempt) this.attempt++;
+        finish(new GoogleLoginError('cancelled', 'Connexion annulée. Si la fenêtre Google est encore ouverte, ferme-la.'));
+      };
+      this.cancelLogin = cancel;
       try {
+        const effectiveClientId = clientId || getStoredSettings().googleClientId;
+        if (typeof window.google?.accounts?.oauth2?.initTokenClient !== 'function') {
+          finish(new GoogleLoginError('script_unavailable', "La connexion Google n'est pas encore prête. Vérifie ta connexion, puis réessaie.")); return;
+        }
+        if (!effectiveClientId) {
+          finish(new GoogleLoginError('client_missing', "Cette installation n'a pas d'identifiant Google : la connexion ne peut pas s'ouvrir.")); return;
+        }
+        this.setLoginState({ phase: 'waiting' });
+        if (settled || attempt !== this.attempt) return;
+        timer = setTimeout(() => finish(new GoogleLoginError(
+          popupReportedClosed ? 'popup_closed' : 'timeout',
+          popupReportedClosed
+            ? 'Google a signalé la fermeture de la fenêtre, mais aucune réponse n’est arrivée. Réessaie.'
+            : 'Google n’a pas répondu à temps. Ferme sa fenêtre si elle est encore ouverte, puis réessaie.',
+        )), 180000);
         const client = window.google.accounts.oauth2.initTokenClient({
           client_id: effectiveClientId, scope: SCOPE_YOUTUBE,
           callback: async (resp: any) => {
+            if (settled || responseStarted || attempt !== this.attempt) return;
+            responseStarted = true;
+            // Le délai de la fenêtre ne doit pas interrompre un résultat
+            // déjà reçu : la vérification du profil a son propre délai.
+            if (timer) { clearTimeout(timer); timer = undefined; }
+            if (!resp || typeof resp !== 'object') {
+              finish(new GoogleLoginError('invalid_response', 'Google a renvoyé une réponse de connexion invalide. Réessaie.')); return;
+            }
+            if (resp.error) { finish(googleOAuthError(resp.error)); return; }
+            if (typeof resp.access_token !== 'string' || !resp.access_token.trim()) {
+              finish(new GoogleLoginError('token_missing', "Google n'a pas renvoyé de jeton d'accès. Réessaie.")); return;
+            }
+            this.setLoginState({ phase: 'verifying' });
             if (settled || attempt !== this.attempt) return;
-            if (resp.error || !resp.access_token) { finish(new Error(resp.error_description || resp.error || "Google n'a pas renvoyé de jeton d'accès.")); return; }
             try {
               // expires_in commence à la réception du jeton, pas après la
               // lecture du profil qui peut prendre plusieurs secondes.
               const seconds = Number(resp.expires_in);
-              if (!Number.isFinite(seconds) || seconds <= 0) throw new Error('Google a renvoyé un jeton expiré ou sans durée fiable.');
+              if (!Number.isFinite(seconds) || seconds <= 0) throw new GoogleLoginError('invalid_expiry', 'Google a renvoyé un jeton expiré ou sans durée fiable.');
               const expiresAt = Date.now() + seconds * 1000;
-              if (!Number.isFinite(expiresAt)) throw new Error('Google a renvoyé un jeton expiré ou sans durée fiable.');
+              if (!Number.isFinite(expiresAt)) throw new GoogleLoginError('invalid_expiry', 'Google a renvoyé un jeton expiré ou sans durée fiable.');
               const verified = await this.verifiedProfile(resp.access_token);
               if (settled || attempt !== this.attempt) return;
-              if (expiresAt <= Date.now()) throw new Error('Le jeton Google a expiré pendant la vérification. Reconnecte-toi.');
-              this.activate(resp.access_token, expiresAt, verified.id, verified.profile);
+              if (expiresAt <= Date.now()) throw new GoogleLoginError('token_expired', 'Le jeton Google a expiré pendant la vérification. Reconnecte-toi.');
+              if (!this.activate(resp.access_token, expiresAt, verified.id, verified.profile, attempt)) {
+                finish(new GoogleLoginError('session_changed', 'La session a changé pendant la connexion. Recommence si nécessaire.'));
+                return;
+              }
               finish(undefined, resp.access_token);
-            } catch (e) { finish(e instanceof Error && /identité Google|jeton.*expiré|jeton.*durée/.test(e.message) ? e : new Error('Impossible de vérifier l’identité Google. Aucune donnée n’a été envoyée : reconnecte-toi et réessaie.')); }
+            } catch (e) {
+              if (e instanceof GoogleLoginError) finish(e);
+              else finish(new GoogleLoginError('profile_check', e instanceof Error && e.message.startsWith('Impossible de vérifier l’identité Google')
+                ? e.message : 'Impossible de vérifier l’identité Google (réseau ou délai). Le compte choisi n’a pas été activé.'));
+            }
           },
-          error_callback: () => finish(new Error('La connexion Google a été interrompue. Réessaie.')),
+          error_callback: (error: any) => {
+            if (settled || responseStarted || attempt !== this.attempt) return;
+            if (error?.type === 'popup_closed') {
+              // GIS peut signaler une fermeture avant de livrer la réponse :
+              // ne pas la rejeter. L'annulation explicite et le délai bornent
+              // l'attente ; toute réponse après annulation est ignorée.
+              popupReportedClosed = true;
+              this.setLoginState({ phase: 'window-closed' });
+              return;
+            }
+            if (error?.type === 'popup_failed_to_open') {
+              finish(new GoogleLoginError('popup_failed_to_open', 'La fenêtre Google n’a pas pu s’ouvrir. Autorise les fenêtres pour ce site, puis réessaie.')); return;
+            }
+            finish(new GoogleLoginError('google_error', 'Google a signalé une erreur de connexion. Réessaie.'));
+          },
         });
-        client.requestAccessToken({ prompt: 'consent' });
-      } catch { finish(new Error('Impossible d’ouvrir la connexion Google. Réessaie.')); }
+        // Aucun await avant cet appel : la fenêtre reste liée au clic réel.
+        if (!settled && attempt === this.attempt) client.requestAccessToken({ prompt: 'consent' });
+      } catch {
+        finish(new GoogleLoginError('opening_failed', 'Impossible d’ouvrir la connexion Google. Réessaie.'));
+      }
     });
   }
   public async jeton(): Promise<string | null> { return this.getAccessToken(); }

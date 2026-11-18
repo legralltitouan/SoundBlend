@@ -26,10 +26,10 @@ async function run(kind){
  }else{
   await p.getByRole('button',{name:'Connecter mon compte',exact:true}).click();
   if(kind==='missing'){
-   await p.getByText(/jeton expiré ou sans durée fiable/i).waitFor();
+   await p.locator('.sb-google-status').getByText(/jeton expiré ou sans durée fiable/i).waitFor();
    check(!calls.includes('profil')&&!calls.includes('drive')&&await p.evaluate(async()=> (await import('/src/services/accountScope.ts')).accountScope())===null,'durée absente : connexion refusée sans activation ni synchronisation');
   }else if(kind==='during'){
-   await p.getByText(/jeton Google a expiré pendant la vérification/i).waitFor();
+   await p.locator('.sb-google-status').getByText(/jeton Google a expiré pendant la vérification/i).waitFor();
    check(calls.includes('profil')&&!calls.includes('drive')&&await p.evaluate(async()=> (await import('/src/services/accountScope.ts')).accountScope())===null,'jeton expiré pendant le profil : aucune activation ni synchronisation');
   }else{
    await p.getByRole('button',{name:'Se déconnecter'}).waitFor();

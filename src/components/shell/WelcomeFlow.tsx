@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Check, Loader2, Moon, Sun } from 'lucide-react';
 import { useUI } from '../../context/UIContext';
 import { useData } from '../../context/DataContext';
+import { GoogleLoginStatus } from '../ui/GoogleLoginStatus';
 
 /* ═══════════════════════════════════════════════════════════════
    Accueil de première visite — trois temps, une seule décision
@@ -18,9 +19,8 @@ const THEMES = [
 
 export const WelcomeFlow: React.FC = () => {
   const { mode, setMode, finishOnboarding, showToast } = useUI();
-  const { isAuthenticated, accountKnown, authReady, login, userProfile, settings, saveSettings } = useData();
+  const { isAuthenticated, accountKnown, authReady, googleLoginPending, login, cancelGoogleLogin, userProfile, settings, saveSettings } = useData();
   const [step, setStep] = useState(0);
-  const [busy, setBusy] = useState(false);
   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
   useEffect(() => setGeminiKey(settings.geminiApiKey || ''), [settings.geminiApiKey, accountKnown]);
 
@@ -39,10 +39,8 @@ export const WelcomeFlow: React.FC = () => {
   };
 
   const connect = async () => {
-    setBusy(true);
     try { await login(); }
     catch (e) { showToast(e instanceof Error ? e.message : 'Connexion impossible.'); }
-    finally { setBusy(false); }
   };
 
   return (
@@ -62,6 +60,7 @@ export const WelcomeFlow: React.FC = () => {
           <span>SoundBlend</span>
         </div>
 
+        <GoogleLoginStatus />
         <AnimatePresence mode="wait">
           {/* ─────────── 1. le thème ─────────── */}
           {step === 0 && (
@@ -200,18 +199,18 @@ export const WelcomeFlow: React.FC = () => {
                   <Check size={16} className="welcome-ok" />
                 </div>
               ) : (
-                <button className="welcome-google" onClick={() => void connect()} disabled={busy || !authReady}>
-                  {busy ? <Loader2 size={17} className="anim-spin" /> : <GoogleGlyph />}
-                  {busy ? 'Connexion en cours…' : 'Se connecter avec Google'}
+                <button className="welcome-google" onClick={() => void connect()} disabled={googleLoginPending || !authReady}>
+                  {googleLoginPending ? <Loader2 size={17} className="anim-spin" /> : <GoogleGlyph />}
+                  {googleLoginPending ? 'Connexion en cours…' : 'Se connecter avec Google'}
                 </button>
               )}
 
               <div className="welcome-actions">
-                <button className="welcome-cta" onClick={next}>
+                <button className="welcome-cta" onClick={() => { if (googleLoginPending) cancelGoogleLogin(); next(); }}>
                   {isAuthenticated ? 'Continuer' : 'Plus tard'} <ArrowRight size={17} />
                 </button>
                 {step > 0 && (
-                  <button className="welcome-back" onClick={() => setStep((s) => s - 1)}>
+                  <button className="welcome-back" onClick={() => { if (googleLoginPending) cancelGoogleLogin(); setStep((s) => s - 1); }}>
                     Retour
                   </button>
                 )}

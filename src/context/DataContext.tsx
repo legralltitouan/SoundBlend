@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState, useCall
 import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile, Exclusions } from '../types';
 import { sameTrack, trackKey } from '../lib/track';
 import { clientIdGoogle } from '../config/app';
-import { youtubeService } from '../services/youtube';
+import { youtubeService, type GoogleLoginState } from '../services/youtube';
 import { accountRevision, assertAccountRevision } from '../services/accountScope';
 import { geminiService } from '../services/gemini';
 import { uniqueTracks } from '../lib/dedupe';
@@ -23,7 +23,11 @@ interface DataContextType {
   authReady: boolean;
   authNotice: string;
   userProfile: UserProfile | null;
+  googleLoginState: GoogleLoginState;
+  googleLoginPending: boolean;
   login: () => Promise<void>;
+  cancelGoogleLogin: () => void;
+  dismissGoogleLoginError: () => void;
   logout: () => void;
 
   playlists: Playlist[];
@@ -73,6 +77,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authReady, setAuthReady] = useState(false);
   const [authNotice, setAuthNotice] = useState('');
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => youtubeService.getUserProfile());
+  const [googleLoginState, setGoogleLoginState] = useState<GoogleLoginState>(() => youtubeService.getLoginState());
+  const googleLoginPending = googleLoginState.phase !== 'idle' && googleLoginState.phase !== 'error';
+  useEffect(() => {
+    const update = () => setGoogleLoginState(youtubeService.getLoginState());
+    window.addEventListener('sb:google-login-state', update);
+    update();
+    return () => window.removeEventListener('sb:google-login-state', update);
+  }, []);
 
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loadingLibrary, setLoadingLibrary] = useState<boolean>(true);
@@ -225,11 +237,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = useCallback(async () => {
-    await youtubeService.login(clientIdGoogle(settings.googleClientId));
+    // L'appel au service reste synchrone avec le clic ; aucun chargement
+    // préalable ne doit faire bloquer la fenêtre par le navigateur.
+    const token = await youtubeService.login(clientIdGoogle(settings.googleClientId));
+    if (!youtubeService.isAuthenticated() || youtubeService.getAccessToken() !== token) {
+      throw new Error('La session Google a changé pendant la connexion. Recommence si nécessaire.');
+    }
     setAuthNotice(''); setIsAuthenticated(true); setAccountKnown(true); setUserProfile(youtubeService.getUserProfile());
     void syncNow();
     await loadLibrary();
   }, [settings.googleClientId, loadLibrary, syncNow]);
+  const cancelGoogleLogin = useCallback(() => { youtubeService.cancelPendingLogin(); }, []);
+  const dismissGoogleLoginError = useCallback(() => { youtubeService.dismissLoginError(); }, []);
   const logout = useCallback(() => { youtubeService.logout(); }, []);
 
   const saveSettings = useCallback((s: AppSettings) => {
@@ -366,7 +385,11 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       authReady,
       authNotice,
       userProfile,
+      googleLoginState,
+      googleLoginPending,
       login,
+      cancelGoogleLogin,
+      dismissGoogleLoginError,
       logout,
       playlists,
       loadingLibrary,
@@ -397,7 +420,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       syncNow,
     }),
     [
-      settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, login, logout, playlists, loadingLibrary,
+      settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, googleLoginState, googleLoginPending,
+      login, cancelGoogleLogin, dismissGoogleLoginError, logout, playlists, loadingLibrary,
       libraryError, loadLibrary, loadPlaylistTracks, refreshLibrary, selectedTracks, toggleTrack,
       removeTrack, clearSelection, isSelected, currentBlend, setCurrentBlend, updateBlend,
       recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generatingLog, generate, exclusions, blockTrack, unblockExclusion,
