@@ -33,14 +33,20 @@
    ═══════════════════════════════════════════════════════════════ */
 
 /**
- * Configuration Gemini héritée — laisser vide dans une distribution.
- * Toute clé écrite ici serait incluse dans le JavaScript public du site,
- * exposée à tous ses visiteurs et utilisable à leurs frais ou selon ses
- * quotas. Ne pas mettre de clé personnelle dans le code ou le dépôt.
+ * La clé Gemini de l'application — facultative.
  *
- * Laisser vide et saisir sa propre clé dans Réglages si nécessaire. Elle
- * reste en clair dans le navigateur et peut être synchronisée dans le
- * fichier privé appDataFolder du compte Drive ; voir le README.
+ * Remplie, **personne n'a plus rien à saisir** : l'app s'en sert pour tout
+ * le monde, et l'IA fonctionne dès la première ouverture. C'est ce qui se
+ * rapproche le plus de « l'utilisateur ne fait rien ».
+ *
+ * Le prix à payer, et il faut le dire clairement : une clé de site web est
+ * publique par nature, et la consommation de tout le monde passe sur ce
+ * compte-là. À ton échelle (une offre gratuite, des quotas par jour et par
+ * modèle), c'est indolore. Si l'app s'ouvre à beaucoup de monde, il
+ * faudra une facturation — ou revenir à « chacun met sa clé ».
+ *
+ * Laissée vide, c'est la clé saisie par la personne qui sert (ou, à
+ * défaut, le blend par voisinage).
  */
 export const GEMINI_API_KEY = '';
 
@@ -51,11 +57,5 @@ export const GOOGLE_CLIENT_ID = '449975100236-jv09mmj5b3gp7tj93dec3liu736rnmgu.a
  * L'ID client à utiliser : celui du code s'il est rempli, sinon celui
  * qu'une ancienne version avait enregistré dans le navigateur.
  */
-export const clientIdGoogle = (valeurAncienne?: string): string => {
-  // L'ID OAuth est une configuration publique de l'installation, pas une
-  // donnée privée du compte. Une ancienne installation personnalisée peut
-  // le retrouver même après sélection d'un espace de compte vierge.
-  let legacy = '';
-  try { legacy = JSON.parse(localStorage.getItem('soundblend_settings') || '{}').googleClientId || ''; } catch { /* ignore */ }
-  return GOOGLE_CLIENT_ID.trim() || (valeurAncienne || '').trim() || String(legacy).trim();
-};
+export const clientIdGoogle = (valeurAncienne?: string): string =>
+  GOOGLE_CLIENT_ID.trim() || (valeurAncienne || '').trim();

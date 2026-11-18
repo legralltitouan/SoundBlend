@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Play, Plus, RefreshCw, ChevronRight, LogIn, Sparkles, ListMusic } from 'lucide-react';
+import { Play, Plus, RefreshCw, ChevronRight, LogIn, Sparkles } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { Art, PlaylistArt } from '../ui/Art';
 import { useUI } from '../../context/UIContext';
@@ -19,16 +19,11 @@ import { NoiseBackground } from '@/components/ui/noise-background';
 export const LibraryView: React.FC = () => {
   const {
     playlists, loadingLibrary, libraryError, loadPlaylistTracks,
-    currentBlend, recentBlends, refreshLibrary, isAuthenticated, googleLoginPending, login, userProfile,
+    currentBlend, recentBlends, refreshLibrary, isAuthenticated, login, userProfile,
     setCurrentBlend,
   } = useData();
   const { openModal, setView, showToast } = useUI();
   const { playTrack } = usePlayer();
-  const connect = () => {
-    // Le service est appelé immédiatement dans le clic, puis son rejet est
-    // traité : ni popup bloquée par un await, ni promesse non gérée.
-    void login().catch((e) => showToast(e instanceof Error ? e.message : 'Connexion impossible.'));
-  };
 
   /* Le blend affiché est celui qu'on a ouvert ; à défaut, le plus récent
      réellement enregistré sur l'appareil (même source que « Mes blends »). */
@@ -90,8 +85,8 @@ export const LibraryView: React.FC = () => {
             </button>
           </NoiseBackground>
           {!isAuthenticated && (
-            <button className="sb-link-login" onClick={connect} disabled={googleLoginPending}>
-              <LogIn size={14} strokeWidth={2} /> {googleLoginPending ? 'Connexion en cours…' : 'Connecter mon compte'}
+            <button className="sb-link-login" onClick={login}>
+              <LogIn size={14} strokeWidth={2} /> Connecter mon compte
             </button>
           )}
         </div>
@@ -111,8 +106,7 @@ export const LibraryView: React.FC = () => {
         <span className="spacer" />
         <button
           className="icon-btn"
-          onClick={() => { if (isAuthenticated) void refreshLibrary(); else connect(); }}
-          disabled={googleLoginPending}
+          onClick={() => (isAuthenticated ? refreshLibrary() : login())}
           aria-label="Rafraîchir"
           title={isAuthenticated ? 'Resynchroniser' : 'Connecter mon compte'}
         >
@@ -189,19 +183,15 @@ export const LibraryView: React.FC = () => {
           </button>
         ))}
 
-        {!loadingLibrary && playlists.length === 0 && (isAuthenticated ? (
-          <div className="sb-tile sb-tile--empty">
-            <span className="sb-tile-art sb-tile-art--empty"><ListMusic size={26} strokeWidth={1.6} /></span>
-            <span className="sb-tile-title">Aucune playlist YouTube</span>
-            <span className="sb-tile-sub">Ce compte n’en a pas renvoyé</span>
-          </div>
-        ) : (
-          <button className="sb-tile sb-tile--empty" onClick={connect} disabled={googleLoginPending}>
-            <span className="sb-tile-art sb-tile-art--empty"><LogIn size={26} strokeWidth={1.6} /></span>
+        {!loadingLibrary && playlists.length === 0 && (
+          <button className="sb-tile sb-tile--empty" onClick={login}>
+            <span className="sb-tile-art sb-tile-art--empty">
+              <LogIn size={26} strokeWidth={1.6} />
+            </span>
             <span className="sb-tile-title">Connecter YouTube</span>
             <span className="sb-tile-sub">Importer tes playlists</span>
           </button>
-        ))}
+        )}
       </div>
 
       {/* ─────────── dernier blend ─────────── */}

@@ -99,12 +99,6 @@ try {
   await page.locator('.sb-play-badge').first().waitFor();
   await page.locator('.sb-play-badge').first().click({force:true});
   await page.waitForFunction(()=>!!window.__fake.audio && window.__fake.audio.getPlayerState()===1);
-  // Le lecteur peut démarrer avant la fin de l'entrée animée de la barre.
-  // Un clic forcé pendant sa translation viserait hors de la fenêtre.
-  await page.waitForFunction(()=>{
-    const el=document.querySelector('.nowbar-track');if(!el)return false;
-    const r=el.getBoundingClientRect();return r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight&&r.left>=0&&r.right<=innerWidth;
-  },null,{timeout:10000});
   await page.locator('.nowbar-track').click({force:true});
   await page.locator('.nowplaying').waitFor();
   await page.waitForTimeout(500);

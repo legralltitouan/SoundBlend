@@ -8,7 +8,7 @@ const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, se
 const headers = { 'content-type': 'application/json', 'access-control-allow-origin': '*' };
 await ctx.addInitScript(() => { localStorage.setItem('soundblend_onboarded', '1'); });
 await ctx.route('https://accounts.google.com/**', r => r.fulfill({ status: 200, contentType: 'application/javascript', body: `window.google={accounts:{oauth2:{initTokenClient:(o)=>({requestAccessToken:()=>setTimeout(()=>o.callback({access_token:'simule',expires_in:3600}),10)}),revoke:(_t,cb)=>cb()}}};` }));
-  await ctx.route('https://www.googleapis.com/oauth2/**', r => r.fulfill({ status: 200, headers, body: JSON.stringify({ id: 'google-avatar', name: 'Alex Test', email: 'test@example.test', picture: 'https://example.test/avatar.png' }) }));
+await ctx.route('https://www.googleapis.com/oauth2/**', r => r.fulfill({ status: 200, headers, body: JSON.stringify({ name: 'Alex Test', email: 'test@example.test', picture: 'https://example.test/avatar.png' }) }));
 await ctx.route('https://www.googleapis.com/youtube/v3/**', r => r.fulfill({ status: 200, headers, body: '{"items":[]}' }));
 await ctx.route(/https:\/\/www\.googleapis\.com\/(drive|upload\/drive)\//, r => {
   const u = new URL(r.request().url());
@@ -34,13 +34,10 @@ await p.getByRole('button', { name: 'Connecter mon compte', exact: true }).waitF
 check(await p.locator('.ytm-mobile-bar [aria-label="Réglages du compte"]').getAttribute('title') === 'Réglages et connexion', 'avatar remis à l’état déconnecté sans rechargement');
 await p.getByRole('button', { name: 'Afficher la liste des exclusions' }).click();
 await p.getByRole('tab', { name: /Artistes/ }).click();
-check(await p.getByRole('button', { name: 'Débloquer Artiste test' }).count() === 0, 'exclusion du compte masquée après déconnexion, espace local séparé');
+check(await p.getByRole('button', { name: 'Débloquer Artiste test' }).isVisible(), 'exclusion locale conservée après déconnexion');
 await p.keyboard.press('Escape');
 await p.getByRole('button', { name: 'Connecter mon compte', exact: true }).click();
 await p.getByRole('button', { name: 'Se déconnecter' }).waitFor();
-await p.getByRole('button', { name: 'Afficher la liste des exclusions' }).click();
-await p.getByRole('tab', { name: /Artistes/ }).click();
-check(await p.getByRole('button', { name: 'Débloquer Artiste test' }).isVisible(), 'exclusion retrouvée en reconnectant le même compte');
 check(errors.length === 0, `reconnexion sans exception JavaScript (${errors.join('; ')})`);
 console.log(`\n${n}/${n} contrôles connexion/avatar réussis (services simulés).`);
 await browser.close();

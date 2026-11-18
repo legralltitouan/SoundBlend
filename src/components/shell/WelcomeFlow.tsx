@@ -1,9 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Check, Loader2, Moon, Sun } from 'lucide-react';
 import { useUI } from '../../context/UIContext';
 import { useData } from '../../context/DataContext';
-import { GoogleLoginStatus } from '../ui/GoogleLoginStatus';
 
 /* ═══════════════════════════════════════════════════════════════
    Accueil de première visite — trois temps, une seule décision
@@ -18,29 +17,29 @@ const THEMES = [
 ];
 
 export const WelcomeFlow: React.FC = () => {
-  const { mode, setMode, finishOnboarding, showToast } = useUI();
-  const { isAuthenticated, accountKnown, authReady, googleLoginPending, login, cancelGoogleLogin, userProfile, settings, saveSettings } = useData();
+  const { mode, setMode, finishOnboarding } = useUI();
+  const { isAuthenticated, login, userProfile, settings, saveSettings } = useData();
   const [step, setStep] = useState(0);
+  const [busy, setBusy] = useState(false);
   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
-  useEffect(() => setGeminiKey(settings.geminiApiKey || ''), [settings.geminiApiKey, accountKnown]);
 
-  /* quatre temps : le thème local, le compte, la clé du compte, c'est parti */
+  /* quatre temps : le thème, la clé, le compte, c'est parti */
   const next = () => setStep((s) => Math.min(3, s + 1));
 
   /* la clé n'est enregistrée que si elle a changé : on ne réécrit pas
      les réglages pour rien, et un champ laissé vide n'efface pas une clé
      déjà saisie dans Réglages */
   const saveKey = () => {
-    try {
-      const k = geminiKey.trim();
-      if (k && k !== settings.geminiApiKey) saveSettings({ ...settings, geminiApiKey: k });
-      next();
-    } catch (e) { showToast(e instanceof Error ? e.message : 'Clé non enregistrée.'); }
+    const k = geminiKey.trim();
+    if (!k || k === settings.geminiApiKey) return;
+    saveSettings({ ...settings, geminiApiKey: k });
   };
 
-  const connect = async () => {
-    try { await login(); }
-    catch (e) { showToast(e instanceof Error ? e.message : 'Connexion impossible.'); }
+  const connect = () => {
+    setBusy(true);
+    login();
+    /* la fenêtre Google prend la main ; si elle est refusée on reste ici */
+    window.setTimeout(() => setBusy(false), 2500);
   };
 
   return (
@@ -60,7 +59,6 @@ export const WelcomeFlow: React.FC = () => {
           <span>SoundBlend</span>
         </div>
 
-        <GoogleLoginStatus />
         <AnimatePresence mode="wait">
           {/* ─────────── 1. le thème ─────────── */}
           {step === 0 && (
@@ -116,7 +114,7 @@ export const WelcomeFlow: React.FC = () => {
               sert — pas dans un écran de réglages qu'on découvre trois
               jours plus tard. Facultatif : sans clé, l'app compose par
               voisinage et le dit. */}
-          {step === 2 && (
+          {step === 1 && (
             <motion.section
               key="keys"
               initial={{ opacity: 0, y: 14 }}
@@ -127,8 +125,8 @@ export const WelcomeFlow: React.FC = () => {
               <h1 className="welcome-title">La clé qui compose.</h1>
               <p className="welcome-sub">
                 SoundBlend utilise Gemini pour analyser tes amorces et choisir les morceaux.
-                {accountKnown ? ' Ta clé est stockée en clair sur cet appareil et dans le fichier privé SoundBlend de ton Drive ; elle n’est pas chiffrée par l’application.' : ' Ta clé est stockée en clair dans l’espace local de ce navigateur.'}
-                {' '}Facultative : sans elle, l’app compose par voisinage et le dit.
+                Ta clé reste dans ce navigateur — elle n’est envoyée qu’à Google.
+                Facultative : sans elle, l’app compose par voisinage et le dit.
               </p>
 
               <label className="welcome-field">
@@ -154,7 +152,7 @@ export const WelcomeFlow: React.FC = () => {
               </p>
 
               <div className="welcome-actions">
-                <button className="welcome-cta" onClick={saveKey}>
+                <button className="welcome-cta" onClick={() => { saveKey(); next(); }}>
                   {geminiKey.trim() ? 'Continuer' : 'Plus tard'} <ArrowRight size={17} />
                 </button>
                 <button className="welcome-back" onClick={() => setStep((s) => s - 1)}>Retour</button>
@@ -163,7 +161,7 @@ export const WelcomeFlow: React.FC = () => {
           )}
 
           {/* ─────────── 3. le compte ─────────── */}
-          {step === 1 && (
+          {step === 2 && (
             <motion.section
               key="account"
               initial={{ opacity: 0, y: 14 }}
@@ -178,8 +176,8 @@ export const WelcomeFlow: React.FC = () => {
               </p>
               <p className="welcome-note welcome-note--tight">
                 La synchro ne touche à rien de ton Drive : elle range un seul petit fichier
-                dans un espace privé que Google réserve à SoundBlend. Les anciennes données
-                locales, y compris le thème, restent séparées et ne sont pas importées automatiquement.
+                dans un espace privé que Google réserve à SoundBlend. Tu ne le vois pas,
+                personne d’autre ne le voit.
               </p>
               <p className="welcome-note welcome-note--tight">
                 La connexion n’est possible que si l’application a un identifiant Google
@@ -199,18 +197,18 @@ export const WelcomeFlow: React.FC = () => {
                   <Check size={16} className="welcome-ok" />
                 </div>
               ) : (
-                <button className="welcome-google" onClick={() => void connect()} disabled={googleLoginPending || !authReady}>
-                  {googleLoginPending ? <Loader2 size={17} className="anim-spin" /> : <GoogleGlyph />}
-                  {googleLoginPending ? 'Connexion en cours…' : 'Se connecter avec Google'}
+                <button className="welcome-google" onClick={connect} disabled={busy}>
+                  {busy ? <Loader2 size={17} className="anim-spin" /> : <GoogleGlyph />}
+                  {busy ? 'Connexion en cours…' : 'Se connecter avec Google'}
                 </button>
               )}
 
               <div className="welcome-actions">
-                <button className="welcome-cta" onClick={() => { if (googleLoginPending) cancelGoogleLogin(); next(); }}>
+                <button className="welcome-cta" onClick={next}>
                   {isAuthenticated ? 'Continuer' : 'Plus tard'} <ArrowRight size={17} />
                 </button>
                 {step > 0 && (
-                  <button className="welcome-back" onClick={() => { if (googleLoginPending) cancelGoogleLogin(); setStep((s) => s - 1); }}>
+                  <button className="welcome-back" onClick={() => setStep((s) => s - 1)}>
                     Retour
                   </button>
                 )}

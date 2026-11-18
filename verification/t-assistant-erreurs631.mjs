@@ -9,9 +9,8 @@ async function setup({auth=false,key='',playlists=[],onPlaylistItems,onGemini}={
  const ctx=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block'});
  await ctx.addInitScript(({auth,key})=>{
   if(localStorage.getItem('test-initialise'))return;localStorage.setItem('test-initialise','1');localStorage.setItem('soundblend_onboarded','1');
-  const prefix=auth?'soundblend_account_v1:google-assistant:':'';
-  localStorage.setItem(prefix+'soundblend_settings',JSON.stringify({googleClientId:'',youtubeApiKey:'',geminiApiKey:key}));
-  if(auth)sessionStorage.setItem('soundblend_google_session_v2',JSON.stringify({token:'ya29.fake',owner:'google-assistant',expiresAt:Date.now()+3600000,profile:{name:'Test',email:'',avatarUrl:''}}));
+  localStorage.setItem('soundblend_settings',JSON.stringify({googleClientId:'',youtubeApiKey:'',geminiApiKey:key}));
+  if(auth){localStorage.setItem('soundblend_yt_token','ya29.fake');localStorage.setItem('soundblend_yt_token_exp',String(Date.now()+3600000));localStorage.setItem('soundblend_yt_user',JSON.stringify({name:'Test'}));}
  },{auth,key});
  await ctx.route('https://accounts.google.com/**',r=>r.fulfill({status:200,contentType:'application/javascript',body:'window.google={accounts:{oauth2:{initTokenClient:()=>({})}}};'}));
  await ctx.route('https://www.youtube.com/**',r=>r.fulfill({status:200,headers:cors,body:'{}'}));
@@ -19,7 +18,7 @@ async function setup({auth=false,key='',playlists=[],onPlaylistItems,onGemini}={
  await ctx.route(/https:\/\/www\.googleapis\.com\/(drive|upload\/drive)\//,r=>{
   const u=r.request().url();if(u.includes('alt=media'))return r.fulfill({status:200,headers:cors,body:'{"schema":2,"blends":[],"exclusions":[],"decouvertes":[],"suppressionsBlends":{}}'});
   if(r.request().method()==='PATCH')return r.fulfill({status:200,headers:cors,body:'{"id":"f1"}'});
-  return r.fulfill({status:200,headers:cors,body:'{"files":[{"id":"f1","name":"soundblend.json"}]}'});
+  return r.fulfill({status:200,headers:cors,body:'{"files":[{"id":"f1"}]}'});
  });
  await ctx.route('https://www.googleapis.com/youtube/v3/**',r=>{
   const u=new URL(r.request().url());if(u.pathname.endsWith('/playlists'))return r.fulfill({status:200,headers:cors,body:JSON.stringify({items:playlists.map(p=>({id:p.id,snippet:{title:p.title,thumbnails:{}},contentDetails:{itemCount:p.count||1}}))})});
@@ -56,7 +55,7 @@ try {
   check(prompts.length===0,'aucun contexte partiel transmis à Gemini après échec de pagination');
   failing=false;await send(p,'Réessaie Chill Voiture.');await p.getByRole('region',{name:'Proposition de blend'}).waitFor({timeout:12000});
   check(prompts.some(x=>x.includes('Premier morceau')&&x.includes('Deuxième morceau')),'nouvel essai relit toutes les pages, sans mettre en cache la liste partielle');
-  await p.evaluate(()=>{const s=JSON.parse(localStorage.getItem('soundblend_account_v1:google-assistant:soundblend_settings'));s.geminiApiKey='';localStorage.setItem('soundblend_account_v1:google-assistant:soundblend_settings',JSON.stringify(s));});
+  await p.evaluate(()=>{const s=JSON.parse(localStorage.getItem('soundblend_settings'));s.geminiApiKey='';localStorage.setItem('soundblend_settings',JSON.stringify(s));});
   await p.getByRole('button',{name:'Générer ce blend'}).click();
   check(/clé Gemini.*nécessaire/i.test(await p.getByRole('alert').innerText({timeout:12000})),'erreur de génération visible après clic si la clé a disparu');
   check(await p.locator('.sb-gen').count()===0,'écran de composition retiré après l’échec');

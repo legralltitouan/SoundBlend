@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import {
   Play, Pause, Trash2, RefreshCw, Share2, ExternalLink,
-  ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass, TriangleAlert,
+  ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass,
   MoreHorizontal, ArrowRight, Download, Radio,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
@@ -12,9 +12,7 @@ import { usePlayer } from '../../context/PlayerContext';
 import { geminiService } from '../../services/gemini';
 import { dedupeTracks } from '../../lib/dedupe';
 import { youtubeService } from '../../services/youtube';
-import { getExclusions, getStoredBlends, isExcluded, isRecentlyProposed, recordDiscoveries } from '../../services/storage';
-import { accountRevision, assertAccountRevision } from '../../services/accountScope';
-import { beginExportAttempt, clearExportAttempt, exportAttemptStorageKey, getExportAttempt, parsePlaylistId, rememberExportPlaylist, type ExportAttempt } from '../../services/exportRecovery';
+import { getExclusions, isExcluded, isRecentlyProposed, recordDiscoveries } from '../../services/storage';
 import { BlockButton } from '../ui/BlockButton';
 import { useReplaceQueue } from '../../context/ReplaceQueueContext';
 import { Button, Equalizer } from '../ui';
@@ -53,24 +51,7 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
     if (blend.exportedMeta?.privacy) setPriv(blend.exportedMeta.privacy === 'private');
   }, [blend.exportedPlaylistId, blend.exportedMeta?.privacy]);
   const [exporting, setExporting] = useState(false);
-  const [recovery, setRecovery] = useState<ExportAttempt | null>(() => blend.exportedPlaylistId ? null : getExportAttempt(blend.id));
-  const [recoveryInput, setRecoveryInput] = useState('');
-  const [exported, setExported] = useState<string | null>(() => blend.exportedUrl
-    || (getExportAttempt(blend.id)?.playlistId ? `https://music.youtube.com/playlist?list=${encodeURIComponent(getExportAttempt(blend.id)!.playlistId!)}` : null));
-  const [exportWarning, setExportWarning] = useState('');
-  useEffect(() => { if (blend.exportedUrl) setExported(blend.exportedUrl); }, [blend.exportedUrl]);
-  useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== exportAttemptStorageKey(blend.id)) return;
-      const saved = getStoredBlends().find((b) => b.id === blend.id);
-      const next = saved?.exportedPlaylistId ? null : getExportAttempt(blend.id);
-      setRecovery(next);
-      if (saved?.exportedUrl) setExported(saved.exportedUrl);
-      else setExported(next?.playlistId ? `https://music.youtube.com/playlist?list=${encodeURIComponent(next.playlistId)}` : null);
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, [blend.id]);
+  const [exported, setExported] = useState<string | null>(blend.exportedUrl || null);
   const queue = useReplaceQueue();
 
   const stats = useMemo(() => {
@@ -91,7 +72,7 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
   const [updating, setUpdating] = useState(false);
   /* sans connexion Google, on ne peut pas comparer : le bouton reste caché */
   const [canSync, setCanSync] = useState(false);
-  useEffect(() => { setCanSync(isAuthenticated && youtubeService.isAuthenticated()); }, [blend.exportedPlaylistId, isAuthenticated]);
+  useEffect(() => { setCanSync(youtubeService.isAuthenticated()); }, [blend.exportedPlaylistId]);
 
   /* ═══ « Mettre à jour » : quand, et pourquoi ═══
      Avant, à chaque affichage, on relisait la playlist distante et on la
@@ -117,56 +98,63 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
   useEffect(() => {
     if (!blend.exportedPlaylistId) { setOutOfSync(false); return; }
     const ref = blend.exportedMeta;
-    // Sans référence, par exemple après un export partiel, on ne prétend
-    // pas que la playlist est à jour : l'utilisateur peut réessayer.
-    setOutOfSync(!ref || ref.sig !== signature);
+    /* pas de référence (export d'une version précédente) : on ne sait pas,
+       donc on ne réclame rien. Le premier « Mettre à jour » la posera. */
+    setOutOfSync(!!ref && ref.sig !== signature);
   }, [blend.exportedPlaylistId, blend.exportedMeta, signature]);
 
   const updateOnYT = async () => {
     const pid = blend.exportedPlaylistId;
-    if (!pid || updating || exporting) return;
-    const revision = accountRevision();
-    setUpdating(true); setExportWarning('');
+    if (!pid || updating) return;
+    setUpdating(true);
     try {
+      /* 1. le titre et la visibilité — ce que YouTube ne met jamais à jour
+            tout seul, et que le blend a pu changer */
       const ref = blend.exportedMeta;
-      // Une signature vide signifie que même les métadonnées n'ont pas
-      // été confirmées lors du précédent export partiel.
-      const renomme = !ref?.sig || ref.title.trim() !== blend.title.trim();
-      const visibilite = !ref?.sig || ref.privacy !== (priv ? 'private' : 'public');
-      if (renomme || visibilite) await youtubeService.updatePlaylistMeta(pid, { title: blend.title, privacy: priv ? 'private' : 'public' });
-      assertAccountRevision(revision);
-      const res = await youtubeService.syncPlaylist(pid, blend.tracks);
-      assertAccountRevision(revision);
-      const meta = await youtubeService.getPlaylistMeta(pid);
-      assertAccountRevision(revision);
-      if (meta.title.trim() !== blend.title.trim() || meta.privacy !== (priv ? 'private' : 'public')) {
-        throw new Error('YouTube n’a pas confirmé le titre ou la visibilité de la playlist. Vérifie puis réessaie.');
+      const renomme = !ref || ref.title.trim() !== blend.title.trim();
+      const visibilite = !ref || ref.privacy !== (priv ? 'private' : 'public');
+      let metaOk = true;
+      if (renomme || visibilite) {
+        metaOk = await youtubeService.updatePlaylistMeta(pid, {
+          title: blend.title,
+          privacy: priv ? 'private' : 'public',
+        });
       }
-      const current = getStoredBlends().find((b) => b.id === blend.id);
-      if (!current) throw new Error('Le blend a été supprimé pendant la mise à jour ; la playlist YouTube est conservée.');
-      const ids = [...new Set(blend.tracks.map((t) => t.videoId).filter(Boolean))];
-      updateBlend({ ...current, exportedMeta: {
-        sig: `${blend.title.trim()}|${priv ? 'private' : 'public'}|${ids.join(',')}`,
-        title: blend.title, privacy: priv ? 'private' : 'public', at: new Date().toISOString(),
-      } });
-      const bits = [renomme ? 'titre' : '', visibilite ? 'visibilité' : '',
+
+      /* 2. les morceaux, dans l'ordre */
+      const res = await youtubeService.syncPlaylist(pid, blend.tracks);
+
+      const ids = (blend.tracks.map((t) => t.videoId).filter(Boolean) as string[]).filter((v, i, a) => a.indexOf(v) === i);
+      updateBlend({
+        ...blend,
+        exportedMeta: {
+          sig: `${blend.title.trim()}|${priv ? 'private' : 'public'}|${ids.join(',')}`,
+          title: blend.title,
+          privacy: priv ? 'private' : 'public',
+          at: new Date().toISOString(),
+        },
+      });
+      setOutOfSync(false);
+
+      const bits = [
+        renomme && metaOk ? 'titre' : '',
+        visibilite && metaOk ? 'visibilité' : '',
         res.added ? `${res.added} ajout${res.added > 1 ? 's' : ''}` : '',
         res.removed ? `${res.removed} retrait${res.removed > 1 ? 's' : ''}` : '',
-        res.moved ? `${res.moved} déplacement${res.moved > 1 ? 's' : ''}` : ''].filter(Boolean);
-      showToast(bits.length ? `Playlist vérifiée et mise à jour : ${bits.join(', ')}.` : 'La playlist était déjà à jour.');
+        res.moved ? `${res.moved} déplacement${res.moved > 1 ? 's' : ''}` : '',
+      ].filter(Boolean);
+      if (!metaOk) showToast('Les morceaux sont à jour, mais YouTube a refusé le titre ou la visibilité.');
+      else showToast(bits.length ? `Playlist mise à jour : ${bits.join(', ')}.` : 'La playlist était déjà à jour.');
     } catch (e: any) {
-      if (revision === accountRevision()) {
-        const msg = e?.message || 'Mise à jour impossible ; la playlist peut être partiellement modifiée.';
-        setExportWarning(msg); showToast(msg);
-      }
-    } finally { if (revision === accountRevision()) setUpdating(false); }
+      showToast(e?.message || 'Mise à jour impossible.');
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const saveTitle = () => {
-    try {
-      if (title.trim() && title !== blend.title) updateBlend({ ...blend, title: title.trim() });
-      setEditing(false);
-    } catch (e) { showToast(e instanceof Error ? e.message : 'Titre non enregistré.'); }
+    setEditing(false);
+    if (title.trim() && title !== blend.title) updateBlend({ ...blend, title: title.trim() });
   };
 
   const move = (i: number, dir: -1 | 1) => {
@@ -174,14 +162,10 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
     if (j < 0 || j >= blend.tracks.length) return;
     const next = [...blend.tracks];
     [next[i], next[j]] = [next[j], next[i]];
-    try { updateBlend({ ...blend, tracks: next }); }
-    catch (e) { showToast(e instanceof Error ? e.message : 'Ordre non enregistré.'); }
+    updateBlend({ ...blend, tracks: next });
   };
 
-  const remove = (id: string) => {
-    try { updateBlend({ ...blend, tracks: blend.tracks.filter((t) => t.id !== id) }); }
-    catch (e) { showToast(e instanceof Error ? e.message : 'Retrait non enregistré.'); }
-  };
+  const remove = (id: string) => updateBlend({ ...blend, tracks: blend.tracks.filter((t) => t.id !== id) });
 
   /* ── remplacer un morceau ──────────────────────────────────────
      Le travail ne se fait plus ici : on l'empile dans la file, qui
@@ -189,7 +173,6 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
      plusieurs d'affilée, quitter le blend et revenir : l'icône tourne
      toujours et la proposition finit par arriver. */
   const replace = (track: Track) => {
-    const revision = accountRevision();
     if (!queue) return;
     if (queue.jobFor(blend.id, track.id)) return;      // déjà en file
     queue.enqueue({
@@ -197,7 +180,6 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
       trackId: track.id,
       trackTitle: track.title,
       run: async (onStep) => {
-        assertAccountRevision(revision);
         /* on transmet l'étape ET la note du moteur : le bandeau affiche
            aussi ce que le modèle a compris du contexte */
         const relay = (s: any) => onStep(s);
@@ -209,7 +191,6 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
             track, blend.tracks, blend.seedTracks, getExclusions(),
             { onStep: relay, nonce: Date.now() + attempt, instruction: blend.instruction },
           );
-          assertAccountRevision(revision);
           const note = geminiService.takeEngineNote();
           if (note) onStep(note as any);
           if (!fresh) continue;
@@ -235,112 +216,54 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
     const target = blend.tracks.find((t) => t.id === ready.trackId);
     if (target && !isExcluded(ready.result.track) && !isRecentlyProposed(ready.result.track)
       && !blend.tracks.some((t) => t.id !== target.id && (t.videoId === ready.result!.track.videoId || t.title.trim().toLowerCase() === ready.result!.track.title.trim().toLowerCase()))) {
-      try {
-        recordDiscoveries([ready.result.track]);
-        updateBlend({ ...blend, tracks: dedupeTracks(blend.tracks.map((t) => (t.id === ready.trackId ? ready.result!.track : t))) });
-        showToast(`« ${target.title} » remplacé par « ${ready.result.title} » — ${ready.result.artist}.`);
-      } catch (e) { showToast(e instanceof Error ? e.message : 'Remplacement non enregistré.'); }
+      recordDiscoveries([ready.result.track]);
+      updateBlend({
+        ...blend,
+        /* et on vérifie une dernière fois l'unicité : la liste publiée ne
+           peut pas contenir deux fois le même morceau, quel que soit le
+           chemin emprunté pour y arriver. */
+        tracks: dedupeTracks(blend.tracks.map((t) => (t.id === ready.trackId ? ready.result!.track : t))),
+      });
+      showToast(`« ${target.title} » remplacé par « ${ready.result.title} » — ${ready.result.artist}.`);
     }
     queue.consume(ready.id);
   }, [queue, blend, updateBlend, showToast]);
 
-  const saveRecoveredLink = () => {
-    if (!recovery || exporting || updating) return;
-    try {
-      const id = recovery.playlistId || parsePlaylistId(recoveryInput);
-      if (!id) throw new Error('Saisis un lien de playlist YouTube valide ou son identifiant.');
-      // Si l'écriture du blend échoue encore, garder l'identifiant connu
-      // et le lien visible pour ne pas perdre une playlist déjà créée.
-      const known = rememberExportPlaylist(recovery, id);
-      setRecovery(known);
-      const url = `https://music.youtube.com/playlist?list=${encodeURIComponent(id)}`;
-      setExported(url);
-      const current = getStoredBlends().find((b) => b.id === blend.id);
-      if (!current) throw new Error('Ce blend n’est plus disponible ; la playlist YouTube est conservée.');
-      if (current.exportedPlaylistId && current.exportedPlaylistId !== id) throw new Error('Ce blend est déjà associé à une autre playlist. Vérifie avant de continuer.');
-      updateBlend({ ...current, exportedPlaylistId: id, exportedUrl: url, exportedMeta: {
-        sig: '', title: known.title || current.title, privacy: known.privacy, at: new Date().toISOString(),
-      } });
-      try { clearExportAttempt(known); } catch { /* le lien est déjà enregistré dans le blend */ }
-      setRecovery(null);
-      setExportWarning('Lien enregistré. La playlist n’est pas encore vérifiée : utilise « Mettre à jour » pour la compléter.');
-      showToast('Lien enregistré ; la playlist reste à vérifier.');
-    } catch (e: any) {
-      const msg = e?.message || 'Impossible d’enregistrer le lien de cette playlist.';
-      setExportWarning(msg); showToast(msg);
-    }
-  };
-
-  const forgetUnknownAttempt = () => {
-    if (!recovery || recovery.playlistId || exporting || updating) return;
-    try {
-      clearExportAttempt(recovery); setRecovery(null); setExported(null);
-      setExportWarning('Si YouTube avait bien créé une playlist, un nouvel export créerait un doublon.');
-    } catch (e: any) { setExportWarning(e?.message || 'Impossible de lever le blocage.'); }
-  };
-
   const exportToYT = async () => {
-    if (!isAuthenticated) { showToast('Connecte ton compte YouTube pour exporter ce blend.'); setView('settings'); return; }
-    if (exporting || updating) return;
-    const revision = accountRevision();
-    let created = false, started = false;
-    setExporting(true); setExportWarning('');
+    if (!isAuthenticated) {
+      showToast('Connecte ton compte YouTube pour exporter ce blend.');
+      setView('settings');
+      return;
+    }
+    setExporting(true);
     try {
-      if (blend.tracks.some((t) => !t.videoId)) throw new Error('Un morceau n’a pas d’identifiant YouTube. Export impossible.');
       const desc = `Blend SoundBlend AI — amorces : ${blend.seedTracks.map((t) => t.title).join(', ')}`;
       const nom = title || blend.title;
-      // Si cette petite écriture échoue, aucun POST n'est envoyé. Si la
-      // réponse disparaît ensuite, l'intention empêche un doublon silencieux.
-      const attempt = beginExportAttempt(blend.id, nom, priv ? 'private' : 'public');
-      started = true; setRecovery(attempt);
       const id = await youtubeService.createPlaylist(nom, desc, priv);
-      assertAccountRevision(revision);
-      created = true;
-      const url = `https://music.youtube.com/playlist?list=${encodeURIComponent(id)}`;
-      // Même si un autre onglet a modifié le journal entre-temps, ne pas
-      // perdre l'URL que YouTube vient de renvoyer dans cet onglet.
-      setExported(url); setRecovery({ ...attempt, playlistId: id });
-      const known = rememberExportPlaylist(attempt, id);
-      setRecovery(known);
-      // Sauver tout de suite le lien, sans fausse signature : si un ajout
-      // échoue, la playlist créée reste accessible et peut être complétée.
-      let current = getStoredBlends().find((b) => b.id === blend.id);
-      if (!current) throw new Error('Le blend a été supprimé pendant l’export. La playlist YouTube est conservée.');
-      if (current.exportedPlaylistId && current.exportedPlaylistId !== id) throw new Error('Ce blend est déjà associé à une autre playlist. Vérifie les deux playlists.');
-      updateBlend({ ...current, exportedPlaylistId: id, exportedUrl: url, exportedMeta: {
-        sig: '', title: nom, privacy: priv ? 'private' : 'public', at: new Date().toISOString(),
-      } });
-      try { clearExportAttempt(known); } catch { /* le lien est déjà enregistré dans le blend */ }
-      setRecovery(null);
       await youtubeService.addTracksToPlaylist(id, blend.tracks);
-      assertAccountRevision(revision);
-      const items = await youtubeService.getPlaylistItems(id);
-      assertAccountRevision(revision);
-      const ids = [...new Set(blend.tracks.map((t) => t.videoId))];
-      if (JSON.stringify(items.map((x) => x.videoId)) !== JSON.stringify(ids)) {
-        throw new Error('YouTube n’a pas confirmé le contenu et l’ordre. Vérifie la playlist puis utilise « Mettre à jour ».');
-      }
-      const meta = await youtubeService.getPlaylistMeta(id);
-      assertAccountRevision(revision);
-      if (meta.title.trim() !== nom.trim() || meta.privacy !== (priv ? 'private' : 'public')) {
-        throw new Error('YouTube n’a pas confirmé le titre ou la visibilité de la playlist. Vérifie puis réessaie.');
-      }
-      current = getStoredBlends().find((b) => b.id === blend.id);
-      if (!current) throw new Error('Le blend a été supprimé pendant l’export. La playlist YouTube est conservée.');
-      updateBlend({ ...current, exportedPlaylistId: id, exportedUrl: url, exportedMeta: {
-        sig: `${nom.trim()}|${priv ? 'private' : 'public'}|${ids.join(',')}`,
-        title: nom, privacy: priv ? 'private' : 'public', at: new Date().toISOString(),
-      } });
+      const url = `https://music.youtube.com/playlist?list=${id}`;
+      setExported(url);
+      /* la référence de ce qui vient d'être envoyé : c'est elle qui
+         empêche la fausse alerte « Mettre à jour » juste après l'export */
+      const ids = (blend.tracks.map((t) => t.videoId).filter(Boolean) as string[]).filter((v, i, a) => a.indexOf(v) === i);
+      updateBlend({
+        ...blend,
+        exportedPlaylistId: id,
+        exportedUrl: url,
+        exportedMeta: {
+          sig: `${nom.trim()}|${priv ? 'private' : 'public'}|${ids.join(',')}`,
+          title: nom,
+          privacy: priv ? 'private' : 'public',
+          at: new Date().toISOString(),
+        },
+      });
       confetti({ particleCount: 110, spread: 75, origin: { y: 0.62 }, colors: ['#7b61ff', '#0a84ff', '#f0568c'] });
-      showToast('Playlist créée et contenu vérifié sur YouTube Music.');
+      showToast('Playlist créée sur YouTube Music.');
     } catch (e: any) {
-      if (revision === accountRevision()) {
-        const msg = created ? `Playlist créée, mais export incomplet ou lien non enregistré. ${e?.message || 'Vérifie la playlist avant de réessayer.'}`
-          : started ? `Création non confirmée : YouTube a peut-être créé la playlist. Vérifie ta bibliothèque avant tout nouvel export. ${e?.message || ''}`
-            : (e?.message || 'Export impossible. Vérifie ta bibliothèque avant de recommencer.');
-        setExportWarning(msg); showToast(msg);
-      }
-    } finally { if (revision === accountRevision()) setExporting(false); }
+      showToast(e?.message || 'Export impossible.');
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -399,26 +322,20 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
               choses très différentes, dites avec deux icônes. */}
           {blend.methode && (
             <p className="sb-blend-origin" data-kind={blend.methode.kind}>
-              {blend.methode.kind === 'gemini' ? <Cpu size={13} strokeWidth={1.9} /> : <Compass size={13} strokeWidth={1.9} />}
+              {blend.methode.kind === 'gemini'
+                ? <Cpu size={13} strokeWidth={1.9} />
+                : <Compass size={13} strokeWidth={1.9} />}
               <span>
-                <b>{blend.methode.kind === 'gemini' ? 'Composé avec Gemini'
-                  : blend.methode.kind === 'mixte' ? 'Gemini et voisinage YouTube'
-                    : stats.deep + stats.fresh === 0 ? 'Piliers disponibles' : 'Composé par voisinage YouTube'}</b>
-                {blend.methode.model && <span className="sb-blend-origin-model"> {blend.methode.model}</span>}
-                {' — '}{blend.methode.detail || 'Origine de la sélection enregistrée lors de la génération.'}
+                <b>{blend.methode.kind === 'gemini' ? 'Composé par Gemini' : 'Composé par voisinage YouTube'}</b>
+                {blend.methode.kind === 'gemini' && blend.methode.model && (
+                  <span className="sb-blend-origin-model"> {blend.methode.model}</span>
+                )}
+                {' — '}
+                {blend.methode.kind === 'gemini'
+                  ? 'le modèle a choisi et justifié chaque morceau.'
+                  : 'sans IA : les artistes proches de tes piliers, aucun morceau inventé.'}
               </span>
             </p>
-          )}
-          {blend.generation?.warning && (
-            <div className="sb-blend-warning" role="status">
-              <TriangleAlert size={16} strokeWidth={1.8} aria-hidden />
-              <div>
-                <strong>{blend.generation.created.anchor + blend.generation.created.deepDive + blend.generation.created.fresh < blend.generation.target
-                  ? 'Blend incomplet' : 'Génération adaptée'}</strong>
-                <p>{blend.generation.warning}</p>
-                <small>Bilan à la création du blend ; tes modifications ultérieures ne sont pas incluses.</small>
-              </div>
-            </div>
           )}
 
           <div className="sb-blend-buttons">
@@ -432,14 +349,14 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
             {exported ? (
               <>
                 <a className="btn btn-tonal" href={exported} target="_blank" rel="noreferrer">
-                  {blend.exportedPlaylistId && blend.exportedMeta?.sig === signature ? <Check size={15} /> : <ExternalLink size={15} />} YouTube Music
+                  <Check size={15} /> YouTube Music
                 </a>
                 {(canSync && (outOfSync || updating)) && (
                   <button
                     className="btn btn-tonal sb-sync-btn"
                     data-stale="true"
                     onClick={updateOnYT}
-                    disabled={updating || exporting}
+                    disabled={updating}
                     title="Le blend a changé depuis l’export : remettre la playlist YouTube Music à jour"
                   >
                     <RefreshCw size={15} className={updating ? 'anim-spin' : ''} />
@@ -448,14 +365,14 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
                   </button>
                 )}
               </>
-            ) : !recovery || exporting ? (
+            ) : (
               <button className="btn btn-tonal" onClick={exportToYT} disabled={exporting}>
                 {exporting ? <RefreshCw size={15} className="anim-spin" /> : <Share2 size={15} />}
                 {exporting ? 'Export…' : 'Exporter'}
               </button>
-            ) : null}
+            )}
 
-            <button className="chip" disabled={exporting || updating} onClick={() => setPriv((v) => !v)} title="Visibilité de la playlist exportée">
+            <button className="chip" onClick={() => setPriv((v) => !v)} title="Visibilité de la playlist exportée">
               {priv ? <Lock size={13} strokeWidth={2} /> : <Globe size={13} strokeWidth={2} />}
               {priv ? 'Privée' : 'Publique'}
             </button>
@@ -464,27 +381,6 @@ const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
               <Pencil size={13} strokeWidth={2} /> Renommer
             </button>
           </div>
-          {exportWarning && <p className="sb-action-error" role="alert">{exportWarning}</p>}
-          {recovery && !blend.exportedPlaylistId && !exporting && (
-            <div className="sb-export-recovery">
-              {recovery.playlistId ? (
-                <>
-                  <p>La playlist existe, mais son lien n’est pas enregistré dans ce blend. Conserve le lien YouTube ci-dessus, libère de l’espace dans le navigateur, puis réessaie. Si tu fermes cet onglet et perds le lien, retrouve la playlist dans YouTube pour l’associer sans en créer une seconde.</p>
-                  <button className="btn btn-tonal btn-sm" onClick={saveRecoveredLink} disabled={updating}>Réessayer d’enregistrer le lien</button>
-                </>
-              ) : (
-                <>
-                  <p>Une création précédente n’a pas été confirmée ; elle peut encore être en cours dans un autre onglet. Attends sa fin et vérifie ta bibliothèque YouTube. Si la playlist existe, colle son lien ici : la prochaine mise à jour modifiera cette playlist, choisis donc la bonne.</p>
-                  <label htmlFor="sb-recovery-playlist">Lien ou identifiant de la playlist créée</label>
-                  <input id="sb-recovery-playlist" className="field" value={recoveryInput} onChange={(e) => setRecoveryInput(e.target.value)} placeholder="https://music.youtube.com/playlist?list=…" />
-                  <div className="sb-blend-buttons">
-                    <button className="btn btn-tonal btn-sm" onClick={saveRecoveredLink} disabled={updating}>Associer ce lien</button>
-                    <button className="btn btn-sm" onClick={forgetUnknownAttempt} disabled={updating}>J’ai vérifié : aucune playlist créée</button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
         </div>
       </motion.header>
 

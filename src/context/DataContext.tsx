@@ -2,8 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState, useCall
 import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile, Exclusions } from '../types';
 import { sameTrack, trackKey } from '../lib/track';
 import { clientIdGoogle } from '../config/app';
-import { youtubeService, type GoogleLoginState } from '../services/youtube';
-import { accountRevision, assertAccountRevision } from '../services/accountScope';
+import { youtubeService } from '../services/youtube';
 import { geminiService } from '../services/gemini';
 import { uniqueTracks } from '../lib/dedupe';
 import {
@@ -12,22 +11,15 @@ import {
   migrateLegacyData, learnDiscoveriesFromBlends,
 } from '../services/storage';
 import { MOCK_PLAYLISTS } from '../data/mockData';
-import { demarrerSync, planifierEnvoi, surveillerExpirations, surEtatSync, type EtatSync } from '../services/drive';
+import { demarrerSync, oublierSync, planifierEnvoi, surveillerExpirations, surEtatSync, type EtatSync } from '../services/drive';
 
 interface DataContextType {
   settings: AppSettings;
   saveSettings: (s: AppSettings) => void;
 
   isAuthenticated: boolean;
-  accountKnown: boolean;
-  authReady: boolean;
-  authNotice: string;
   userProfile: UserProfile | null;
-  googleLoginState: GoogleLoginState;
-  googleLoginPending: boolean;
   login: () => Promise<void>;
-  cancelGoogleLogin: () => void;
-  dismissGoogleLoginError: () => void;
   logout: () => void;
 
   playlists: Playlist[];
@@ -73,18 +65,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   migrateLegacyData();
   const [settings, setSettings] = useState<AppSettings>(getStoredSettings);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => youtubeService.isAuthenticated());
-  const [accountKnown, setAccountKnown] = useState<boolean>(() => !!youtubeService.accountId());
-  const [authReady, setAuthReady] = useState(false);
-  const [authNotice, setAuthNotice] = useState('');
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => youtubeService.getUserProfile());
-  const [googleLoginState, setGoogleLoginState] = useState<GoogleLoginState>(() => youtubeService.getLoginState());
-  const googleLoginPending = googleLoginState.phase !== 'idle' && googleLoginState.phase !== 'error';
-  useEffect(() => {
-    const update = () => setGoogleLoginState(youtubeService.getLoginState());
-    window.addEventListener('sb:google-login-state', update);
-    update();
-    return () => window.removeEventListener('sb:google-login-state', update);
-  }, []);
 
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loadingLibrary, setLoadingLibrary] = useState<boolean>(true);
@@ -95,7 +76,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [recentBlends, setRecentBlends] = useState<GeneratedBlend[]>(getStoredBlends);
 
   const [generating, setGenerating] = useState(false);
-  const generationInProgress = useRef<symbol | null>(null);
   const [generatingStatus, setGeneratingStatus] = useState('');
   const [generatingLog, setGeneratingLog] = useState<string[]>([]);
   const [exclusions, setExclusions] = useState<Exclusions>(getExclusions);
@@ -114,7 +94,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
      geste qui change les goûts (on renvoie, avec quatre secondes de
      calme), et à la déconnexion (on oublie le fichier — il reste sur le
      compte, mais cet appareil n'y touche plus). */
-  const [syncState, setSyncState] = useState<EtatSync>({ phase: 'inactif', enAttente: false });
+  const [syncState, setSyncState] = useState<EtatSync>({ phase: 'inactif' });
 
   useEffect(() => surEtatSync(setSyncState), []);
 
@@ -122,7 +102,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Aussi pour les synchronisations en arrière-plan et les expirations.
   useEffect(() => {
-    try { learnDiscoveriesFromBlends(getStoredBlends()); } catch { /* le diagnostic de stockage apparaît lors de l'action ou de la synchro */ }
+    learnDiscoveriesFromBlends(getStoredBlends());
     surveillerExpirations();
     const onSync = () => {
       const blends = getStoredBlends();
@@ -136,124 +116,116 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener('sb:sync-applied', onSync);
   }, []);
 
-  const libraryRequest = useRef(0);
-
-  // Les vues et toutes les opérations en vol repartent à zéro si le compte
-  // change ; les données de l'ancien compte restent dans son propre espace.
-  useEffect(() => {
-    const onAccount = () => {
-      libraryRequest.current++;
-      migrateLegacyData();
-      setSettings(getStoredSettings()); setRecentBlends(getStoredBlends()); setExclusions(getExclusions());
-      setSelectedTracks([]); setCurrentBlendState(null);
-      setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p }))); setLibraryError(null); setLoadingLibrary(false);
-      generationInProgress.current = null;
-      setGenerating(false); setGeneratingStatus(''); setGeneratingLog([]);
-      setIsAuthenticated(youtubeService.isAuthenticated()); setAccountKnown(!!youtubeService.accountId());
-      setUserProfile(youtubeService.getUserProfile()); setAuthNotice('');
-      surveillerExpirations();
-    };
-    const onAuth = () => {
-      setIsAuthenticated(youtubeService.isAuthenticated()); setAccountKnown(!!youtubeService.accountId());
-      setUserProfile(youtubeService.getUserProfile());
-    };
-    const onExpired = () => {
-      libraryRequest.current++; setLoadingLibrary(false); onAuth();
-      setAuthNotice('Session Google expirée. Reconnecte ce compte pour reprendre les envois en attente.');
-    };
-    window.addEventListener('sb:account-changed', onAccount);
-    window.addEventListener('sb:auth-changed', onAuth);
-    window.addEventListener('sb:auth-expired', onExpired);
-    return () => {
-      window.removeEventListener('sb:account-changed', onAccount);
-      window.removeEventListener('sb:auth-changed', onAuth);
-      window.removeEventListener('sb:auth-expired', onExpired);
-    };
-  }, []);
+  const loadingRef = useRef(false);
 
   const loadLibrary = useCallback(async () => {
-    const request = ++libraryRequest.current;
-    const revision = accountRevision(), serial = youtubeService.sessionRevision();
-    const current = () => request === libraryRequest.current && revision === accountRevision() && serial === youtubeService.sessionRevision();
-    setLoadingLibrary(true); setLibraryError(null);
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoadingLibrary(true);
+    setLibraryError(null);
+
     try {
       if (!youtubeService.isAuthenticated()) {
-        if (current()) { setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p }))); setIsAuthenticated(false); }
+        setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p })));
+        setIsAuthenticated(false);
         return;
       }
+
       const userPlaylists = await youtubeService.fetchPlaylists();
-      if (!current()) return;
+      /* une réponse YouTube tordue ne doit pas vider l'accueil : on
+         teste sur une chaîne, jamais sur un champ supposé */
       const looksLikeDemo = userPlaylists.some((p) => String(p?.id || '').startsWith('demo-pl-'));
-      if (looksLikeDemo) setLibraryError("YouTube n'a renvoyé aucune playlist pour ce compte. Vérifie le compte choisi lors de la connexion.");
+      if (looksLikeDemo) {
+        // l'API n'a rien renvoyé : on garde la démo mais on le dit clairement
+        setLibraryError(
+          "YouTube n'a renvoyé aucune playlist pour ce compte. Vérifie le compte choisi lors de la connexion.",
+        );
+      }
       setPlaylists(userPlaylists);
-      userPlaylists.slice(0, 6).forEach((pl, i) => {
-        setTimeout(() => {
-          if (!current()) return;
-          youtubeService.fetchPlaylistTracks(pl.id).then((tracks) => {
-            if (!current() || !tracks.length) return;
-            setPlaylists((prev) => prev.map((p) => (p.id === pl.id ? { ...p, tracks } : p)));
-          }).catch(() => {});
-        }, i * 180);
-      });
+
+      if (userPlaylists.length > 0) {
+        /* précharge les premières playlists : la modale est aussitôt utile et
+           surtout chaque tuile peut montrer une vraie pochette au lieu d'initiales */
+        const warm = userPlaylists.slice(0, 6);
+        warm.forEach((pl, i) => {
+          setTimeout(() => {
+            youtubeService.fetchPlaylistTracks(pl.id).then((tracks) => {
+              if (!tracks.length) return;
+              setPlaylists((prev) => prev.map((p) => (p.id === pl.id ? { ...p, tracks } : p)));
+            }).catch(() => {});
+          }, i * 180);
+        });
+      }
     } catch (e: any) {
-      if (!current()) return;
       setLibraryError(e?.message || 'Impossible de lire la bibliothèque YouTube.');
       setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p })));
-      if (!youtubeService.isAuthenticated()) setIsAuthenticated(false);
-    } finally { if (current()) setLoadingLibrary(false); }
+      if (!youtubeService.isAuthenticated()) { setIsAuthenticated(false); setUserProfile(null); }
+    } finally {
+      loadingRef.current = false;
+      setLoadingLibrary(false);
+    }
   }, []);
 
   useEffect(() => {
-    let active = true;
+    /* l'ID vient du code (`config/app.ts`) ; celui d'une ancienne version
+       enregistrée dans le navigateur sert de secours */
     const idClient = clientIdGoogle(settings.googleClientId);
-    if (idClient) void youtubeService.initOAuth(idClient);
-    const start = async () => {
-      await youtubeService.restoreLegacySession();
-      if (!active) return;
-      setIsAuthenticated(youtubeService.isAuthenticated()); setAccountKnown(!!youtubeService.accountId());
-      setUserProfile(youtubeService.getUserProfile()); setAuthNotice(youtubeService.getRestoreWarning()); setAuthReady(true);
-      void loadLibrary();
-      if (youtubeService.isAuthenticated()) void syncNow();
-    };
-    void start();
-    return () => { active = false; };
-  }, [settings.googleClientId, loadLibrary, syncNow]);
+    if (idClient) youtubeService.initOAuth(idClient);
+    // l'avatar du compte doit apparaître même si la bibliothèque ne répond pas
+    if (youtubeService.isAuthenticated()) {
+      setIsAuthenticated(true);
+      const p = youtubeService.getUserProfile();
+      if (p) setUserProfile(p);
+    }
+    loadLibrary();
+    /* un compte déjà connecté (jeton encore valide) : la synchro reprend
+       sans qu'on demande quoi que ce soit */
+    if (youtubeService.isAuthenticated()) void syncNow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.googleClientId]);
 
-  // Aussi pour les changements faits sur cet appareil sans passer par une vue.
+  // Un seul canal pour exclusions, découvertes, blends et choix du thème.
   useEffect(() => {
     const onLocal = () => planifierEnvoi();
     window.addEventListener('sb:data-changed', onLocal);
     return () => window.removeEventListener('sb:data-changed', onLocal);
   }, []);
 
-  const refreshLibrary = useCallback(async () => { await loadLibrary(); }, [loadLibrary]);
+  const refreshLibrary = useCallback(async () => {
+    await loadLibrary();
+  }, [loadLibrary]);
+
   const loadPlaylistTracks = useCallback(async (playlistId: string): Promise<Track[]> => {
-    const revision = accountRevision(), serial = youtubeService.sessionRevision();
+    // L'échec reste distinct d'une playlist réellement vide : chaque vue
+    // peut l'expliquer et proposer un nouvel essai.
     const tracks = await youtubeService.fetchPlaylistTracks(playlistId);
-    assertAccountRevision(revision);
-    if (serial !== youtubeService.sessionRevision()) throw new Error('La session Google a changé pendant la lecture de la playlist.');
     setPlaylists((prev) => prev.map((pl) => (pl.id === playlistId ? { ...pl, tracks } : pl)));
     return tracks;
   }, []);
 
   const login = useCallback(async () => {
-    // L'appel au service reste synchrone avec le clic ; aucun chargement
-    // préalable ne doit faire bloquer la fenêtre par le navigateur.
-    const token = await youtubeService.login(clientIdGoogle(settings.googleClientId));
-    if (!youtubeService.isAuthenticated() || youtubeService.getAccessToken() !== token) {
-      throw new Error('La session Google a changé pendant la connexion. Recommence si nécessaire.');
-    }
-    setAuthNotice(''); setIsAuthenticated(true); setAccountKnown(true); setUserProfile(youtubeService.getUserProfile());
-    void syncNow();
+    await youtubeService.login(clientIdGoogle(settings.googleClientId));
+    setIsAuthenticated(true);
+    setUserProfile(youtubeService.getUserProfile());
     await loadLibrary();
+    /* le compte est connu : on va chercher ce que les autres appareils
+       ont laissé, puis on renvoie l'ensemble */
+    void syncNow();
   }, [settings.googleClientId, loadLibrary, syncNow]);
-  const cancelGoogleLogin = useCallback(() => { youtubeService.cancelPendingLogin(); }, []);
-  const dismissGoogleLoginError = useCallback(() => { youtubeService.dismissLoginError(); }, []);
-  const logout = useCallback(() => { youtubeService.logout(); }, []);
+
+  const logout = useCallback(() => {
+    youtubeService.logout();
+    oublierSync();
+    setIsAuthenticated(false);
+    setUserProfile(null);
+    setPlaylists(MOCK_PLAYLISTS.map((p) => ({ ...p })));
+    setSelectedTracks([]);
+  }, []);
 
   const saveSettings = useCallback((s: AppSettings) => {
     saveStoredSettings(s);
     setSettings(s);
+    planifierEnvoi();
   }, []);
 
   /* un morceau est identifié par son videoId, pas par son id : le même
@@ -291,9 +263,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshBlends = useCallback(() => setRecentBlends(getStoredBlends()), []);
 
   const searchCatalog = useCallback(async (q: string) => {
-    const revision = accountRevision();
     const result = await youtubeService.searchTracks(q, 20);
-    assertAccountRevision(revision);
     return { ...result, tracks: result.tracks.filter((t) => !isExcluded(t)) };
   }, []);
 
@@ -305,13 +275,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const generate = useCallback(
     async (config: BlendConfig, options?: { seeds?: Track[] }): Promise<GeneratedBlend | null> => {
-      const revision = accountRevision();
       const requested = options?.seeds ?? selectedTracks;
       if (!requested.length) return null;
       const seeds = uniqueTracks(requested.filter((t) => !isExcluded(t)));
       if (!seeds.length) throw new Error('Toutes les amorces choisies sont bloquées. Modifie les exclusions dans Réglages.');
-      if (generationInProgress.current) throw new Error('Une génération est déjà en cours.');
-      const generationToken = Symbol('generation'); generationInProgress.current = generationToken;
       setGenerating(true);
       /* Certains messages se suivent dans le même tour JavaScript (par
          exemple « aucune clé » puis « vérification YouTube »). L'état
@@ -319,7 +286,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
          garde aussi les 50 derniers messages effectivement reçus. */
       setGeneratingLog([]);
       const report = (msg: string) => {
-        assertAccountRevision(revision);
         setGeneratingStatus(msg);
         setGeneratingLog((prev) => prev.at(-1) === msg ? prev : [...prev.slice(-49), msg]);
       };
@@ -328,30 +294,15 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const generatedTracks = await geminiService.generateBlend(
           seeds, config, getExclusions(), report,
         );
-        assertAccountRevision(revision);
         // Dernier verrou : l'utilisateur peut bloquer un titre pendant une recherche.
         // Les amorces explicitement choisies restent possibles, même si récentes.
         const tracks = uniqueTracks(generatedTracks).filter((t) => !isExcluded(t)
           && (t.category === 'anchor' || !isRecentlyProposed(t)));
-        const generationReport = geminiService.dernierRapport;
-        if (!tracks.length) throw new Error(`Aucun titre admissible n’a pu être conservé.${generationReport?.warning ? ` ${generationReport.warning}` : ''}`);
+        if (!tracks.length) throw new Error('Aucun titre disponible après application des exclusions et de l’historique.');
         const now = new Date();
         const expires = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
         const artists = Array.from(new Set(seeds.map((t) => t.artist))).slice(0, 2);
         const name = artists.length >= 2 ? `${artists[0]}, ${artists[1]} & co.` : artists[0] ? `Autour de ${artists[0]}` : 'Nouveau blend';
-        const actual = { anchor: tracks.filter((t) => t.category === 'anchor').length,
-          deepDive: tracks.filter((t) => t.category === 'deep_dive').length,
-          fresh: tracks.filter((t) => t.category === 'fresh').length };
-        const beforeFinal = generationReport
-          ? generationReport.created.anchor + generationReport.created.deepDive + generationReport.created.fresh : 0;
-        const removedFinal = Math.max(0, beforeFinal - tracks.length);
-        const finalWarning = generationReport && removedFinal
-          ? `Avant le contrôle final : ${generationReport.warning || `sélection de ${beforeFinal}/${generationReport.target} titres.`} `
-            + `Contrôle final : ${tracks.length}/${generationReport.target} titres enregistrés (${actual.anchor} piliers, ${actual.deepDive} faces cachées, ${actual.fresh} découvertes). `
-            + `${removedFinal} titre${removedFinal > 1 ? 's ont été écartés' : ' a été écarté'} après contrôle des exclusions, de l’historique et des doublons.`
-          : generationReport?.warning;
-        const generation = generationReport ? { ...generationReport, created: actual, warning: finalWarning || '',
-          ...(removedFinal && !generationReport.cause ? { cause: 'other' as const } : {}) } : undefined;
         const blend: GeneratedBlend = {
           id: `blend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           title: name,
@@ -359,7 +310,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: now.toISOString(), expiresAt: expires.toISOString(), seedTracks: seeds, tracks,
           instruction: config.instruction?.trim() || undefined,
           methode: { kind: geminiService.derniereMethode, model: geminiService.dernierModele || undefined, detail: geminiService.derniereNote },
-          generation,
         };
         recordDiscoveries(tracks, now.getTime());
         const saved = saveBlendToStorage(blend);
@@ -369,10 +319,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return saved;
       } catch (e: any) {
         throw new Error(e?.message || 'La génération a échoué.');
-      } finally {
-        if (generationInProgress.current === generationToken) generationInProgress.current = null;
-        if (accountRevision() === revision) setGenerating(false);
-      }
+      } finally { setGenerating(false); }
     }, [selectedTracks],
   );
 
@@ -381,15 +328,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       settings,
       saveSettings,
       isAuthenticated,
-      accountKnown,
-      authReady,
-      authNotice,
       userProfile,
-      googleLoginState,
-      googleLoginPending,
       login,
-      cancelGoogleLogin,
-      dismissGoogleLoginError,
       logout,
       playlists,
       loadingLibrary,
@@ -420,8 +360,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       syncNow,
     }),
     [
-      settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, googleLoginState, googleLoginPending,
-      login, cancelGoogleLogin, dismissGoogleLoginError, logout, playlists, loadingLibrary,
+      settings, saveSettings, isAuthenticated, userProfile, login, logout, playlists, loadingLibrary,
       libraryError, loadLibrary, loadPlaylistTracks, refreshLibrary, selectedTracks, toggleTrack,
       removeTrack, clearSelection, isSelected, currentBlend, setCurrentBlend, updateBlend,
       recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generatingLog, generate, exclusions, blockTrack, unblockExclusion,

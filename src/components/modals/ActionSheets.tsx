@@ -178,11 +178,10 @@ const ExclusionsSheet: React.FC<{ focusSearch: boolean; present: boolean }> = ({
     if (next) { e.preventDefault(); switchTab(next, true); }
   };
   const remove = (r: ExclusionRecord) => {
-    try {
-      unblockExclusion(r.id);
-      setNotice(`${r.kind === 'track' ? `« ${r.title} »` : r.artist} a été débloqué${r.kind === 'track' ? 'e' : ''}.`);
-      requestAnimationFrame(() => tabs.current[kind]?.focus({ preventScroll: true }));
-    } catch (e) { setNotice(e instanceof Error ? e.message : 'Déblocage non enregistré.'); }
+    unblockExclusion(r.id);
+    setNotice(`${r.kind === 'track' ? `« ${r.title} »` : r.artist} a été débloqué${r.kind === 'track' ? 'e' : ''}.`);
+    // Le bouton supprimé n'existe plus : conserver un point de focus stable.
+    requestAnimationFrame(() => tabs.current[kind]?.focus({ preventScroll: true }));
   };
   const add = (r: CatalogResult) => {
     try {

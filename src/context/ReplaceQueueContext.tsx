@@ -81,7 +81,6 @@ export const stepLabel = (s: string) => STEP_LABEL[s] || s || 'Recherche en cour
 export const ReplaceQueueProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [jobs, setJobs] = useState<ReplaceJob[]>([]);
   const runningRef = useRef(false);
-  const aliveRef = useRef(true);
   const jobsRef = useRef<ReplaceJob[]>([]);
   jobsRef.current = jobs;
   const runnersRef = useRef(new Map<string, (onStep: (s: string) => void) => Promise<any>>());
@@ -92,7 +91,7 @@ export const ReplaceQueueProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   /* un seul remplacement à la fois : on dépile dès qu'un slot se libère */
   const pump = useCallback(() => {
-    if (!aliveRef.current || runningRef.current) return;
+    if (runningRef.current) return;
     const next = jobsRef.current.find((j) => j.status === 'queued');
     if (!next) return;
     runningRef.current = true;
@@ -171,11 +170,6 @@ export const ReplaceQueueProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   /* dès qu'une entrée apparaît ou qu'un slot se libère, on dépile */
   useEffect(() => { pump(); }, [jobs, pump]);
-
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => { aliveRef.current = false; runnersRef.current.clear(); };
-  }, []);
 
   /* sécurité : si un onglet revient au premier plan, on relance la pompe */
   useEffect(() => {

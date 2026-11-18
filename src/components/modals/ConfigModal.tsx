@@ -1,8 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Clock, Sparkles, ShieldCheck, Car, Flame, Disc3, Compass } from 'lucide-react';
-import { splitCounts, splitRequestedCounts } from '../../services/curator';
-import { accountRevision } from '../../services/accountScope';
+import { splitCounts } from '../../services/curator';
 import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
 import { Modal, ModalHeader, ModalFooter, ModalBody } from '../ui/Modal';
@@ -37,17 +36,11 @@ const CHANNELS = [
 
 export const ConfigModal: React.FC = () => {
   const { modal, closeModal, openModal, setView, showToast, design } = useUI();
-  const { selectedTracks, generate, exclusions } = useData();
+  const { selectedTracks, generate, settings, exclusions } = useData();
 
   const [minutes, setMinutes] = useState(45);
   const [ratio, setRatio] = useState<BlendRatio>({ anchor: 30, deepDive: 30, fresh: 40 });
-  const [generationError, setGenerationError] = useState('');
-  const launching = useRef<symbol | null>(null);
-  useEffect(() => {
-    const reset = () => { launching.current = null; setGenerationError(''); };
-    window.addEventListener('sb:account-changed', reset);
-    return () => window.removeEventListener('sb:account-changed', reset);
-  }, []);
+
 
   const target = useMemo(() => Math.max(4, Math.round(minutes / 3.5)), [minutes]);
 
@@ -56,19 +49,6 @@ export const ConfigModal: React.FC = () => {
   const counts = useMemo(
     () => splitCounts(target, ratio, selectedTracks.length),
     [target, ratio, selectedTracks.length],
-  );
-  const requested = useMemo(() => splitRequestedCounts(target, ratio), [target, ratio]);
-  const limitedAnchors = requested.anchor - counts.anchor;
-  const anchorNote = limitedAnchors > 0 && (
-    <p className="ink-3" style={{ fontSize: 12, lineHeight: 1.45, margin: '10px 0 0' }}>
-      La répartition choisie prévoit {requested.anchor} piliers, mais {counts.anchor} amorce{counts.anchor > 1 ? 's sont disponibles' : ' est disponible'}.
-      {' '}{limitedAnchors} place{limitedAnchors > 1 ? 's seront demandées' : ' sera demandée'} en découverte{limitedAnchors > 1 ? 's' : ''}.
-    </p>
-  );
-  const generationNotice = generationError && (
-    <div className="sb-blend-warning" role="alert">
-      <div><strong>Génération impossible</strong><p>{generationError}</p></div>
-    </div>
   );
 
   const setOne = (key: keyof BlendRatio, raw: number) => {
@@ -84,29 +64,18 @@ export const ConfigModal: React.FC = () => {
   };
 
   const launch = async () => {
-    if (launching.current) return;
-    const token = Symbol('launch'), revision = accountRevision();
-    launching.current = token; setGenerationError('');
     closeModal();
-    // Si l'opération échoue très vite, ne pas ouvrir après coup une feuille
-    // de génération déjà terminée. Une ancienne génération ne doit pas non
-    // plus rouvrir la feuille après un changement de compte.
-    const timer = window.setTimeout(() => { if (accountRevision() === revision && launching.current === token) openModal('generating'); }, 200);
+    setTimeout(() => openModal('generating'), 200);
     try {
       const blend = await generate({ durationMinutes: minutes, ratio });
-      if (blend && accountRevision() === revision) {
+      if (blend) {
         closeModal();
         setView('blend');
         showToast(`Blend prêt : ${blend.tracks.length} titres.`);
       }
     } catch (e: any) {
-      if (accountRevision() === revision) {
-        setGenerationError(e?.message || 'La génération a échoué.');
-        openModal('config');
-      }
-    } finally {
-      window.clearTimeout(timer);
-      if (launching.current === token) launching.current = null;
+      closeModal();
+      showToast(e?.message || 'La génération a échoué.');
     }
   };
 
@@ -119,7 +88,6 @@ export const ConfigModal: React.FC = () => {
           <p className="ink-3" style={{ margin: 0, fontSize: 13 }}>{selectedTracks.length} amorces · ≈ {target} titres</p>
         </div>
         <ModalBody>
-          {generationNotice}
           {/* durée : quatre repères + un rail, le chiffre au centre */}
           <div className="sb-dur">
             <div className="sb-dur-chips">
@@ -174,10 +142,8 @@ export const ConfigModal: React.FC = () => {
                 ratio={ratio as WheelRatio}
                 onChange={(next) => setRatio(next as BlendRatio)}
                 target={target}
-                counts={counts}
                 labels={{ anchor: 'Piliers', deepDive: 'Faces cachées', fresh: 'Découvertes' }}
               />
-              {anchorNote}
             </div>
           </div>
         </ModalBody>
@@ -200,7 +166,6 @@ export const ConfigModal: React.FC = () => {
       />
 
       <ModalBody>
-        {generationNotice}
         {/* durée */}
         <div style={{ marginBottom: 26 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
@@ -283,8 +248,7 @@ export const ConfigModal: React.FC = () => {
             ))}
           </div>
 
-          {anchorNote}
-          <div style={{ display: 'grid', gap: 10, marginTop: limitedAnchors > 0 ? 10 : 0 }}>
+          <div style={{ display: 'grid', gap: 10 }}>
             {CHANNELS.map((c) => (
               <div key={c.key} style={{ padding: '12px 14px', borderRadius: 16, background: 'var(--bg-sunken)', border: '1px solid var(--line)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

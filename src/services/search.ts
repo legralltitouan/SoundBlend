@@ -89,10 +89,6 @@ export const pipedSearch = async (query: string, filter: 'music_songs' | 'videos
 /* ─────────────── vérifier une vidéo, sans clé ─────────────── */
 
 const oembedCache = new Map<string, { at: number; ok: boolean; title: string; author: string; jouable: boolean; duree?: number }>();
-type VideoCheck = { ok: boolean; title: string; author: string; jouable?: boolean; duree?: number } | null;
-// Deux sélections peuvent vérifier simultanément la même vidéo. Partager la
-// requête évite de multiplier les mêmes 400/404 dans la console réseau.
-const oembedPending = new Map<string, Promise<VideoCheck>>();
 const OEMBED_TTL = 60 * 60 * 1000;
 
 /**
@@ -104,40 +100,41 @@ const OEMBED_TTL = 60 * 60 * 1000;
  * celui d'un autre morceau. C'est ce qui rend l'identifiant-fourni-par-
  * le-modèle fiable : on ne fait plus confiance, on vérifie.
  */
-export const verifyVideo = async (videoId: string): Promise<VideoCheck> => {
-  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId || '')) return null;
+export const verifyVideo = async (
+  videoId: string,
+): Promise<{ ok: boolean; title: string; author: string; jouable?: boolean; duree?: number } | null> => {
   const hit = oembedCache.get(videoId);
   if (hit && Date.now() - hit.at < OEMBED_TTL) return { ok: hit.ok, title: hit.title, author: hit.author, jouable: hit.jouable, duree: hit.duree };
-  const existing = oembedPending.get(videoId);
-  if (existing) return existing;
-  const work = (async (): Promise<VideoCheck> => {
-    const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
-    const res = await cut(
-      fetch(url, { headers: { Accept: 'application/json' } })
-        .then((r) => !r.ok ? { __ko: r.status } : r.json())
-        .catch(() => null),
-      6000,
-      null as any,
-    );
-    if (!res) return null;                     // réseau muet : on ne sait pas
-    if (res.__ko) {
-      // Ce refus oEmbed ne dit rien du quota Gemini. 403 et 5xx restent
-      // indéterminés ; les autres refus connus écartent cette vidéo ici.
-      const rejected = res.__ko === 400 || res.__ko === 401 || res.__ko === 404 || res.__ko === 410;
-      if (!rejected) return null;
-      const out = { ok: false, title: '', author: '', jouable: false };
-      oembedCache.set(videoId, { at: Date.now(), ...out });
-      return out;
-    }
-    // Des métadonnées disponibles ne prouvent pas la lecture partout.
-    if (typeof res.title !== 'string' || !res.title.trim() || typeof res.author_name !== 'string' || !res.author_name.trim()) return null;
-    const out = { ok: true, title: res.title, author: res.author_name, jouable: true };
+  const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
+  const res = await cut(
+    fetch(url, { headers: { Accept: 'application/json' } })
+      .then((r) => {
+        /* 400 / 401 / 404 : YouTube ne connaît plus cette vidéo, ou elle
+           est privée — c'est un « non » franc. Un 403, un 5xx ou une page
+           de pare-feu ne disent rien du morceau : ce n'est pas à eux de
+           le condamner. */
+        if (!r.ok) return { __ko: r.status };
+        return r.json();
+      })
+      .catch(() => null),
+    6000,
+    null as any,
+  );
+  if (!res) return null;                       // réseau muet : on ne sait pas
+  if (res.__ko) {
+    const mort = res.__ko === 400 || res.__ko === 401 || res.__ko === 404 || res.__ko === 410;
+    if (!mort) return null;                    // 403, 5xx : on ne sait pas
+    const out = { ok: false, title: '', author: '', jouable: false };
     oembedCache.set(videoId, { at: Date.now(), ...out });
     return out;
-  })();
-  oembedPending.set(videoId, work);
-  try { return await work; }
-  finally { if (oembedPending.get(videoId) === work) oembedPending.delete(videoId); }
+  }
+  // Une réponse vide ou mal formée ne prouve ni l'identité ni la lecture.
+  if (typeof res.title !== 'string' || !res.title.trim() || typeof res.author_name !== 'string' || !res.author_name.trim()) return null;
+  // Métadonnées disponibles : ceci ne prouve pas qu'une iframe pourra lire
+  // la vidéo pour tous les comptes et dans tous les pays.
+  const out = { ok: true, title: res.title, author: res.author_name, jouable: true };
+  oembedCache.set(videoId, { at: Date.now(), ...out });
+  return out;
 };
 
 /** L'identifiant a-t-il la forme d'un identifiant YouTube ? */
@@ -180,11 +177,7 @@ export const artistTracks = async (artist: string): Promise<Video[]> => {
   });
   if (items.length < 3) {
     found = await pipedSearch(`${artist} topic`, 'videos');
-    const extra = found.filter((v) => (v.artist || '').toLowerCase().includes(key));
-    // Une seconde recherche vide ne doit pas effacer les une ou deux
-    // pistes déjà trouvées ; conserver les deux listes sans doublon vidéo.
-    const merged = [...items, ...extra];
-    items = merged.filter((v, i) => merged.findIndex((x) => x.videoId === v.videoId) === i);
+    items = found.filter((v) => (v.artist || '').toLowerCase().includes(key));
   }
   voisinCache.set(key, { at: Date.now(), items });
   return items;
