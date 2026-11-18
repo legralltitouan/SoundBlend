@@ -1,6 +1,8 @@
-# SoundBlend AI · 6.9.39 — essai de connexion
+# SoundBlend AI · 6.9.40 — correction du bandeau
 
-Application web pour écouter sa bibliothèque YouTube et composer des blends. Cette version candidate garde le projet et le client Google, les trois droits et le parcours de la 6.9.38, mais demande la **sélection du compte** (`select_account`) au lieu de forcer le consentement à chaque connexion (`consent`). Google peut tout de même demander un accord, notamment si une autorisation manque.
+Application web pour écouter sa bibliothèque YouTube et composer des blends. La 6.9.40 reprend la 6.9.39 et corrige le suivi de remplacement : sa tranche reste sombre lorsqu'elle se range en mode sombre. Le thème clair, le glissement, la file et la réouverture sont conservés. En dehors du numéro affiché et du cache PWA, le seul changement dans le code applicatif est cette règle CSS.
+
+La 6.9.39 gardait le projet et le client Google, les trois droits et le parcours de la 6.9.38, mais demandait la **sélection du compte** (`select_account`) au lieu de forcer le consentement à chaque connexion (`consent`). Google peut tout de même demander un accord, notamment si une autorisation manque. La 6.9.40 ne change pas la connexion.
 
 Un test local indépendant avec le même client et les trois droits a reçu une réponse Google (**P01, droits présents**) avec cette option. C'est une piste, pas la preuve que la cause est trouvée : le résultat de l'application elle-même sur son site et avec le compte réel n'a pas été vérifié par l'agent. Le projet Cloud ne doit pas être recréé pour cet essai. L'identité vérifiée, la séparation des comptes et les protections de la 6.9.38 sont conservées. La fenêtre bloquée ou fermée reste difficile à détecter : aide, annulation et délai de trois minutes sont disponibles.
 
@@ -67,9 +69,9 @@ npm run build
 npm run preview
 ```
 
-La compilation crée `dist/`, servi sur <http://localhost:4173/>. L'archive source ne contient pas les dépendances ni `dist/` ; un site déjà compilé pour la racine `/` est fourni séparément dans `SoundBlend-v6.9.39-site-racine.zip`. Le paquet `SoundBlend-v6.9.39-site-GitHub-SoundBlend.zip` cible exactement `/SoundBlend/`.
+La compilation crée `dist/`, servi sur <http://localhost:4173/>. L'archive source ne contient pas les dépendances ni `dist/` ; un site déjà compilé pour la racine `/` est fourni séparément dans `SoundBlend-v6.9.40-site-racine.zip`. Le paquet `SoundBlend-v6.9.40-site-GitHub-SoundBlend.zip` cible exactement `/SoundBlend/`.
 
-La PWA peut rouvrir son **interface** hors ligne après une première visite et l'activation de son service worker. Pour une mise à jour depuis la 6.9.38, ouvre l'application en ligne, puis ferme et rouvre **tous les onglets et toutes les fenêtres installées sur chaque appareil** ; vérifie « v6.9.39 » dans Réglages avant de changer de compte. Un ancien onglet garde son ancien code tant qu'il n'est pas rechargé. Le nouveau service worker refuse d'activer une mise à jour dont les ressources sont incomplètes ; le comportement d'un ancien cache dépend aussi de l'hébergeur. Déploie le site complet d'un seul tenant et vérifie son fonctionnement en ligne avant de compter sur le hors-ligne. La lecture YouTube, la recherche, Gemini et Drive restent des services réseau ; la musique n'est pas téléchargée pour une lecture hors ligne.
+La PWA peut rouvrir son **interface** hors ligne après une première visite et l'activation de son service worker. Pour une mise à jour depuis la 6.9.39, ouvre l'application en ligne, puis ferme et rouvre **tous les onglets et toutes les fenêtres installées sur chaque appareil** ; vérifie « v6.9.40 » dans Réglages avant de changer de compte. Un ancien onglet garde son ancien code tant qu'il n'est pas rechargé. Le nouveau service worker refuse d'activer une mise à jour dont les ressources sont incomplètes ; le comportement d'un ancien cache dépend aussi de l'hébergeur. Déploie le site complet d'un seul tenant et vérifie son fonctionnement en ligne avant de compter sur le hors-ligne. La lecture YouTube, la recherche, Gemini et Drive restent des services réseau ; la musique n'est pas téléchargée pour une lecture hors ligne.
 
 ## GitHub Pages
 
@@ -79,15 +81,15 @@ Pour un dépôt existant, sauvegarde tes modifications, compare les fichiers ava
 BASE_PATH=/SoundBlend/ npm run build
 ```
 
-Sous PowerShell : `$env:BASE_PATH='/SoundBlend/'; npm run build`. Le paquet `SoundBlend-v6.9.39-site-racine.zip` utilise la racine `/` ; `SoundBlend-v6.9.39-site-GitHub-SoundBlend.zip` utilise `/SoundBlend/`. GitHub Actions recompile avec sa propre base.
+Sous PowerShell : `$env:BASE_PATH='/SoundBlend/'; npm run build`. Le paquet `SoundBlend-v6.9.40-site-racine.zip` utilise la racine `/` ; `SoundBlend-v6.9.40-site-GitHub-SoundBlend.zip` utilise `/SoundBlend/`. GitHub Actions recompile avec sa propre base.
 
 La fenêtre Google dépend aussi des en-têtes HTTP de l'hébergeur. Si celui-ci applique réellement une politique `Cross-Origin-Opener-Policy: same-origin`, suivre les [consignes Google](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid#cross_origin_opener_policy) avant de modifier la politique. Un avertissement COOP dans la console peut être seulement déclaratif et ne suffit pas à établir la cause. Le fichier `_headers` fourni n'est pas appliqué par GitHub Pages ; aucune balise HTML ne remplace un en-tête HTTP.
 
 ## Vérifications et limites
 
-Les tests facultatifs et leurs commandes se trouvent dans `verification/README.md`. Ils utilisent des comptes, des réponses OAuth et des données fictifs, même lorsque la bibliothèque GIS est réelle. Le test P a bien reçu une réponse authentifiée, mais dans une page locale indépendante, pas dans cette application ni sur le site public. Voir le guide `LISEZ-MOI-6.9.39.md` pour la portée précise des vérifications de cette livraison.
+Les tests facultatifs et leurs commandes se trouvent dans `verification/README.md`. Ils utilisent des comptes, des réponses OAuth et des données fictifs, même lorsque la bibliothèque GIS est réelle. Le test P a bien reçu une réponse authentifiée, mais dans une page locale indépendante, pas dans cette application ni sur le site public. Voir le guide `LISEZ-MOI-6.9.40.md` pour la portée précise des vérifications de cette livraison.
 
-**La connexion réelle de la 6.9.39 n'est pas confirmée.** Gemini Live, Google Search, Drive et YouTube sont simulés dans les tests de l'agent. Les essais ne garantissent pas leur fonctionnement réel, les quotas, la synchronisation atomique, l'abonnement Premium ou tous les navigateurs/appareils.
+**La cause des échecs observés lors de changements rapides de compte n'est pas déterminée.** L'agent n'a pas effectué de connexion authentifiée avec la 6.9.40. Gemini Live, Google Search, Drive et YouTube sont simulés dans ses tests. Les essais ne garantissent pas leur fonctionnement réel, les quotas, la synchronisation atomique, l'abonnement Premium ou tous les navigateurs/appareils.
 
 **Dépendances de développement :** au contrôle de cette version, `npm audit` signale 12 paquets de gravité élevée, notamment liés à [picomatch — GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf). `npm audit --omit=dev` ne signalait aucune vulnérabilité au même moment, sans garantir la sécurité du site. Ces résultats évoluent ; surveiller l'avis, examiner les correctifs proposés et éviter les motifs glob non fiables dans les outils de développement. Certaines solutions proposées peuvent entraîner des changements majeurs : ne pas appliquer `npm audit fix --force` sans les examiner.
 
@@ -104,7 +106,7 @@ La connexion Google à SoundBlend n'ouvre pas automatiquement une session YouTub
 | Synchronisation en attente | Vérifier le réseau et l'état dans Réglages ; elle reprend automatiquement après une erreur temporaire. Si les autorisations ont expiré, les réactiver. |
 | Exclusion inattendue | Réglages → Exclusions → Afficher la liste ; titre et artiste peuvent être débloqués indépendamment. Les noms homonymes et certaines variantes peuvent se rapprocher. |
 | Recherche d'exclusion indisponible | Vérifier le réseau et réessayer : les instances Piped publiques sont indépendantes et peuvent tomber en panne. |
-| Ancienne version visible | Attendre le déploiement, ouvrir l'app en ligne puis fermer et rouvrir tous les onglets et fenêtres installées ; vérifier v6.9.39 dans Réglages. Ne pas effacer le stockage local pour résoudre la connexion. |
+| Ancienne version visible | Attendre le déploiement, ouvrir l'app en ligne puis fermer et rouvrir tous les onglets et fenêtres installées ; vérifier v6.9.40 dans Réglages. Ne pas effacer le stockage local pour résoudre la connexion. |
 | Export interrompu | Vérifier directement la bibliothèque YouTube ; utiliser le lien conservé ou l'associer avant de relancer une création. |
 | Fichier Drive illisible ou plus récent | Aucune écriture n'est tentée sur ce fichier : vérifier la version et restaurer une copie valide avant de réessayer. |
 | Lecture impossible | Restrictions YouTube, connexion ou intégration ; une vérification de métadonnées ne garantit pas la lecture. |

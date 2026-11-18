@@ -2046,10 +2046,10 @@ html[data-mode='light'] .sb-task {
 }
 
 /* ── le dossier rangé ─────────────────────────────────────────────
-   Ce n'est pas un objet séparé : c'est le bandeau lui-même, décalé de
-   la largeur de l'écran moins 74 px. Le bloc glisse, il ne se remplace
-   pas. Aucune opacité n'est animée entre les deux états : on ne doit
-   jamais voir deux objets, ni un fondu. */
+   Ce n'est pas un objet séparé : c'est le bandeau lui-même, décalé pour
+   ne laisser que 18 px visibles. Le bloc glisse, il ne se remplace pas.
+   Aucune opacité n'est animée entre les deux états : on ne doit jamais
+   voir deux objets, ni un fondu. */
 /* l'invitation à reprendre : même objet que le bandeau, mais cliquable
    et d'une couleur qui appelle le geste */
 .sb-task--reprise {
@@ -2079,27 +2079,9 @@ html[data-mode='light'] .sb-task {
     -14px 12px 38px -22px rgba(0,0,0,.7),
     inset 0 0 0 1px color-mix(in srgb, var(--ink) 9%, transparent);
 }
-/* la poignée est posée dans la tranche visible, pas dans la partie
-   cachée : elle doit tomber sous le curseur quand le bloc est rangé */
-html[data-mode='light'] /* l'invitation à reprendre : même objet que le bandeau, mais cliquable
-   et d'une couleur qui appelle le geste */
-.sb-task--reprise {
-  cursor: pointer; border: 0;
-  /* un bouton, pas un bloc : sans ça il se cale à gauche et perd
-     l'alignement du bandeau */
-  text-align: left;
-  font: inherit;
-  color: inherit;
-  appearance: none;
-  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
-}
-.sb-task--reprise:hover { border-color: color-mix(in srgb, var(--accent) 62%, transparent); }
-.sb-task-dot--play {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-}
-
-.sb-task[data-state='peek'] {
+/* Le fond blanc et l'ombre claire ne s'appliquent qu'au thème clair ;
+   en sombre, la tranche garde le fond du bandeau ouvert. */
+html[data-mode='light'] .sb-task[data-state='peek'] {
   background: color-mix(in srgb, #ffffff 97%, transparent);
   box-shadow:
     -14px 12px 34px -24px rgba(0,0,0,.34),
