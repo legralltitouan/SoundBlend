@@ -77,6 +77,11 @@ class GoogleLoginError extends Error {
   }
 }
 
+/** Une tentative remplacée par un clic explicite n'est pas un nouvel échec
+    à afficher : le nouveau parcours possède son propre état et sa réponse. */
+export const isSupersededGoogleLogin = (error: unknown): boolean =>
+  error instanceof GoogleLoginError && error.code === 'superseded';
+
 /** Ne jamais afficher la réponse brute de Google : elle peut contenir des
     informations sensibles. Seuls des codes OAuth connus sont conservés. */
 const googleOAuthError = (code: unknown): GoogleLoginError => {
@@ -171,7 +176,7 @@ export class YouTubeService {
   private attempt = 0;
   private expiredNotified = false;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
-  private cancelLogin: (() => void) | null = null;
+  private cancelLogin: ((replaced?: boolean) => void) | null = null;
   // Comme en 6.9.33, garder le client de la fenêtre tant qu'elle répond.
   private loginClient: any = null;
   private loginState: GoogleLoginState = { phase: 'idle' };
@@ -236,6 +241,15 @@ export class YouTubeService {
     window.dispatchEvent(new CustomEvent('sb:google-login-state'));
   }
   public cancelPendingLogin(): void { this.cancelLogin?.(); }
+  /** Clic explicite seulement, après l'aide d'attente. La fenêtre précédente
+      est supposée fermée par l'utilisateur ; on n'en déduit rien de Google.
+      Invalider son callback AVANT d'ouvrir le nouveau client, sans await :
+      un ancien retour ne doit jamais se substituer au compte choisi ensuite. */
+  public retryPendingLogin(clientId?: string): Promise<string> | null {
+    if (!this.cancelLogin || this.loginState.phase !== 'waiting-long') return null;
+    this.cancelLogin(true);
+    return this.login(clientId);
+  }
   public dismissLoginError(): void {
     if (!this.cancelLogin && this.loginState.phase === 'error') this.setLoginState({ phase: 'idle' });
   }
@@ -337,7 +351,7 @@ export class YouTubeService {
         googleMessageSeen = true;
         if (this.loginState.phase === 'waiting-long') this.setLoginState({ phase: 'waiting-long', googleMessageSeen });
       };
-      const finish = (error?: GoogleLoginError, token?: string) => {
+      const finish = (error?: GoogleLoginError, token?: string, silent = false) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
@@ -345,12 +359,17 @@ export class YouTubeService {
         window.removeEventListener('message', onMessage);
         if (this.cancelLogin === cancel) this.cancelLogin = null;
         if (this.loginClient === client) this.loginClient = null;
-        this.setLoginState(error ? { phase: 'error', code: error.code, message: error.message } : { phase: 'idle' });
+        // Le remplacement passe directement de l'attente au nouvel essai,
+        // sans annoncer une annulation alors qu'une autre fenêtre s'ouvre.
+        if (!silent) this.setLoginState(error ? { phase: 'error', code: error.code, message: error.message } : { phase: 'idle' });
         if (error) reject(error); else resolve(token!);
       };
-      const cancel = () => {
+      const cancel = (replaced = false) => {
         if (!settled && attempt === this.attempt) this.attempt++;
-        finish(new GoogleLoginError('cancelled', 'Connexion annulée. Si la fenêtre Google est encore ouverte, ferme-la.'));
+        finish(new GoogleLoginError(
+          replaced ? 'superseded' : 'cancelled',
+          replaced ? 'Une nouvelle tentative a remplacé la précédente.' : 'Connexion annulée. Si la fenêtre Google est encore ouverte, ferme-la.',
+        ), undefined, replaced);
       };
       this.cancelLogin = cancel;
       try {
@@ -365,8 +384,8 @@ export class YouTubeService {
         if (settled || attempt !== this.attempt) return;
         window.addEventListener('message', onMessage);
         timer = setTimeout(() => finish(new GoogleLoginError(
-          'timeout', 'Google n’a pas renvoyé de réponse à temps. Ferme sa fenêtre si elle est encore ouverte, puis réessaie.',
-        )), 180000);
+          'timeout', 'SoundBlend n’a pas reçu de réponse de Google dans les dix minutes. Si sa fenêtre est encore ouverte, ferme-la avant de réessayer.',
+        )), 600000);
         hintTimer = setTimeout(() => {
           if (!settled && !responseStarted && attempt === this.attempt) this.setLoginState({ phase: 'waiting-long', googleMessageSeen });
         }, 12500);

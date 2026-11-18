@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState, useCall
 import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile, Exclusions } from '../types';
 import { sameTrack, trackKey } from '../lib/track';
 import { clientIdGoogle } from '../config/app';
-import { youtubeService, type GoogleLoginState } from '../services/youtube';
+import { youtubeService, isSupersededGoogleLogin, type GoogleLoginState } from '../services/youtube';
 import { accountRevision, assertAccountRevision } from '../services/accountScope';
 import { geminiService } from '../services/gemini';
 import { uniqueTracks } from '../lib/dedupe';
@@ -26,6 +26,7 @@ interface DataContextType {
   googleLoginState: GoogleLoginState;
   googleLoginPending: boolean;
   login: () => Promise<void>;
+  retryGoogleLogin: () => Promise<void>;
   cancelGoogleLogin: () => void;
   dismissGoogleLoginError: () => void;
   logout: () => void;
@@ -236,17 +237,30 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return tracks;
   }, []);
 
-  const login = useCallback(async () => {
-    // L'appel au service reste synchrone avec le clic ; aucun chargement
-    // préalable ne doit faire bloquer la fenêtre par le navigateur.
-    const token = await youtubeService.login(clientIdGoogle(settings.googleClientId));
+  const completeGoogleLogin = useCallback(async (pending: Promise<string>) => {
+    let token: string;
+    try { token = await pending; }
+    catch (error) {
+      // Le clic « Réessayer » a volontairement remplacé cet ancien essai.
+      // Ne pas afficher « annulé » au-dessus du nouveau parcours.
+      if (isSupersededGoogleLogin(error)) return;
+      throw error;
+    }
     if (!youtubeService.isAuthenticated() || youtubeService.getAccessToken() !== token) {
       throw new Error('La session Google a changé pendant la connexion. Recommence si nécessaire.');
     }
     setAuthNotice(''); setIsAuthenticated(true); setAccountKnown(true); setUserProfile(youtubeService.getUserProfile());
     void syncNow();
     await loadLibrary();
-  }, [settings.googleClientId, loadLibrary, syncNow]);
+  }, [loadLibrary, syncNow]);
+  // Ces appels au service restent synchrones avec le clic : aucun await
+  // préalable ne doit faire bloquer l'ouverture de la fenêtre Google.
+  const login = useCallback(() => completeGoogleLogin(youtubeService.login(clientIdGoogle(settings.googleClientId))),
+    [completeGoogleLogin, settings.googleClientId]);
+  const retryGoogleLogin = useCallback(() => {
+    const pending = youtubeService.retryPendingLogin(clientIdGoogle(settings.googleClientId));
+    return pending ? completeGoogleLogin(pending) : Promise.resolve();
+  }, [completeGoogleLogin, settings.googleClientId]);
   const cancelGoogleLogin = useCallback(() => { youtubeService.cancelPendingLogin(); }, []);
   const dismissGoogleLoginError = useCallback(() => { youtubeService.dismissLoginError(); }, []);
   const logout = useCallback(() => { youtubeService.logout(); }, []);
@@ -388,6 +402,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       googleLoginState,
       googleLoginPending,
       login,
+      retryGoogleLogin,
       cancelGoogleLogin,
       dismissGoogleLoginError,
       logout,
@@ -421,7 +436,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }),
     [
       settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, googleLoginState, googleLoginPending,
-      login, cancelGoogleLogin, dismissGoogleLoginError, logout, playlists, loadingLibrary,
+      login, retryGoogleLogin, cancelGoogleLogin, dismissGoogleLoginError, logout, playlists, loadingLibrary,
       libraryError, loadLibrary, loadPlaylistTracks, refreshLibrary, selectedTracks, toggleTrack,
       removeTrack, clearSelection, isSelected, currentBlend, setCurrentBlend, updateBlend,
       recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generatingLog, generate, exclusions, blockTrack, unblockExclusion,
