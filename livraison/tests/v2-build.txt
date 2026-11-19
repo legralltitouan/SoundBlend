@@ -7,21 +7,21 @@ transforming...
 ✓ 2551 modules transformed.
 rendering chunks...
 computing gzip size...
-dist/precache-assets.json                 0.29 kB │ gzip:   0.18 kB
+dist/precache-assets.json                 0.29 kB │ gzip:   0.19 kB
 dist/index.html                           2.64 kB │ gzip:   1.16 kB
-dist/assets/AssistantView-BdtvJaMy.css   14.53 kB │ gzip:   3.78 kB
+dist/assets/AssistantView-C9D2MTyP.css   16.27 kB │ gzip:   4.14 kB
 dist/assets/index-CTt-wz9Z.css          123.14 kB │ gzip:  24.25 kB
-dist/assets/trash-Bs7peRAt.js             0.37 kB │ gzip:   0.24 kB
-dist/assets/exportRecovery-DTwaGD_c.js    2.72 kB │ gzip:   1.29 kB
-dist/assets/HistoryView-BsVVetT9.js       4.20 kB │ gzip:   1.77 kB
-dist/assets/BlendView-0mlzKu1j.js        29.33 kB │ gzip:  10.51 kB
-dist/assets/AssistantView-coFtwF-U.js    64.89 kB │ gzip:  20.93 kB
-dist/assets/Art-CW3gpsrZ.js             162.71 kB │ gzip:  53.20 kB
-dist/assets/index-ztZy6xO1.js           528.27 kB │ gzip: 167.13 kB
+dist/assets/trash-q7c-aQe2.js             0.37 kB │ gzip:   0.24 kB
+dist/assets/exportRecovery-CWZb6mGl.js    2.72 kB │ gzip:   1.28 kB
+dist/assets/HistoryView-WJ9hOD9y.js       4.21 kB │ gzip:   1.78 kB
+dist/assets/BlendView-BKQcfgN5.js        29.33 kB │ gzip:  10.48 kB
+dist/assets/AssistantView-BbeEljyY.js    59.32 kB │ gzip:  19.49 kB
+dist/assets/Art-Ckm0hktM.js             162.70 kB │ gzip:  53.19 kB
+dist/assets/index-Df8O_BuO.js           528.28 kB │ gzip: 167.13 kB
 
 [plugin builtin:vite-reporter] 
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
-✓ built in 2.06s
+✓ built in 1.81s

@@ -1,0 +1,60 @@
+✓ historique retiré du header
+✓ aucune case de recherche sur la page
+✓ options et textes sous le composeur supprimés
+✓ historique toujours accessible dans la navbar inchangée
+✓ composeur réellement fixe, pas sticky
+✓ composeur aligné juste au-dessus de la navbar
+✓ aucun rectangle ni dégradé de fond autour du composeur
+✓ suppression de la deuxième ambiance locale délimitée
+✓ suggestion préremplit le champ
+✓ petite modal de confidentialité ouverte depuis le header
+✓ focus à l’intérieur de la modal
+✓ défilement arrière-plan verrouillé
+✓ Échap ferme la confidentialité
+✓ focus rendu au bouton confidentialité
+✓ brouillon conservé après la modal
+✓ fermeture par Compris
+✓ fermeture par clic sur le fond
+✓ confirmation visible après le défilement automatique de la réponse
+✓ composeur à la même position après réponse et carte blend
+✓ composeur fixe en haut, au milieu et en bas d’une longue conversation
+✓ confirmation du blend dégagée en bas de la conversation
+✓ contexte des relances préservé
+✓ pas de recherche externe déclenchée en cachette
+✓ composeur grandit avec le texte
+✓ espace sous le contenu suit la hauteur du composeur
+✓ détection de l’inset du clavier mobile
+✓ composeur au-dessus du clavier simulé
+✓ composeur masqué pendant le Live
+✓ retour du Live sans perte du brouillon
+✓ portail nettoyé en quittant l’Assistant
+✓ aucune erreur JS : 
+✓ pas de débordement 320 light
+✓ composeur fixé en bas 320 light
+✓ composeur au-dessus du lecteur 320 light
+✓ modal responsive 320 light
+✓ pas d’erreur JS 320 light
+✓ pas de débordement 390 dark
+✓ composeur fixé en bas 390 dark
+✓ composeur au-dessus du lecteur 390 dark
+✓ modal responsive 390 dark
+✓ pas d’erreur JS 390 dark
+✓ pas de débordement 768 light
+✓ composeur fixé en bas 768 light
+✓ composeur au-dessus du lecteur 768 light
+✓ modal responsive 768 light
+✓ pas d’erreur JS 768 light
+✓ pas de débordement 1440 light
+✓ composeur fixé en bas 1440 light
+✓ composeur au-dessus du lecteur 1440 light
+✓ modal responsive 1440 light
+✓ pas d’erreur JS 1440 light
+✓ pas de débordement 1440 dark
+✓ composeur fixé en bas 1440 dark
+✓ composeur au-dessus du lecteur 1440 dark
+✓ modal responsive 1440 dark
+✓ pas d’erreur JS 1440 dark
+✓ animation d’entrée légère sur les suggestions
+✓ réduction des animations respectée
+
+58 contrôles V2 réussis (services simulés).

@@ -29,12 +29,7 @@
   ✓ l’effet déjà reçu reste explicitement partiel, sans faire semblant de l’annuler
   ✓ quitter la vue interrompt le remplissage de la copie
   ✓ l’identifiant reçu après navigation reste dans le journal du bon compte
-  ✓ aucune recherche encyclopédique sans activation explicite
-  ✓ recherche encyclopédique réelle simulée et extrait transmis au modèle
-  ✓ sources et lien de recherche Web plus large affichés
-  ✓ la recherche encyclopédique ne modifie aucune playlist
-  ✓ échec de recherche affiché sans inventer des sources
   ✓ recherche musicale YouTube effectuée sans écriture
   ✓ titre trouvé choisi comme amorce, sans génération ni export automatique
 
-38/38 contrôles du nouvel assistant réussis (services simulés).
+33/33 contrôles du nouvel assistant réussis (services simulés).

@@ -1,4 +1,0 @@
-✓ JSON bloqué : délai borné, requête annulée et file libérée
-✓ dix contrôles simultanés de la même image partagent une seule demande
-✓ recherches simultanées identiques mutualisées, résultats indépendants et aucun cache persistant
-✓ exclusions et historique : 75 cas identiques aux règles précédentes

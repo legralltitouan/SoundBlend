@@ -1,7 +1,9 @@
+import { createPortal } from 'react-dom';
+import { AssistantPrivacy } from './AssistantPrivacy';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, ArrowUpRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink, Globe2,
-  History, Keyboard, ListMusic, Loader2, Mic, MicOff, Music2, Plus, Settings2, ShieldCheck,
+  ArrowUp, ArrowUpRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink,
+  Keyboard, ListMusic, Loader2, Mic, MicOff, Music2, Plus, Settings2, ShieldCheck,
   Sparkles, X, WandSparkles,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
@@ -10,11 +12,9 @@ import { PlaylistArt } from '../ui/Art';
 import { blendInstruction, mergeLiveTranscript, uniqueAssistantTracks } from '../../services/assistantConversation';
 import './AssistantView.css';
 import { useUI } from '../../context/UIContext';
-import { geminiService, type AssistantMessage, type AssistantReply, type AssistantResearch, type AssistantSource, type GroundedResearch } from '../../services/gemini';
-import { isSafeGoogleSuggestions, parseGoogleSuggestions } from '../../services/googleSuggestions';
+import { geminiService, type AssistantMessage, type AssistantReply, type AssistantSource } from '../../services/gemini';
 import { GeminiLiveSession, type LivePhase, type LiveToolName } from '../../services/geminiLive';
 import { prepareAssistantPlaylistDraft, assertAssistantSnapshot, type AssistantPlaylistDraft } from '../../services/assistantPlaylist';
-import { searchEncyclopedia } from '../../services/assistantResearch';
 import { beginExportAttempt, clearExportAttempt, getExportAttempt, rememberExportPlaylist } from '../../services/exportRecovery';
 import { accountRevision, assertAccountRevision } from '../../services/accountScope';
 import { isAssistantTrackExcluded, youtubeService } from '../../services/youtube';
@@ -33,47 +33,6 @@ const rawVideoTitle = (t: Track) => {
 const copyJournalKey = (id: string) => `assistant-copy:${id}`;
 
 
-const ResearchCard: React.FC<{ research: AssistantResearch }> = ({ research }) => <div className="sb-assistant-research">
-  <div className="sb-assistant-card-kicker"><Globe2 size={14} /> Recherche encyclopédique · Wikipédia</div>
-  <p className="sb-assistant-card-query">Sujet : {research.query}</p>
-  {research.sources.length ? <ul>{research.sources.map((s) => <li key={s.url}>
-    <a href={s.url} target="_blank" rel="noopener noreferrer">{s.title} <ExternalLink size={12} /></a>
-    {s.extract && <p>{s.extract}</p>}
-  </li>)}</ul> : <p>Aucune page pertinente renvoyée. Cela ne prouve pas que l’information n’existe pas.</p>}
-  <div className="sb-assistant-card-foot">Extraits de Wikipédia ; ouvre les pages et recoupe les informations.
-    {' '}<a href={`https://www.google.com/search?q=${encodeURIComponent(research.query)}`} target="_blank" rel="noopener noreferrer">Chercher plus largement sur le Web <ExternalLink size={11} /></a>
-  </div>
-</div>;
-
-/** Fragment Google intact dans un Shadow DOM (et non une iframe), isolé du
-    CSS de l'application. La validation refuse tout fragment dangereux plutôt
-    que d'en modifier l'apparence. Le montage précède le premier affichage. */
-const GoogleSuggestions: React.FC<{ html: string }> = ({ html }) => {
-  const host = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = host.current, fragment = parseGoogleSuggestions(html); if (!el || !fragment) return;
-    const shadow = el.shadowRoot || el.attachShadow({ mode: 'open' });
-    // Réutiliser les nœuds vérifiés, sans une seconde analyse HTML qui
-    // pourrait interpréter différemment une balise mal formée.
-    shadow.replaceChildren(fragment);
-    return () => { shadow.replaceChildren(); };
-  }, [html]);
-  return <div ref={host} className="sb-google-suggestions" aria-label="Suggestions de recherche Google" />;
-};
-const GoogleResearchCard: React.FC<{ result: GroundedResearch }> = ({ result }) => {
-  // Ne jamais afficher une réponse sans ses suggestions associées.
-  if (!isSafeGoogleSuggestions(result.suggestions)) return <p>Suggestions Google indisponibles : la réponse Web ne peut pas être affichée.</p>;
-  return <article className="sb-google-result" aria-label="Réponse issue de Google Search">
-    <div className="sb-assistant-card-kicker"><Globe2 size={14} /> Réponse Web de Gemini · Google Search</div>
-    <p className="sb-google-answer">{result.text}</p>
-    <GoogleSuggestions html={result.suggestions} />
-    <div className="sb-google-sources"><strong>Sources indiquées par Google</strong>
-      <ul>{result.sources.map((s, i) => <li key={`${i}:${s.url}`}><a href={s.url} target="_blank" rel="noopener noreferrer">{s.title || 'Source Web'} <ExternalLink size={12} /></a></li>)}</ul>
-    </div>
-    <p className="sb-assistant-card-foot">Réponse et sources à vérifier. Ce résultat n’est pas utilisé automatiquement pour modifier une playlist.</p>
-  </article>;
-};
-
 const CatalogCard: React.FC<{
   tracks: Track[]; selected: string[]; onToggle: (id: string) => void; onPrepare: () => void;
 }> = ({ tracks, selected, onToggle, onPrepare }) => <div className="sb-assistant-catalog">
@@ -89,10 +48,10 @@ const CatalogCard: React.FC<{
   <p className="sb-assistant-card-foot">Résultats à vérifier : la présence d’une vidéo ne garantit pas qu’elle soit lisible.</p>
 </div>;
 
-/** Conversation et recherches sans effet de bord ; chaque écriture YouTube et
+/** Conversation sans effet de bord ; chaque écriture YouTube et
     chaque génération passent par leur propre bouton de confirmation. */
 export const AssistantView: React.FC = () => {
-  const { playlists, recentBlends, exclusions, isAuthenticated, libraryError, loadPlaylistTracks, refreshLibrary, generate, generating, userProfile, setCurrentBlend } = useData();
+  const { playlists, recentBlends, exclusions, loadPlaylistTracks, refreshLibrary, generate, generating, userProfile, setCurrentBlend } = useData();
   const { setView, showToast } = useUI();
   const { currentTrack, isPlaying, togglePlay } = usePlayer();
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -103,8 +62,6 @@ export const AssistantView: React.FC = () => {
   const [busyLabel, setBusyLabel] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ text: string; url?: string } | null>(null);
-  const [webEnabled, setWebEnabled] = useState(false);
-  const [googleWebEnabled, setGoogleWebEnabled] = useState(false);
   const [plan, setPlan] = useState<AssistantReply | null>(null);
   const [playlistDraft, setPlaylistDraft] = useState<AssistantPlaylistDraft | null>(null);
   const [destination, setDestination] = useState<'' | 'original' | 'copy'>('');
@@ -116,7 +73,9 @@ export const AssistantView: React.FC = () => {
   const [instruction, setInstruction] = useState('');
   const [minutes, setMinutes] = useState(45);
   const [createdBlend, setCreatedBlend] = useState<GeneratedBlend | null>(null);
-  const [showOptions, setShowOptions] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
   const [liveOpen, setLiveOpen] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [liveQuote, setLiveQuote] = useState('');
@@ -162,7 +121,7 @@ export const AssistantView: React.FC = () => {
         // Ne jamais les montrer ou les renvoyer à Gemini dans le compte suivant.
         messagesRef.current = []; setMessages([]); setText(''); setCatalog([]); setCatalogSelected([]);
         setSource(''); setExtraSources([]); setInstruction(''); setNotice(null); setError('');
-        setWebEnabled(false); setGoogleWebEnabled(false);
+        setPrivacyOpen(false);
       }
     };
     const onHidden = () => {
@@ -190,11 +149,29 @@ export const AssistantView: React.FC = () => {
   }, []);
   useEffect(() => {
     if (stickToBottom.current && messages.length) chatEnd.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [messages.length, busyLabel]);
+  }, [messages.length, busyLabel, plan]);
   useEffect(() => {
     const input = composerRef.current;
     if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 144)}px`; }
   }, [text, liveOpen]);
+
+  // Le portail échappe au transform de transition du Shell : fixed reste
+  // relatif au viewport, même sur une conversation très longue.
+  useLayoutEffect(() => {
+    const dock = dockRef.current, page = pageRef.current;
+    if (!dock || !page || liveOpen) return;
+    const measure = () => page.style.setProperty('--sa-compose-height', `${dock.getBoundingClientRect().height}px`);
+    const observer = new ResizeObserver(measure); observer.observe(dock); measure();
+    const viewport = window.visualViewport;
+    const updateViewport = () => {
+      const inset = viewport ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0;
+      const keyboard = inset > 100;
+      dock.dataset.keyboard = String(keyboard);
+      dock.style.setProperty('--sa-keyboard', `${inset}px`);
+    };
+    viewport?.addEventListener('resize', updateViewport); viewport?.addEventListener('scroll', updateViewport); updateViewport();
+    return () => { observer.disconnect(); viewport?.removeEventListener('resize', updateViewport); viewport?.removeEventListener('scroll', updateViewport); };
+  }, [liveOpen]);
 
   const validSource = (s: AssistantSource | null, pls: Playlist[]) => !!s && (s.type === 'playlist'
     ? pls.some((p) => p.id === s.id) : getStoredBlends().some((b) => b.id === s.id && Date.parse(b.expiresAt) > Date.now()));
@@ -232,10 +209,10 @@ export const AssistantView: React.FC = () => {
         const tracks = await loadPlaylistTracks(p.id); guard();
         contextPlaylists = contextPlaylists.map((x) => x.id === p.id ? { ...x, tracks } : x);
       }
-      const ask = async (catalogData: Track[] = [], researchData = '') => {
+      const ask = async (catalogData: Track[] = []) => {
         guard(); setBusyLabel('Gemini réfléchit à ta demande…');
         const r = await geminiService.converse(conversation, contextPlaylists, getStoredBlends(), exclusions,
-          { catalog: catalogData, research: researchData, proposal: activeProposal, signal: controller.signal });
+          { catalog: catalogData, proposal: activeProposal, signal: controller.signal });
         guard(); return r;
       };
       const previousCatalog = catalog.filter((track) => catalogSelected.includes(track.videoId) && !isAssistantTrackExcluded(track));
@@ -257,13 +234,7 @@ export const AssistantView: React.FC = () => {
       };
       if (await loadChosen(answer)) answer = await ask(previousCatalog);
       guard();
-      let research: AssistantResearch | undefined;
       const warnings: string[] = [];
-      if (webEnabled) {
-        setBusyLabel('Recherche de sources sur Wikipédia…');
-        try { research = await searchEncyclopedia(answer.researchQuery || request, controller.signal); guard(); }
-        catch (e: any) { guard(); warnings.push(e?.message || 'Recherche encyclopédique indisponible.'); }
-      }
       let found: Track[] = [...previousCatalog];
       if (answer.catalogQueries.length) {
         if (!youtubeService.isAuthenticated()) warnings.push('Connecte ton compte Google pour rechercher des morceaux sur YouTube.');
@@ -277,19 +248,9 @@ export const AssistantView: React.FC = () => {
           }
         }
       }
-      if (research || found.some((track) => !previousCatalog.some((old) => old.videoId === track.videoId))) {
-        const excerpts = research?.sources.map((s) => `${s.title} (${s.url}) : ${s.extract}`).join('\n') || '';
-        answer = await ask(found, excerpts);
-        if (await loadChosen(answer)) answer = await ask(found, excerpts);
-      }
-      // Le résultat Google Search reste une réponse distincte, non réinjectée
-      // dans le modèle de planification musicale. En vocal, la recherche est
-      // appelée explicitement par son outil dédié, pas par une action musicale.
-      let grounded: GroundedResearch | undefined;
-      if (googleWebEnabled && !opts.voice) {
-        setBusyLabel('Recherche Web avec Google Search…');
-        try { grounded = await geminiService.searchWeb(request, controller.signal); guard(); }
-        catch (e: any) { guard(); warnings.push(e?.message || 'Recherche Web Google indisponible.'); }
+      if (found.some((track) => !previousCatalog.some((old) => old.videoId === track.videoId))) {
+        answer = await ask(found);
+        if (await loadChosen(answer)) answer = await ask(found);
       }
       guard(); setCatalog(found);
       const recommended = [...new Set([...answer.catalogVideoIds, ...catalogSelected])].filter((id) => found.some((t) => t.videoId === id && !isAssistantTrackExcluded(t)));
@@ -299,12 +260,7 @@ export const AssistantView: React.FC = () => {
           reply: `${answer.reply}\n\nJe ne retrouve pas cette source dans ta bibliothèque. Précise son nom.` };
       }
       const replyText = `${answer.reply}${warnings.length ? `\n\n${warnings.join(' ')}` : ''}`;
-      if (!grounded || answer.action !== 'none' || research || found.length || answer.catalogQueries.length || warnings.length) {
-        append({ role: 'assistant', text: replyText, ...(research ? { research } : {}), ...(answer.catalogQueries.length || found.length ? { catalog: found } : {}) });
-      }
-      // Seul ce libellé générique entre dans le contexte des prochains tours :
-      // le texte Search et ses suggestions ne sont ni sauvegardés ni réutilisés.
-      if (grounded) append({ role: 'assistant', text: 'Une réponse Web a été affichée séparément avec ses sources.', grounded });
+      append({ role: 'assistant', text: replyText, ...(answer.catalogQueries.length || found.length ? { catalog: found } : {}) });
       if (answer.action === 'playlist_edit') {
         if (!answer.source || answer.source.type !== 'playlist' || !answer.playlistEdits) {
           setError('Il me manque la playlist ou les changements précis. Demande une nouvelle proposition en indiquant les titres.');
@@ -457,20 +413,6 @@ export const AssistantView: React.FC = () => {
       return ok ? { statut: 'aperçu préparé', instruction: 'Ne prétends pas que l’action est faite. La personne doit vérifier puis cliquer sur le bouton.' }
         : { statut: 'aucun aperçu exécutable', instruction: 'Demande une précision ou signale que la préparation n’a pas abouti.' };
     }
-    if (name === 'rechercher_wikipedia') {
-      if (!webEnabled) throw new Error('La recherche encyclopédique n’est pas activée.');
-      const research = await searchEncyclopedia(query, signal); guard();
-      append({ role: 'assistant', text: 'Voici les pages encyclopédiques consultées pour notre échange vocal.', research });
-      return { sujet: research.query, sources: research.sources, precision: 'Extraits à vérifier ; les pages sont visibles à l’écran.' };
-    }
-    if (name === 'rechercher_web') {
-      if (!googleWebEnabled) throw new Error('La recherche Web Google n’est pas activée.');
-      const grounded = await geminiService.searchWeb(query, signal); guard();
-      append({ role: 'assistant', text: 'Une réponse Web a été affichée séparément avec ses sources.', grounded });
-      // Ne pas transformer ni recycler le résultat : il est affiché tel que
-      // reçu avec ses suggestions Google, tandis que le vocal le signale.
-      return { statut: 'résultat Web et sources affichés à l’écran', instruction: 'Invite la personne à les lire. Tu n’as pas reçu le contenu : ne l’invente pas.' };
-    }
     if (name === 'rechercher_morceaux') {
       if (!youtubeService.isAuthenticated()) throw new Error('Connecte le compte Google pour rechercher sur YouTube.');
       const tracks = await youtubeService.searchAssistantCatalog(query); guard();
@@ -508,7 +450,7 @@ export const AssistantView: React.FC = () => {
       onError: (message) => { if (alive.current && liveRef.current === session) { flushVoice(); liveRef.current = null; setError(message); } },
     });
     liveRef.current = session;
-    try { await session.start(key, context, { encyclopedia: webEnabled, web: googleWebEnabled, catalog: youtubeService.isAuthenticated() }); }
+    try { await session.start(key, context, { encyclopedia: false, web: false, catalog: youtubeService.isAuthenticated() }); }
     catch (e: any) {
       if (liveRef.current === session) { liveRef.current = null; if (alive.current) setError(e?.message || 'Impossible de démarrer le vocal.'); }
     }
@@ -517,7 +459,7 @@ export const AssistantView: React.FC = () => {
   const closeLive = () => { stopVoice(); setLiveOpen(false); requestAnimationFrame(() => composerRef.current?.focus()); };
   useEffect(() => {
     if (!liveOpen) return;
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') latest.current.closeLive(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.querySelector('.sa-privacy[open]')) latest.current.closeLive(); };
     document.addEventListener('keydown', escape);
     window.scrollTo({ top: 0, behavior: 'instant' });
     document.getElementById('sb-live-close')?.focus();
@@ -526,7 +468,7 @@ export const AssistantView: React.FC = () => {
   useLayoutEffect(() => { latest.current = { handleVoiceTool, closeLive }; });
   const toggleCatalog = (id: string) => setCatalogSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id].slice(0, 20));
   const toggleExtra = (value: string) => setExtraSources((old) => old.includes(value) ? old.filter((x) => x !== value) : [...old, value].slice(0, 3));
-  const setExample = (value: string, web = false) => { setText(value); if (web) { setWebEnabled(true); setGoogleWebEnabled(false); } document.getElementById('sb-assistant-input')?.focus(); };
+  const setExample = (value: string) => { setText(value); composerRef.current?.focus({ preventScroll: true }); };
 
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 60000); return () => clearInterval(timer); }, []);
@@ -542,7 +484,7 @@ export const AssistantView: React.FC = () => {
     if (busyRef.current || generating || liveRef.current) return;
     messagesRef.current = []; setMessages([]); setPlan(null); setPlaylistDraft(null); setCreatedBlend(null);
     setCatalog([]); setCatalogSelected([]); setSource(''); setExtraSources([]); setInstruction(''); setMinutes(45);
-    setNotice(null); setError(''); setText(''); setLiveQuote(''); composerRef.current?.focus();
+    setNotice(null); setError(''); setText(''); setLiveQuote(''); composerRef.current?.focus({ preventScroll: true });
   };
   const openCreatedBlend = () => {
     const saved = createdBlend && getStoredBlends().find((b) => b.id === createdBlend.id && Date.parse(b.expiresAt) > Date.now());
@@ -550,15 +492,16 @@ export const AssistantView: React.FC = () => {
     setCurrentBlend(saved); setView('blend');
   };
 
-  return <div className={`ytm-page sb-assistant sb-assistant-studio${currentTrack ? ' has-player' : ''}`}>
+  return <div ref={pageRef} className={`ytm-page sb-assistant sb-assistant-studio${currentTrack ? ' has-player' : ''}${liveOpen ? ' is-live' : ''}`}>
     <header className="sa-header">
       {liveOpen && <button id="sb-live-close" type="button" className="sa-icon" onClick={closeLive} aria-label="Fermer le mode Live"><X size={20} /></button>}
       <div><h1>{liveOpen ? 'Assistant Live' : 'Assistant'}</h1><p>{liveOpen ? 'La musique, à voix haute' : 'Le son de tes envies'}</p></div>
       <div className="sa-header-actions">
         {!liveOpen && <button type="button" className="sa-icon" disabled={busy || generating || livePhase !== 'off'} onClick={resetConversation} aria-label="Nouvelle conversation" title="Nouvelle conversation"><Plus size={21} /></button>}
-        <button type="button" className="sa-icon" onClick={() => { if (liveOpen) closeLive(); else setView('history'); }} aria-label={liveOpen ? 'Revenir à la conversation' : 'Mes blends'} title={liveOpen ? 'Revenir à la conversation' : 'Mes blends'}><History size={19} /></button>
+        <button type="button" className="sa-icon sa-privacy-trigger" onClick={() => setPrivacyOpen(true)} aria-label="Confidentialité de l’assistant" aria-haspopup="dialog" title="Confidentialité"><ShieldCheck size={18} /></button>
       </div>
     </header>
+    {privacyOpen && <AssistantPrivacy onClose={() => setPrivacyOpen(false)} />}
 
     {liveOpen && <section className="sa-live" aria-label="Mode vocal en direct">
       <div className="sa-live-state" role="status"><i data-active={livePhase === 'listening'} /> {busy ? 'ON PRÉPARE TON ENVIE' : livePhase === 'connecting' ? 'CONNEXION EN COURS' : speaking ? 'L’ASSISTANT TE RÉPOND' : livePhase === 'muted' ? 'MICRO EN PAUSE' : livePhase === 'off' ? 'À VOIX HAUTE' : 'À TON ÉCOUTE'}</div>
@@ -591,10 +534,8 @@ export const AssistantView: React.FC = () => {
         </div>
       </section>}
       <div className="sb-chat" role="log" aria-label="Conversation avec l’assistant" aria-live="polite" aria-relevant="additions text">
-        {messages.map((m, i) => <div className={`sb-chat-message sb-chat-message--${m.role}${m.grounded ? ' sb-chat-message--grounded' : ''}`} key={i}>
-          {m.role === 'assistant' && <span className="sb-chat-label"><span className="sa-orb sa-orb--dot" /> Assistant</span>}{!m.grounded && <p>{m.text}</p>}
-          {m.grounded && <GoogleResearchCard result={m.grounded} />}
-          {m.research && <ResearchCard research={m.research} />}
+        {messages.map((m, i) => <div className={`sb-chat-message sb-chat-message--${m.role}`} key={i}>
+          {m.role === 'assistant' && <span className="sb-chat-label"><span className="sa-orb sa-orb--dot" /> Assistant</span>}<p>{m.text}</p>
           {m.catalog && <CatalogCard tracks={m.catalog} selected={catalogSelected} onToggle={toggleCatalog} onPrepare={() => prepareFromCatalog(m.catalog!)} />}
         </div>)}
         {busy && !generating && <div className="sb-chat-thinking"><Loader2 size={15} className="anim-spin" /> {busyLabel || 'Un instant…'}</div>}
@@ -661,29 +602,18 @@ export const AssistantView: React.FC = () => {
             <Check size={16} /> {destination === 'original' ? 'Confirmer : modifier l’originale' : destination === 'copy' ? 'Confirmer : créer la copie' : 'Choisis une destination'}</button></div>
       </section>}
 
-      <div className="sa-compose-dock">
+      <div ref={chatEnd} className="sa-chat-end" />
+      {createPortal(<div ref={dockRef} className={`sa-floating-compose${currentTrack ? ' has-player' : ''}`} hidden={liveOpen}>
       <form className="sa-compose" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <label className="sr-only" htmlFor="sb-assistant-input">Ton message à l’assistant</label>
         <textarea ref={composerRef} id="sb-assistant-input" rows={1} maxLength={6000} value={text} onChange={(e) => setText(e.target.value)} placeholder="Décris ton envie musicale…" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
-        <div className="sa-compose-tools"><button type="button" className="sa-icon sa-options-button" aria-label="Options et contexte" aria-expanded={showOptions} aria-controls="sa-options" onClick={() => setShowOptions(!showOptions)}><Plus size={20} /></button>
+        <div className="sa-compose-tools">
           <button type="button" className="sa-live-button" disabled={busy || generating} onClick={() => { setLiveOpen(true); setError(''); }}><AudioLines size={15} /> Live</button>
           {responding && !generating && <button type="button" className="sa-send" aria-label="Arrêter la réponse" onClick={() => { operation.current++; actionAbort.current?.abort(); actionAbort.current = null; busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); setNotice({ text: 'Réponse interrompue. Tu peux reformuler ta demande.' }); }}><X size={18} /></button>}
           <button type="submit" className="sa-send" disabled={!text.trim() || busy || generating} aria-label="Envoyer à l’assistant"><ArrowUp size={19} /></button>
         </div>
       </form>
-      <p className="sa-compose-caption">L’IA propose. Tu donnes le ton.</p>
-      </div>
-      <div ref={chatEnd} className="sa-chat-end" />
-      <div id="sa-options" className="sa-options" hidden={!showOptions}>
-      <div className="sb-compose-options sb-search-options">
-        <label><input type="checkbox" checked={webEnabled} disabled={livePhase !== 'off' || busy} onChange={(e) => { setWebEnabled(e.target.checked); if (e.target.checked) setGoogleWebEnabled(false); }} /><Globe2 size={14} /> Chercher des sources sur Wikipédia</label>
-        <label><input type="checkbox" checked={googleWebEnabled} disabled={livePhase !== 'off' || busy} onChange={(e) => { setGoogleWebEnabled(e.target.checked); if (e.target.checked) setWebEnabled(false); }} /><Globe2 size={14} /> Recherche Web Google (quota / coût)</label>
-        <span>Entrée pour envoyer · Maj + Entrée pour une ligne</span>
-      </div>
-      {googleWebEnabled && <p className="sb-assistant-disclaimer sb-search-disclaimer">La question est envoyée à Google Search via ta clé Gemini ; la recherche peut être facturée et nécessite les droits appropriés. En vocal, la réponse sourcée est affichée à l’écran, pas lue automatiquement. Évite les informations sensibles : Google indique conserver les données 30 jours pour ce service. <a href="https://aistudio.google.com/docs/terms#grounding-with-google-search" target="_blank" rel="noopener noreferrer">Conditions Google</a> · <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer">Tarifs</a>.</p>}
-      <p className="sb-assistant-disclaimer">Gemini reçoit la conversation, les noms et titres chargés, les blends et les exclusions. Si Wikipédia est activée, le sujet lui est envoyé. Une recherche YouTube utilise du quota. Vérifie toujours les résultats.</p>
-      <details className="sa-context"><summary><ShieldCheck size={13} /> Contexte et confidentialité <ChevronDown size={13} /></summary><p>{isAuthenticated && !hasDemo ? `${playlists.length} playlist(s) YouTube` : 'Bibliothèque de démonstration'} · {validBlends.length} blend(s) · {exclusions.tracks.length + exclusions.artists.length} exclusion(s).</p>{(!isAuthenticated || hasDemo || libraryError) && <p>{libraryError || 'Connecte ton compte Google pour utiliser tes propres playlists.'}</p>}<button type="button" onClick={() => setView('settings')}>Connexion et clé Gemini <ExternalLink size={12} /></button></details>
-      </div>
+      </div>, document.getElementById('root') || document.body)}
     </div>
   </div>;
 };

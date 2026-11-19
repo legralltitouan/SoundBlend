@@ -1,3 +1,5 @@
+> **Archive de la première passe.** La livraison actuelle est décrite dans `ASSISTANT-EPURE.md`. Les cases Wikipédia/Web et le footer ont été supprimés, le composeur est désormais fixe et la confidentialité est dans une modal. Les résultats de tests actuels sont ceux du rapport V2.
+
 # Assistant Studio — livraison et vérification
 
 ## Périmètre
