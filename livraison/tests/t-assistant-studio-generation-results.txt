@@ -1,0 +1,23 @@
+  ✓ navigation Assistant à la place de Goûts
+  ✓ réponse Gemini visible dans la conversation
+  ✓ la source proposée correspond à une vraie playlist de la bibliothèque simulée
+  ✓ demande exacte conservée dans la proposition éditable
+  ✓ aucun blend généré pendant la conversation
+  ✓ Gemini reçoit la playlist chargée, le blend valide et les exclusions
+  ✓ génération uniquement après action explicite
+  ✓ mode chargement au premier plan après fondu
+  ✓ animation plein écran à six nappes et grain conforme à la référence
+  ✓ canevas recadré après rotation du téléphone
+  ✓ blend enregistré affiché dans la conversation après génération
+  ✓ blend ouvrable dans la vue existante sans modifier le reste de l’app
+  ✓ source réelle chargée et amorce bloquée retirée avant génération
+  ✓ résultat affiché sans exclusion ni découverte récente
+  ✓ instruction réellement transmise aux prompts de génération
+  ✓ bouton unique présente les deux choix explicites
+  ✓ choix musique ne bloque pas l’artiste
+  ✓ choix artiste enregistré séparément du titre déjà bloqué
+  ✓ déblocage indépendant des deux choix depuis Réglages
+  ✓ aucun bouton pouce dans l’interface
+  ✓ aucune exception JavaScript ()
+
+21/21 contrôles du parcours graphique réussis

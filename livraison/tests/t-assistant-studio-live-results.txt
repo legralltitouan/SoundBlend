@@ -1,0 +1,29 @@
+  ✓ aucun microphone ouvert avant le clic
+  ✓ modèle vocal annoncé par Google choisi pour une session audio bidirectionnelle
+  ✓ microphone réel du navigateur factice encodé en blocs PCM16 mono 16 kHz
+  ✓ clé personnelle utilisée directement, sans serveur ajouté
+  ✓ outils vocaux limités à la proposition et aux recherches autorisées
+  ✓ contexte texte disponible en Live
+  ✓ transcriptions entrante et sortante traitées dans le même message
+  ✓ réponse PCM 24 kHz envoyée à la sortie audio du navigateur
+  ✓ interruption vocale vide la file de lecture audio
+  ✓ micro coupé : fin de flux signalée et aucun paquet audio supplémentaire
+  ✓ micro rouvert et flux repris par bouton
+  ✓ demande vocale crée seulement un aperçu, sans génération ni écriture YouTube
+  ✓ le modèle vocal reçoit une réponse d’outil honnête et non une fausse exécution
+  ✓ appel d’outil retransmis dédoublonné
+  ✓ recherche non activée refusée même si un outil est fabriqué
+  ✓ recherche Web payante refusée si non activée, même avec un outil fabriqué
+  ✓ arrêt ferme le micro et la connexion
+  ✓ aucune exception JavaScript ()
+  ✓ en vocal, recherche explicitement activée et sources visibles
+  ✓ passage en arrière-plan interrompt le micro et prévient
+  ✓ refus de permission micro expliqué clairement
+  ✓ clé absente signalée sans ouvrir le micro
+  ✓ absence de modèle Live annoncée sans inventer de modèle
+  ✓ micro fermé si aucun modèle vocal disponible
+  ✓ changement de session ferme immédiatement le vocal
+  ✓ transcription et saisie effacées avant changement de compte
+  ✓ modèle Live extended-thinking non compatible avec les outils synchrones écarté honnêtement
+
+27/27 contrôles vocaux réussis (audio Chromium factice, services simulés).

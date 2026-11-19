@@ -1,10 +1,14 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, AudioLines, Bot, Check, ChevronDown, CircleHelp, ExternalLink, Globe2,
-  Headphones, Library, ListMusic, Loader2, Mic, MicOff, Music2, Plus, ShieldCheck,
-  Sparkles, Square, WandSparkles,
+  ArrowUp, ArrowUpRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink, Globe2,
+  History, Keyboard, ListMusic, Loader2, Mic, MicOff, Music2, Plus, Settings2, ShieldCheck,
+  Sparkles, X, WandSparkles,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
+import { usePlayer } from '../../context/PlayerContext';
+import { PlaylistArt } from '../ui/Art';
+import { blendInstruction, mergeLiveTranscript, uniqueAssistantTracks } from '../../services/assistantConversation';
+import './AssistantView.css';
 import { useUI } from '../../context/UIContext';
 import { geminiService, type AssistantMessage, type AssistantReply, type AssistantResearch, type AssistantSource, type GroundedResearch } from '../../services/gemini';
 import { isSafeGoogleSuggestions, parseGoogleSuggestions } from '../../services/googleSuggestions';
@@ -17,7 +21,7 @@ import { isAssistantTrackExcluded, youtubeService } from '../../services/youtube
 import { getStoredBlends, getStoredSettings } from '../../services/storage';
 import { GEMINI_API_KEY } from '../../config/app';
 import { norm } from '../../lib/track';
-import type { Playlist, Track } from '../../types';
+import type { GeneratedBlend, Playlist, Track } from '../../types';
 
 const sourceKey = (s: AssistantSource) => `${s.type}:${s.id}`;
 const playlistLink = (id: string) => `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`;
@@ -27,12 +31,7 @@ const rawVideoTitle = (t: Track) => {
   return typeof raw === 'string' ? raw : '';
 };
 const copyJournalKey = (id: string) => `assistant-copy:${id}`;
-const mergeTranscript = (old: string, next: string) => {
-  if (!old) return next;
-  if (next.startsWith(old)) return next;
-  if (old.endsWith(next)) return old;
-  return old + next;
-};
+
 
 const ResearchCard: React.FC<{ research: AssistantResearch }> = ({ research }) => <div className="sb-assistant-research">
   <div className="sb-assistant-card-kicker"><Globe2 size={14} /> Recherche encyclopédique · Wikipédia</div>
@@ -93,12 +92,14 @@ const CatalogCard: React.FC<{
 /** Conversation et recherches sans effet de bord ; chaque écriture YouTube et
     chaque génération passent par leur propre bouton de confirmation. */
 export const AssistantView: React.FC = () => {
-  const { playlists, recentBlends, exclusions, isAuthenticated, libraryError, loadPlaylistTracks, refreshLibrary, generate, generating } = useData();
+  const { playlists, recentBlends, exclusions, isAuthenticated, libraryError, loadPlaylistTracks, refreshLibrary, generate, generating, userProfile, setCurrentBlend } = useData();
   const { setView, showToast } = useUI();
+  const { currentTrack, isPlaying, togglePlay } = usePlayer();
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const messagesRef = useRef<AssistantMessage[]>([]);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [responding, setResponding] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ text: string; url?: string } | null>(null);
@@ -114,9 +115,17 @@ export const AssistantView: React.FC = () => {
   const [catalogSelected, setCatalogSelected] = useState<string[]>([]);
   const [instruction, setInstruction] = useState('');
   const [minutes, setMinutes] = useState(45);
+  const [createdBlend, setCreatedBlend] = useState<GeneratedBlend | null>(null);
+  const [showOptions, setShowOptions] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const [liveQuote, setLiveQuote] = useState('');
+  const liveOrb = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const chatEnd = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
   const [livePhase, setLivePhase] = useState<LivePhase>('off');
   const [liveDetail, setLiveDetail] = useState('');
-  const [voicePartial, setVoicePartial] = useState({ user: '', assistant: '' });
   const partialRef = useRef({ user: '', assistant: '' });
   const liveRef = useRef<GeminiLiveSession | null>(null);
   const alive = useRef(true), operation = useRef(0), busyRef = useRef(false);
@@ -138,7 +147,6 @@ export const AssistantView: React.FC = () => {
       if (value) append({ role: r, text: value });
       partialRef.current[r] = '';
     }
-    if (alive.current) setVoicePartial({ ...partialRef.current });
   };
 
   useEffect(() => {
@@ -147,8 +155,8 @@ export const AssistantView: React.FC = () => {
       operation.current++; busyRef.current = false; actionAbort.current?.abort(); actionAbort.current = null;
       liveRef.current?.stop(); liveRef.current = null;
       partialRef.current = { user: '', assistant: '' };
-      setVoicePartial({ user: '', assistant: '' }); setPlan(null); setPlaylistDraft(null); setDestination('');
-      setBusy(false); setBusyLabel('');
+      setPlan(null); setPlaylistDraft(null); setDestination('');
+      setBusy(false); setResponding(false); setBusyLabel(''); setLiveOpen(false); setCreatedBlend(null); setSpeaking(false); setLiveQuote('');
       if (event.type === 'sb:auth-changing') {
         // Une conversation peut contenir les titres et noms privés d'un compte.
         // Ne jamais les montrer ou les renvoyer à Gemini dans le compte suivant.
@@ -160,7 +168,7 @@ export const AssistantView: React.FC = () => {
     const onHidden = () => {
       if (document.visibilityState === 'hidden' && liveRef.current) {
         flushVoice(); liveRef.current.stop(); liveRef.current = null;
-        if (alive.current) setNotice({ text: 'Vocal arrêté parce que l’application est passée en arrière-plan.' });
+        if (alive.current) { setNotice({ text: 'Vocal arrêté parce que l’application est passée en arrière-plan.' }); setLiveOpen(false); }
       }
     };
     window.addEventListener('sb:auth-changing', stopForAuth);
@@ -174,8 +182,22 @@ export const AssistantView: React.FC = () => {
     };
   }, []);
 
+  // Ne pas arracher la lecture d'un ancien message lors d'une réponse.
+  useEffect(() => {
+    const onScroll = () => { stickToBottom.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 240; };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  useEffect(() => {
+    if (stickToBottom.current && messages.length) chatEnd.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [messages.length, busyLabel]);
+  useEffect(() => {
+    const input = composerRef.current;
+    if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 144)}px`; }
+  }, [text, liveOpen]);
+
   const validSource = (s: AssistantSource | null, pls: Playlist[]) => !!s && (s.type === 'playlist'
-    ? pls.some((p) => p.id === s.id) : getStoredBlends().some((b) => b.id === s.id));
+    ? pls.some((p) => p.id === s.id) : getStoredBlends().some((b) => b.id === s.id && Date.parse(b.expiresAt) > Date.now()));
   const guardFor = (op: number, revision: number, serial: number, signal?: AbortSignal) => {
     assertAccountRevision(revision);
     if (!alive.current || op !== operation.current || signal?.aborted || serial !== youtubeService.sessionRevision()) {
@@ -185,16 +207,21 @@ export const AssistantView: React.FC = () => {
 
   const send = async (raw = text, opts: { voice?: boolean; signal?: AbortSignal } = {}): Promise<boolean> => {
     const request = raw.trim();
-    if (!request || busyRef.current || generating) return false;
+    if (!request || request.length > 6000 || busyRef.current || generating || (liveRef.current && !opts.voice)) return false;
+    stickToBottom.current = true;
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const controller = new AbortController(); actionAbort.current = controller;
+    let timedOut = false;
+    const responseTimer = window.setTimeout(() => { timedOut = true; controller.abort(); }, 90000);
     const cancel = () => controller.abort();
     if (opts.signal?.aborted) controller.abort(); else opts.signal?.addEventListener('abort', cancel, { once: true });
     const guard = () => guardFor(op, revision, serial, controller.signal);
-    busyRef.current = true; setBusy(true); setError(''); setNotice(null); setPlan(null); setPlaylistDraft(null); setDestination('');
+    busyRef.current = true; setBusy(true); setResponding(true); setError(''); setNotice(null);
     if (!opts.voice) setText('');
     append({ role: 'user', text: opts.voice ? `Demande vocale à préparer : ${request}` : request });
     const conversation = [...messagesRef.current];
+    const activeProposal = plan?.action === 'blend' ? { title: plan.title, source: source === 'catalog' ? null : (() => { const i = source.indexOf(':'); return { type: source.slice(0, i) as 'playlist' | 'blend', id: source.slice(i + 1) }; })(),
+      extraSources: extraSources.map((key) => { const i = key.indexOf(':'); return { type: key.slice(0, i) as 'playlist' | 'blend', id: key.slice(i + 1) }; }), instruction, durationMinutes: minutes } : undefined;
     let prepared = false;
     try {
       setBusyLabel('Lecture de ton contexte musical…');
@@ -208,10 +235,11 @@ export const AssistantView: React.FC = () => {
       const ask = async (catalogData: Track[] = [], researchData = '') => {
         guard(); setBusyLabel('Gemini réfléchit à ta demande…');
         const r = await geminiService.converse(conversation, contextPlaylists, getStoredBlends(), exclusions,
-          { catalog: catalogData, research: researchData, signal: controller.signal });
+          { catalog: catalogData, research: researchData, proposal: activeProposal, signal: controller.signal });
         guard(); return r;
       };
-      let answer = await ask();
+      const previousCatalog = catalog.filter((track) => catalogSelected.includes(track.videoId) && !isAssistantTrackExcluded(track));
+      let answer = await ask(previousCatalog);
       // Une source devinée par son nom doit être lue entièrement avant de
       // proposer quoi que ce soit, même quand elle n'était pas nommée.
       const loadChosen = async (r: AssistantReply): Promise<boolean> => {
@@ -227,7 +255,7 @@ export const AssistantView: React.FC = () => {
         }
         return loaded;
       };
-      if (await loadChosen(answer)) answer = await ask();
+      if (await loadChosen(answer)) answer = await ask(previousCatalog);
       guard();
       let research: AssistantResearch | undefined;
       const warnings: string[] = [];
@@ -236,7 +264,7 @@ export const AssistantView: React.FC = () => {
         try { research = await searchEncyclopedia(answer.researchQuery || request, controller.signal); guard(); }
         catch (e: any) { guard(); warnings.push(e?.message || 'Recherche encyclopédique indisponible.'); }
       }
-      let found: Track[] = [];
+      let found: Track[] = [...previousCatalog];
       if (answer.catalogQueries.length) {
         if (!youtubeService.isAuthenticated()) warnings.push('Connecte ton compte Google pour rechercher des morceaux sur YouTube.');
         else {
@@ -249,7 +277,7 @@ export const AssistantView: React.FC = () => {
           }
         }
       }
-      if (research || found.length) {
+      if (research || found.some((track) => !previousCatalog.some((old) => old.videoId === track.videoId))) {
         const excerpts = research?.sources.map((s) => `${s.title} (${s.url}) : ${s.extract}`).join('\n') || '';
         answer = await ask(found, excerpts);
         if (await loadChosen(answer)) answer = await ask(found, excerpts);
@@ -264,7 +292,7 @@ export const AssistantView: React.FC = () => {
         catch (e: any) { guard(); warnings.push(e?.message || 'Recherche Web Google indisponible.'); }
       }
       guard(); setCatalog(found);
-      const recommended = answer.catalogVideoIds.filter((id) => found.some((t) => t.videoId === id));
+      const recommended = [...new Set([...answer.catalogVideoIds, ...catalogSelected])].filter((id) => found.some((t) => t.videoId === id && !isAssistantTrackExcluded(t)));
       setCatalogSelected(recommended);
       if (answer.source && !validSource(answer.source, contextPlaylists)) {
         answer = { ...answer, action: 'none', source: null,
@@ -285,38 +313,38 @@ export const AssistantView: React.FC = () => {
           if (!p) throw new Error('Cette playlist n’est plus disponible.');
           setBusyLabel('Vérification complète de la playlist et préparation de l’aperçu…');
           const proposal = await prepareAssistantPlaylistDraft(p, answer.playlistEdits); guard();
-          setPlaylistDraft(proposal); setPlan(answer); setDestination(''); prepared = true;
+          setCreatedBlend(null); setPlaylistDraft(proposal); setPlan(answer); setDestination(''); prepared = true;
         }
       } else if (answer.action === 'blend' && (validSource(answer.source, contextPlaylists) || recommended.length)) {
-        setPlan(answer); setPlaylistDraft(null);
+        setCreatedBlend(null); setPlan(answer); setPlaylistDraft(null); setDestination('');
         setSource(answer.source && validSource(answer.source, contextPlaylists) ? sourceKey(answer.source) : 'catalog');
-        setExtraSources(answer.extraSources.filter((s) => validSource(s, contextPlaylists)).map(sourceKey));
-        const requests = conversation.filter((m) => m.role === 'user').map((m) => m.text).join('\n');
-        setInstruction(`Demandes de l’auditeur :\n${requests}${answer.instruction ? `\n\nSynthèse : ${answer.instruction}` : ''}`.slice(0, 6000));
+        setExtraSources([...new Set(answer.extraSources.filter((s) => validSource(s, contextPlaylists) && (!answer.source || sourceKey(s) !== sourceKey(answer.source))).map(sourceKey))].slice(0, 3));
+        setInstruction(blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)));
         setMinutes(answer.durationMinutes); prepared = true;
       }
-      if (prepared) window.setTimeout(() => { if (alive.current) planRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 100);
+      // L'aperçu reste en place pendant le Live ; aucun défilement forcé.
       return prepared;
     } catch (e: any) {
-      if (alive.current && op === operation.current && !controller.signal.aborted) setError(e?.message || 'Impossible de préparer la réponse.');
+      if (alive.current && op === operation.current && (timedOut || !controller.signal.aborted)) setError(timedOut ? 'La réponse a dépassé le délai. Ta proposition précédente est conservée ; tu peux réessayer.' : e?.message || 'Impossible de préparer la réponse.');
       return false;
     } finally {
+      clearTimeout(responseTimer);
       opts.signal?.removeEventListener('abort', cancel);
       if (actionAbort.current === controller) actionAbort.current = null;
-      if (alive.current && op === operation.current) { busyRef.current = false; setBusy(false); setBusyLabel(''); }
+      if (alive.current && op === operation.current) { busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); }
     }
   };
 
   const prepareFromCatalog = (tracks: Track[]) => {
     const selected = tracks.filter((t) => catalogSelected.includes(t.videoId) && !isAssistantTrackExcluded(t));
     if (!selected.length || busyRef.current || generating) return;
-    setCatalog(tracks); setCatalogSelected(selected.map((t) => t.videoId)); setPlaylistDraft(null); setDestination(''); setError('');
+    setCreatedBlend(null); setCatalog(tracks); setCatalogSelected(selected.map((t) => t.videoId)); setPlaylistDraft(null); setDestination(''); setError('');
     setSource('catalog'); setExtraSources([]); setMinutes(45);
     const request = [...messagesRef.current].reverse().find((m) => m.role === 'user')?.text || 'Composer à partir des titres sélectionnés.';
     setInstruction(`Demandes de l’auditeur :\n${request}`.slice(0, 6000));
     setPlan({ reply: 'Blend préparé à partir des titres sélectionnés.', action: 'blend', source: null, extraSources: [], instruction: request,
       durationMinutes: 45, catalogQueries: [], catalogVideoIds: selected.map((t) => t.videoId), researchQuery: '', playlistEdits: null });
-    window.setTimeout(() => planRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
+    window.setTimeout(() => { if (alive.current) planRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 100);
   };
 
   const launchBlend = async () => {
@@ -334,18 +362,19 @@ export const AssistantView: React.FC = () => {
           setBusyLabel(`Lecture de « ${p.title} » sur YouTube…`);
           tracks.push(...(p.tracks || await loadPlaylistTracks(id))); guard();
         } else if (kind === 'blend') {
-          const b = getStoredBlends().find((x) => x.id === id); if (!b) throw new Error('Un blend choisi a expiré ou a été supprimé.');
+          const b = getStoredBlends().find((x) => x.id === id && Date.parse(x.expiresAt) > Date.now()); if (!b) throw new Error('Un blend choisi a expiré ou a été supprimé.');
           tracks.push(...b.tracks);
         }
       }
       // Les titres sélectionnés dans le catalogue peuvent compléter toute source.
       if (source !== 'catalog') tracks.push(...catalog.filter((t) => catalogSelected.includes(t.videoId)));
-      const allowed = tracks.filter((t) => !isAssistantTrackExcluded(t));
+      const allowed = uniqueAssistantTracks(tracks, isAssistantTrackExcluded);
       if (!allowed.length) throw new Error('Les sources sont vides ou tous leurs titres sont bloqués.');
       if (!instruction.trim()) throw new Error('Précise ta consigne avant de générer.');
       const blend = await generate({ durationMinutes: minutes, ratio: { anchor: 30, deepDive: 30, fresh: 40 }, instruction: instruction.trim() }, { seeds: allowed });
       guard();
-      if (blend) { setView('blend'); showToast(`Blend prêt : ${blend.tracks.length} titres.`); }
+      if (blend) { setCreatedBlend(blend); setPlan(null); showToast(`Blend enregistré : ${blend.tracks.length} titres.`); append({ role: 'assistant', text: 'Ton blend est prêt et enregistré dans tes blends. Tu peux maintenant découvrir la sélection.' }); }
+      else throw new Error('Aucun blend n’a été enregistré. Vérifie tes sources puis réessaie.');
     } catch (e: any) { if (alive.current && op === operation.current) setError(e?.message || 'La génération a échoué.'); }
     finally { if (alive.current && op === operation.current) { busyRef.current = false; setBusy(false); setBusyLabel(''); } }
   };
@@ -423,6 +452,7 @@ export const AssistantView: React.FC = () => {
       if (!alive.current || signal.aborted || serial !== youtubeService.sessionRevision()) throw new Error('Demande vocale interrompue.');
     };
     if (name === 'proposer_action_musicale') {
+      flushVoice();
       const ok = await send(query, { voice: true, signal }); guard();
       return ok ? { statut: 'aperçu préparé', instruction: 'Ne prétends pas que l’action est faite. La personne doit vérifier puis cliquer sur le bouton.' }
         : { statut: 'aucun aperçu exécutable', instruction: 'Demande une précision ou signale que la préparation n’a pas abouti.' };
@@ -451,25 +481,31 @@ export const AssistantView: React.FC = () => {
     }
     throw new Error('Outil vocal inconnu.');
   };
-  latest.current = { handleVoiceTool };
 
   const startVoice = async () => {
-    if (liveRef.current || busyRef.current) return;
-    setError(''); setNotice(null); partialRef.current = { user: '', assistant: '' }; setVoicePartial({ user: '', assistant: '' });
+    if (liveRef.current || busyRef.current || generating) return;
+    setError(''); setNotice(null); partialRef.current = { user: '', assistant: '' }; setLiveQuote('');
     const key = getStoredSettings().geminiApiKey || GEMINI_API_KEY;
+    if (!key.trim()) { setError('Ajoute une clé Gemini dans Réglages avant d’ouvrir le vocal.'); return; }
+    if (isPlaying) togglePlay();
     const context = JSON.stringify({ playlists: playlists.slice(0, 60).map((p) => ({ titre: p.title, nombre: p.trackCount })),
-      blends: recentBlends.slice(0, 30).map((b) => ({ titre: b.title, nombre: b.tracks.length })),
+      conversation: messagesRef.current.filter((m) => !m.grounded).slice(-10).map((m) => ({ role: m.role, text: m.text.slice(-800) })),
+      propositionEnCours: plan ? { titre: plan.title, source, consigne: instruction.slice(-2000), dureeMinutes: minutes } : null,
+      blends: recentBlends.slice(0, 20).map((b) => ({ titre: b.title, nombre: b.tracks.length })),
       exclusions: { artistes: exclusions.artists, titres: exclusions.tracks.map((t) => ({ titre: t.title, artiste: t.artist })) } });
     const session = new GeminiLiveSession({
-      onPhase: (phase, detail) => { if (alive.current) { setLivePhase(phase); setLiveDetail(detail || ''); } },
+      onPhase: (phase, detail) => { if (alive.current && liveRef.current === session) { setLivePhase(phase); setLiveDetail(detail || ''); } },
       onTranscript: (role, part, finished) => {
-        if (!alive.current) return;
-        partialRef.current[role] = mergeTranscript(partialRef.current[role], part);
-        setVoicePartial({ ...partialRef.current }); if (finished) flushVoice(role);
+        if (!alive.current || liveRef.current !== session) return;
+        partialRef.current[role] = mergeLiveTranscript(partialRef.current[role], part);
+        setLiveQuote(partialRef.current[role]);
+        if (finished) flushVoice(role);
       },
-      onTurnComplete: () => { if (alive.current) flushVoice(); },
+      onTurnComplete: () => { if (alive.current && liveRef.current === session) flushVoice(); },
+      onSpeaking: (value) => { if (alive.current && liveRef.current === session) setSpeaking(value); },
+      onLevel: (level) => { if (liveRef.current === session) liveOrb.current?.style.setProperty('--voice-level', String(level)); },
       onTool: (name, query, signal) => latest.current.handleVoiceTool(name, query, signal),
-      onError: (message) => { if (alive.current) { flushVoice(); liveRef.current = null; setError(message); } },
+      onError: (message) => { if (alive.current && liveRef.current === session) { flushVoice(); liveRef.current = null; setError(message); } },
     });
     liveRef.current = session;
     try { await session.start(key, context, { encyclopedia: webEnabled, web: googleWebEnabled, catalog: youtubeService.isAuthenticated() }); }
@@ -477,47 +513,86 @@ export const AssistantView: React.FC = () => {
       if (liveRef.current === session) { liveRef.current = null; if (alive.current) setError(e?.message || 'Impossible de démarrer le vocal.'); }
     }
   };
-  const stopVoice = () => { flushVoice(); liveRef.current?.stop(); liveRef.current = null; };
+  const stopVoice = () => { flushVoice(); liveRef.current?.stop(); liveRef.current = null; setLivePhase('off'); setSpeaking(false); };
+  const closeLive = () => { stopVoice(); setLiveOpen(false); requestAnimationFrame(() => composerRef.current?.focus()); };
+  useEffect(() => {
+    if (!liveOpen) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') latest.current.closeLive(); };
+    document.addEventListener('keydown', escape);
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    document.getElementById('sb-live-close')?.focus();
+    return () => document.removeEventListener('keydown', escape);
+  }, [liveOpen]);
+  useLayoutEffect(() => { latest.current = { handleVoiceTool, closeLive }; });
   const toggleCatalog = (id: string) => setCatalogSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id].slice(0, 20));
   const toggleExtra = (value: string) => setExtraSources((old) => old.includes(value) ? old.filter((x) => x !== value) : [...old, value].slice(0, 3));
   const setExample = (value: string, web = false) => { setText(value); if (web) { setWebEnabled(true); setGoogleWebEnabled(false); } document.getElementById('sb-assistant-input')?.focus(); };
 
-  return <div className="ytm-page sb-assistant">
-    <header className="sb-assistant-hero">
-      <div><span className="sb-assistant-eyebrow"><Sparkles size={13} /> TON COPILOTE MUSICAL</span><h1>Assistant</h1>
-        <p>Une idée en tête ? Parlons musique, trouvons des pistes et imaginons la suite ensemble.</p></div>
-      <div className="sb-assistant-hero-art" aria-hidden="true"><span className="sb-assistant-ring sb-assistant-ring--one" /><span className="sb-assistant-ring sb-assistant-ring--two" /><AudioLines size={34} /></div>
-    </header>
-    <div className="sb-assistant-context"><span><Library size={14} /> {isAuthenticated && !hasDemo ? `${playlists.length} playlist(s) YouTube` : 'Bibliothèque de démonstration'}</span>
-      <span><Sparkles size={14} /> {recentBlends.length} blend(s)</span><span><ShieldCheck size={14} /> {exclusions.tracks.length + exclusions.artists.length} exclusion(s)</span></div>
-    {(!isAuthenticated || hasDemo || libraryError) && <p className="sb-assistant-note">{libraryError || 'Connecte ton compte Google dans Réglages pour utiliser tes propres playlists.'}</p>}
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 60000); return () => clearInterval(timer); }, []);
+  const validBlends = recentBlends.filter((blend) => Date.parse(blend.expiresAt) > clock);
+  const sourceTracks = uniqueAssistantTracks([
+    ...[source, ...extraSources].flatMap((key) => key.startsWith('playlist:') ? playlists.find((p) => `playlist:${p.id}` === key)?.tracks || []
+      : key.startsWith('blend:') ? validBlends.find((b) => `blend:${b.id}` === key)?.tracks || [] : []),
+    ...catalog.filter((track) => catalogSelected.includes(track.videoId)),
+  ], isAssistantTrackExcluded);
+  const sourceTitle = source.startsWith('playlist:') ? playlists.find((p) => `playlist:${p.id}` === source)?.title
+    : source.startsWith('blend:') ? validBlends.find((b) => `blend:${b.id}` === source)?.title : 'Ta sélection YouTube';
+  const resetConversation = () => {
+    if (busyRef.current || generating || liveRef.current) return;
+    messagesRef.current = []; setMessages([]); setPlan(null); setPlaylistDraft(null); setCreatedBlend(null);
+    setCatalog([]); setCatalogSelected([]); setSource(''); setExtraSources([]); setInstruction(''); setMinutes(45);
+    setNotice(null); setError(''); setText(''); setLiveQuote(''); composerRef.current?.focus();
+  };
+  const openCreatedBlend = () => {
+    const saved = createdBlend && getStoredBlends().find((b) => b.id === createdBlend.id && Date.parse(b.expiresAt) > Date.now());
+    if (!saved) { setError('Ce blend a expiré ou a été supprimé.'); return; }
+    setCurrentBlend(saved); setView('blend');
+  };
 
-    <section className={`sb-live-card ${livePhase !== 'off' ? 'is-active' : ''}`} aria-label="Mode vocal en direct">
-      <div className="sb-live-icon"><AudioLines size={23} /></div>
-      <div className="sb-live-copy"><div className="sb-live-title"><strong>Parlons en direct</strong><span className={`sb-live-indicator sb-live-indicator--${livePhase}`}><i /> {livePhase === 'off' ? 'VOCAL LIVE' : livePhase === 'connecting' ? 'CONNEXION' : livePhase === 'muted' ? 'MICRO COUPÉ' : 'EN DIRECT'}</span></div>
-        <p>{livePhase === 'off' ? 'Un vrai dialogue vocal avec Gemini. Tu gardes la main sur chaque action.' : liveDetail || 'Session vocale en cours.'}</p>
+  return <div className={`ytm-page sb-assistant sb-assistant-studio${currentTrack ? ' has-player' : ''}`}>
+    <header className="sa-header">
+      {liveOpen && <button id="sb-live-close" type="button" className="sa-icon" onClick={closeLive} aria-label="Fermer le mode Live"><X size={20} /></button>}
+      <div><h1>{liveOpen ? 'Assistant Live' : 'Assistant'}</h1><p>{liveOpen ? 'La musique, à voix haute' : 'Le son de tes envies'}</p></div>
+      <div className="sa-header-actions">
+        {!liveOpen && <button type="button" className="sa-icon" disabled={busy || generating || livePhase !== 'off'} onClick={resetConversation} aria-label="Nouvelle conversation" title="Nouvelle conversation"><Plus size={21} /></button>}
+        <button type="button" className="sa-icon" onClick={() => { if (liveOpen) closeLive(); else setView('history'); }} aria-label={liveOpen ? 'Revenir à la conversation' : 'Mes blends'} title={liveOpen ? 'Revenir à la conversation' : 'Mes blends'}><History size={19} /></button>
       </div>
-      <div className="sb-live-actions">{livePhase === 'off' ? <button type="button" className="sb-live-start" disabled={busy || generating} onClick={() => void startVoice()}><Mic size={16} /> Démarrer le vocal</button>
-        : <>{livePhase !== 'connecting' && <button type="button" className="sb-live-secondary" onClick={() => liveRef.current?.setMuted(livePhase !== 'muted')} aria-label={livePhase === 'muted' ? 'Rouvrir le microphone' : 'Couper le microphone'}>{livePhase === 'muted' ? <Mic size={16} /> : <MicOff size={16} />}{livePhase === 'muted' ? 'Rouvrir' : 'Couper le micro'}</button>}
-          <button type="button" className="sb-live-stop" onClick={stopVoice}><Square size={14} fill="currentColor" /> Arrêter</button></>}</div>
-      {(voicePartial.user || voicePartial.assistant) && <div className="sb-live-transcript" aria-live="polite">{voicePartial.user && <p><b>Toi</b> {voicePartial.user}</p>}{voicePartial.assistant && <p><b>Assistant</b> {voicePartial.assistant}</p>}</div>}
-      <details className="sb-live-privacy"><summary><ShieldCheck size={13} /> Confidentialité et conditions du vocal <ChevronDown size={13} /></summary>
-        <p>Le microphone envoie ta voix à Google tant qu’il est ouvert ; la session s’arrête en quittant cette page ou en arrière-plan. Permission micro et HTTPS sont nécessaires. La clé personnelle est utilisée directement et reste accessible dans le navigateur ; le vocal consomme tes quotas et peut être facturé. Utilise un casque pour limiter l’écho.</p>
-      </details>
-    </section>
+    </header>
 
-    <div className="sb-assistant-layout"><div className="sb-assistant-main">
-      <div className="sb-chat-head"><div><span className="sb-section-kicker">NOTRE CONVERSATION</span><h2>À toi de jouer</h2></div>
-        {messages.length > 0 && <button type="button" className="sb-chat-reset" disabled={busy || livePhase !== 'off'} onClick={() => { messagesRef.current = []; setMessages([]); setPlan(null); setPlaylistDraft(null); setCatalog([]); setCatalogSelected([]); setNotice(null); setError(''); }}>Nouvelle conversation</button>}</div>
-      <div className="sb-chat" aria-live="polite">
-        {messages.length === 0 && <div className="sb-chat-empty"><span><Bot size={22} /></span><h3>Qu’aimerais-tu écouter ?</h3>
-          <p>Décris une ambiance, pose une question ou prépare une modification : on regarde tout ensemble avant d’agir.</p>
-          <div className="sb-chat-examples"><button type="button" onClick={() => setExample('Reprends ma playlist Chill Voiture, ajoute du jazz et rends-la plus énergique.')}>Un trajet plus jazz <span>↗</span></button>
-            <button type="button" onClick={() => setExample('Aide-moi à découvrir des artistes proches de Daft Punk.')}>Découvrir des artistes <span>↗</span></button>
-            <button type="button" onClick={() => setExample('Propose-moi des changements précis pour une de mes playlists.')}>Améliorer une playlist <span>↗</span></button></div>
+    {liveOpen && <section className="sa-live" aria-label="Mode vocal en direct">
+      <div className="sa-live-state" role="status"><i data-active={livePhase === 'listening'} /> {busy ? 'ON PRÉPARE TON ENVIE' : livePhase === 'connecting' ? 'CONNEXION EN COURS' : speaking ? 'L’ASSISTANT TE RÉPOND' : livePhase === 'muted' ? 'MICRO EN PAUSE' : livePhase === 'off' ? 'À VOIX HAUTE' : 'À TON ÉCOUTE'}</div>
+      <h2>{livePhase === 'connecting' ? 'On se retrouve…' : livePhase === 'muted' ? 'Prends ton temps.' : 'On suit ton envie.'}</h2>
+      <div ref={liveOrb} className={`sa-orb sa-orb--live ${speaking ? 'is-speaking' : ''} ${livePhase === 'listening' ? 'is-listening' : ''}`} aria-hidden="true"><div className="sa-wave">{[0, 1, 2, 3, 4].map((i) => <i key={i} style={{ '--i': i } as React.CSSProperties} />)}</div></div>
+      <div className="sa-live-words" aria-live="polite"><blockquote>{liveQuote ? `« ${liveQuote.slice(-500)} »` : '« Un peu plus de groove, et garde cette ambiance. »'}</blockquote>
+        <p>{busy ? busyLabel : livePhase === 'off' ? 'Une humeur, un artiste… Dis-le simplement.' : liveDetail || 'Parle naturellement, je m’occupe du reste.'}</p></div>
+      {error && <p className="sb-assistant-error" role="alert">{error}</p>}
+      {plan && <button type="button" className="sa-live-proposal" onClick={closeLive}><span className="sa-orb sa-orb--tiny" /><span><b>{plan.title || 'Ta proposition musicale'}</b><small>Aperçu prêt · à vérifier dans la conversation</small></span><ChevronRight size={17} /></button>}
+      {livePhase === 'off' ? <div className="sa-live-consent"><p><ShieldCheck size={14} /> En démarrant, tu autorises l’envoi du micro à Google via ta clé Gemini. Quotas et frais possibles. Un casque est conseillé.</p>
+        <button type="button" className="sa-primary" onClick={() => void startVoice()} disabled={busy || generating}><Mic size={17} /> Démarrer le vocal</button></div>
+        : <div className="sa-live-controls">
+          <button type="button" disabled={livePhase === 'connecting'} aria-label={livePhase === 'muted' ? 'Rouvrir le microphone' : 'Couper le microphone'} aria-pressed={livePhase === 'muted'} onClick={() => liveRef.current?.setMuted(livePhase !== 'muted')}><span>{livePhase === 'muted' ? <MicOff size={21} /> : <Mic size={21} />}</span><small>{livePhase === 'muted' ? 'Micro coupé' : 'Micro activé'}</small></button>
+          <button type="button" className="sa-live-end" onClick={closeLive}><span><X size={24} /></span><small>Terminer</small></button>
+          <button type="button" onClick={closeLive}><span><Keyboard size={20} /></span><small>Écrire</small></button>
         </div>}
+      <p className="sa-live-foot">Tu peux m’interrompre à tout moment.<br />Aucune action sans confirmation à l’écran.</p>
+    </section>}
+
+    <div hidden={liveOpen} className={`sa-conversation${messages.length === 0 ? ' is-welcome' : ''}`}>
+      {messages.length === 0 && <section className="sa-welcome" aria-label="Bienvenue dans l’assistant">
+        <span className="sa-orb" aria-hidden="true" />
+        <p className="sa-greeting">Bonjour{userProfile?.name?.trim() ? ` ${userProfile.name.trim().split(/\s+/)[0]}` : ''}.</p>
+        <h2>Et si on trouvait<br />ton prochain son ?</h2>
+        <p className="sa-intro">Une humeur, un artiste, quelques mots.<br />On en fait un blend qui te ressemble.</p>
+        <div className="sa-inspiration"><h3>UN PEU D’INSPIRATION</h3>
+          <button type="button" onClick={() => setExample('Fais-moi un blend jazz qui colle à mes goûts.')}><AudioLines size={18} /><span>Du jazz, mais à ma façon</span><ArrowUpRight size={16} /></button>
+          <button type="button" onClick={() => setExample('Propose-moi un blend de pépites à découvrir à partir de ma bibliothèque.')}><Sparkles size={18} /><span>Des pépites à découvrir</span><ArrowUpRight size={16} /></button>
+          <button type="button" onClick={() => setExample('Crée un blend pour ma soirée, avec une montée progressive en énergie.')}><Music2 size={18} /><span>La bande-son de ma soirée</span><ArrowUpRight size={16} /></button>
+        </div>
+      </section>}
+      <div className="sb-chat" role="log" aria-label="Conversation avec l’assistant" aria-live="polite" aria-relevant="additions text">
         {messages.map((m, i) => <div className={`sb-chat-message sb-chat-message--${m.role}${m.grounded ? ' sb-chat-message--grounded' : ''}`} key={i}>
-          <span className="sb-chat-label">{m.role === 'user' ? 'Toi' : 'Assistant'}</span>{!m.grounded && <p>{m.text}</p>}
+          {m.role === 'assistant' && <span className="sb-chat-label"><span className="sa-orb sa-orb--dot" /> Assistant</span>}{!m.grounded && <p>{m.text}</p>}
           {m.grounded && <GoogleResearchCard result={m.grounded} />}
           {m.research && <ResearchCard research={m.research} />}
           {m.catalog && <CatalogCard tracks={m.catalog} selected={catalogSelected} onToggle={toggleCatalog} onPrepare={() => prepareFromCatalog(m.catalog!)} />}
@@ -527,24 +602,38 @@ export const AssistantView: React.FC = () => {
       {error && <p className="sb-assistant-error" role="alert">{error}</p>}
       {notice && <div className="sb-assistant-notice" role="status"><Check size={16} /><span>{notice.text}{notice.url && <> <a href={notice.url} target="_blank" rel="noopener noreferrer">Ouvrir sur YouTube <ExternalLink size={12} /></a></>}</span></div>}
 
-      {plan?.action === 'blend' && <section ref={planRef} className="sb-assistant-plan" aria-label="Proposition de blend">
-        <div className="sb-assistant-plan-heading"><span><WandSparkles size={18} /></span><div><strong>Proposition de blend</strong><p>Un aperçu de la direction ; la liste finale sera composée après ton accord.</p></div></div>
-        <label>Source principale<select aria-label="Source du blend" value={source} onChange={(e) => setSource(e.target.value)}>
-          <option value="" disabled>Choisir une source</option>
-          <optgroup label={hasDemo ? 'Playlists de démonstration' : 'Playlists YouTube Music'}>{playlists.map((p) => <option key={p.id} value={`playlist:${p.id}`}>{p.title}</option>)}</optgroup>
-          <optgroup label="Blends valides">{recentBlends.map((b) => <option key={b.id} value={`blend:${b.id}`}>{b.title}</option>)}</optgroup>
-          {catalogSelected.length > 0 && <option value="catalog">Titres YouTube sélectionnés ({catalogSelected.length})</option>}
-        </select></label>
-        {(playlists.length + recentBlends.length > 1) && <details className="sb-assistant-extra"><summary>Ajouter d’autres sources ({extraSources.length}/3) <ChevronDown size={14} /></summary>
-          <div>{[...playlists.map((p) => ({ value: `playlist:${p.id}`, label: p.title })), ...recentBlends.map((b) => ({ value: `blend:${b.id}`, label: b.title }))]
-            .filter((x) => x.value !== source).map((x) => <label key={x.value}><input type="checkbox" checked={extraSources.includes(x.value)} disabled={!extraSources.includes(x.value) && extraSources.length >= 3} onChange={() => toggleExtra(x.value)} /> {x.label}</label>)}</div>
-        </details>}
-        {catalogSelected.length > 0 && <p className="sb-assistant-note">{catalogSelected.length} résultat(s) YouTube sélectionné(s) serviront aussi d’amorces.</p>}
-        <label>Consigne transmise à Gemini<textarea aria-label="Consigne transmise à Gemini" value={instruction} onChange={(e) => setInstruction(e.target.value)} rows={4} maxLength={6000} /></label>
-        <div className="sb-assistant-plan-bottom"><label>Durée<select aria-label="Durée du blend" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
-          {[20, 45, 60, 120].map((n) => <option key={n} value={n}>{n} min</option>)}{![20, 45, 60, 120].includes(minutes) && <option value={minutes}>{minutes} min</option>}</select></label>
-          <button className="btn" disabled={busy || generating || !source || !instruction.trim() || (source === 'catalog' && !catalogSelected.length)} onClick={() => void launchBlend()}><Sparkles size={16} /> Générer ce blend</button></div>
-        <p className="sb-assistant-note">Les titres bloqués sont retirés des amorces. La génération ne modifie pas tes playlists YouTube.</p>
+      {plan?.action === 'blend' && <>
+        <section ref={planRef} className="sb-assistant-plan sa-blend-card" aria-label="Proposition de blend">
+          <div className="sa-blend-heading"><div className="sa-cover"><span>{(plan.title || 'TON BLEND').slice(0, 45)}</span><small>SOUNDBLEND</small></div>
+            <div><span className="sa-kicker">BLEND POUR TOI</span><h2>{plan.title || 'À ta façon'}</h2><p>Objectif : {minutes} min · à composer</p></div></div>
+          <p className="sa-direction">{plan.instruction || 'Une sélection à ton image, entre repères et découvertes.'}</p>
+          <div className="sa-seeds-label">Points de départ · {sourceTitle || 'Source à choisir'}</div>
+          {sourceTracks.length > 0 ? <ol className="sa-track-preview">{sourceTracks.slice(0, 3).map((track, i) => <li key={track.videoId}><span>{String(i + 1).padStart(2, '0')}</span><div><b>{track.title}</b><small>{track.artist}</small></div><time>{track.durationFormatted || (track.durationSeconds ? `${Math.floor(track.durationSeconds / 60)}:${String(track.durationSeconds % 60).padStart(2, '0')}` : '—')}</time></li>)}</ol>
+            : <p className="sa-small">Les morceaux de cette source seront chargés à la génération.</p>}
+          <p className="sa-small">Ces titres inspirent le blend : ce n’est pas la sélection finale.</p>
+          <details className="sa-adjust"><summary><Settings2 size={14} /> Ajuster les sources et la durée <ChevronDown size={14} /></summary>
+            <fieldset disabled={busy || generating}>
+              <label>Source principale<select aria-label="Source du blend" value={source} onChange={(e) => { setSource(e.target.value); setExtraSources((old) => old.filter((key) => key !== e.target.value)); }}><option value="" disabled>Choisir une source</option>
+                <optgroup label={hasDemo ? 'Playlists de démonstration' : 'Playlists YouTube Music'}>{playlists.map((p) => <option key={p.id} value={`playlist:${p.id}`}>{p.title}</option>)}</optgroup>
+                <optgroup label="Blends valides">{validBlends.map((b) => <option key={b.id} value={`blend:${b.id}`}>{b.title}</option>)}</optgroup>
+                {catalogSelected.length > 0 && <option value="catalog">Titres YouTube sélectionnés ({catalogSelected.length})</option>}</select></label>
+              {(playlists.length + validBlends.length > 1) && <details className="sb-assistant-extra"><summary>Autres sources ({extraSources.filter((key) => key !== source).length}/3) <ChevronDown size={14} /></summary>
+                <div>{[...playlists.map((p) => ({ value: `playlist:${p.id}`, label: p.title })), ...validBlends.map((b) => ({ value: `blend:${b.id}`, label: b.title }))].filter((x) => x.value !== source).map((x) => <label key={x.value}><input type="checkbox" checked={extraSources.includes(x.value)} disabled={!extraSources.includes(x.value) && extraSources.length >= 3} onChange={() => toggleExtra(x.value)} /> {x.label}</label>)}</div></details>}
+              <label>Consigne transmise à Gemini<textarea aria-label="Consigne transmise à Gemini" value={instruction} onChange={(e) => setInstruction(e.target.value)} rows={4} maxLength={6000} /></label>
+              <label>Durée souhaitée<select aria-label="Durée du blend" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[20, 45, 60, 120].map((n) => <option key={n} value={n}>{n} min</option>)}{![20, 45, 60, 120].includes(minutes) && <option value={minutes}>{minutes} min</option>}</select></label>
+            </fieldset>
+          </details>
+          <button type="button" className="sa-primary" disabled={busy || generating || !source || !instruction.trim() || (source === 'catalog' && !catalogSelected.length)} onClick={() => void launchBlend()}><WandSparkles size={16} /> Générer et ajouter à mes blends</button>
+          <p className="sa-small sa-center">Rien ne sera modifié sur YouTube. Tes exclusions sont respectées.</p>
+        </section>
+        <div className="sa-followups" aria-label="Affiner ce blend">{(plan.followUps?.length ? plan.followUps : ['Plus jazzy', 'Plus de découvertes', 'Plus d’énergie']).map((followUp) => <button type="button" key={followUp} disabled={busy || generating} onClick={() => void send(followUp)}>{followUp}</button>)}</div>
+      </>}
+
+      {createdBlend && <section className="sb-assistant-plan sa-blend-card" aria-label="Blend enregistré"><div className="sa-blend-heading"><PlaylistArt tracks={createdBlend.tracks} title={createdBlend.title} size={70} radius={12} /><div><span className="sa-kicker"><Check size={12} /> DANS TES BLENDS</span><h2>{createdBlend.title}</h2><p>{createdBlend.tracks.length} titres · {Math.round(createdBlend.tracks.reduce((sum, t) => sum + (t.durationSeconds || 0), 0) / 60)} min</p></div></div>
+        <ol className="sa-track-preview">{createdBlend.tracks.slice(0, 3).map((track, i) => <li key={track.id}><span>{String(i + 1).padStart(2, '0')}</span><div><b>{track.title}</b><small>{track.artist}</small></div><time>{track.durationFormatted || '—'}</time></li>)}</ol>
+        {createdBlend.tracks.length > 3 && <p className="sa-small">+ {createdBlend.tracks.length - 3} titres à découvrir</p>}
+        {createdBlend.generation?.warning && <p className="sb-assistant-note">{createdBlend.generation.warning}</p>}
+        <button type="button" className="sa-primary" onClick={openCreatedBlend}>Découvrir mon blend <ChevronRight size={16} /></button>
       </section>}
 
       {playlistDraft && plan?.action === 'playlist_edit' && <section ref={planRef} className="sb-assistant-plan sb-assistant-playlist-plan" aria-label="Proposition de modification de playlist">
@@ -557,7 +646,7 @@ export const AssistantView: React.FC = () => {
         </div>
         <details className="sb-assistant-extra"><summary>Voir l’ordre complet proposé ({playlistDraft.after.length}) <ChevronDown size={14} /></summary>
           <ol className="sb-plan-order">{playlistDraft.after.map((t, i) => <li key={`${t.id}-${i}`}>{t.title} <small>· {t.artist}</small></li>)}</ol></details>
-        <fieldset className="sb-plan-destination"><legend>Où appliquer cette proposition ?</legend>
+        <fieldset className="sb-plan-destination" disabled={busy || generating}><legend>Où appliquer cette proposition ?</legend>
           <label><input type="radio" name="sb-playlist-destination" checked={destination === 'original'} onChange={() => setDestination('original')} /> <span><b>Modifier l’originale</b><small>Les changements seront envoyés à la playlist YouTube existante.</small></span></label>
           <label><input type="radio" name="sb-playlist-destination" checked={destination === 'copy'} disabled={playlistDraft.after.length > 150} onChange={() => setDestination('copy')} /> <span><b>Créer une copie privée</b><small>L’originale reste intacte ; limite de 150 titres pour cette copie.</small></span></label>
         </fieldset>
@@ -572,11 +661,20 @@ export const AssistantView: React.FC = () => {
             <Check size={16} /> {destination === 'original' ? 'Confirmer : modifier l’originale' : destination === 'copy' ? 'Confirmer : créer la copie' : 'Choisis une destination'}</button></div>
       </section>}
 
-      <form className="sb-chat-compose" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+      <div className="sa-compose-dock">
+      <form className="sa-compose" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <label className="sr-only" htmlFor="sb-assistant-input">Ton message à l’assistant</label>
-        <textarea id="sb-assistant-input" rows={2} maxLength={6000} value={text} onChange={(e) => setText(e.target.value)} placeholder="Décris ton idée musicale…" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
-        <button type="submit" disabled={!text.trim() || busy || generating} aria-label="Envoyer à l’assistant"><ArrowUp size={19} /></button>
+        <textarea ref={composerRef} id="sb-assistant-input" rows={1} maxLength={6000} value={text} onChange={(e) => setText(e.target.value)} placeholder="Décris ton envie musicale…" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
+        <div className="sa-compose-tools"><button type="button" className="sa-icon sa-options-button" aria-label="Options et contexte" aria-expanded={showOptions} aria-controls="sa-options" onClick={() => setShowOptions(!showOptions)}><Plus size={20} /></button>
+          <button type="button" className="sa-live-button" disabled={busy || generating} onClick={() => { setLiveOpen(true); setError(''); }}><AudioLines size={15} /> Live</button>
+          {responding && !generating && <button type="button" className="sa-send" aria-label="Arrêter la réponse" onClick={() => { operation.current++; actionAbort.current?.abort(); actionAbort.current = null; busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); setNotice({ text: 'Réponse interrompue. Tu peux reformuler ta demande.' }); }}><X size={18} /></button>}
+          <button type="submit" className="sa-send" disabled={!text.trim() || busy || generating} aria-label="Envoyer à l’assistant"><ArrowUp size={19} /></button>
+        </div>
       </form>
+      <p className="sa-compose-caption">L’IA propose. Tu donnes le ton.</p>
+      </div>
+      <div ref={chatEnd} className="sa-chat-end" />
+      <div id="sa-options" className="sa-options" hidden={!showOptions}>
       <div className="sb-compose-options sb-search-options">
         <label><input type="checkbox" checked={webEnabled} disabled={livePhase !== 'off' || busy} onChange={(e) => { setWebEnabled(e.target.checked); if (e.target.checked) setGoogleWebEnabled(false); }} /><Globe2 size={14} /> Chercher des sources sur Wikipédia</label>
         <label><input type="checkbox" checked={googleWebEnabled} disabled={livePhase !== 'off' || busy} onChange={(e) => { setGoogleWebEnabled(e.target.checked); if (e.target.checked) setWebEnabled(false); }} /><Globe2 size={14} /> Recherche Web Google (quota / coût)</label>
@@ -584,13 +682,8 @@ export const AssistantView: React.FC = () => {
       </div>
       {googleWebEnabled && <p className="sb-assistant-disclaimer sb-search-disclaimer">La question est envoyée à Google Search via ta clé Gemini ; la recherche peut être facturée et nécessite les droits appropriés. En vocal, la réponse sourcée est affichée à l’écran, pas lue automatiquement. Évite les informations sensibles : Google indique conserver les données 30 jours pour ce service. <a href="https://aistudio.google.com/docs/terms#grounding-with-google-search" target="_blank" rel="noopener noreferrer">Conditions Google</a> · <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer">Tarifs</a>.</p>}
       <p className="sb-assistant-disclaimer">Gemini reçoit la conversation, les noms et titres chargés, les blends et les exclusions. Si Wikipédia est activée, le sujet lui est envoyé. Une recherche YouTube utilise du quota. Vérifie toujours les résultats.</p>
+      <details className="sa-context"><summary><ShieldCheck size={13} /> Contexte et confidentialité <ChevronDown size={13} /></summary><p>{isAuthenticated && !hasDemo ? `${playlists.length} playlist(s) YouTube` : 'Bibliothèque de démonstration'} · {validBlends.length} blend(s) · {exclusions.tracks.length + exclusions.artists.length} exclusion(s).</p>{(!isAuthenticated || hasDemo || libraryError) && <p>{libraryError || 'Connecte ton compte Google pour utiliser tes propres playlists.'}</p>}<button type="button" onClick={() => setView('settings')}>Connexion et clé Gemini <ExternalLink size={12} /></button></details>
+      </div>
     </div>
-    <aside className="sb-assistant-aside" aria-label="Conseils de l’assistant"><div className="sb-assistant-aside-card"><span className="sb-section-kicker">FAIS-EN PLUS</span><h3>Quelques idées</h3>
-      <button type="button" onClick={() => setExample('Crée un blend à partir de deux de mes playlists, avec une montée progressive en énergie.')}><span><Sparkles size={16} /></span><div><b>Imaginer un mix</b><small>Mélange tes univers</small></div><span>↗</span></button>
-      <button type="button" onClick={() => setExample('Propose des modifications précises pour ma playlist : demande-moi laquelle si nécessaire.')}><span><ListMusic size={16} /></span><div><b>Repenser une playlist</b><small>Un aperçu avant action</small></div><span>↗</span></button>
-      <button type="button" onClick={() => setExample('Que sais-tu de Daft Punk et de la French touch ?', true)}><span><Globe2 size={16} /></span><div><b>Explorer une histoire</b><small>Sources encyclopédiques</small></div><span>↗</span></button>
-    </div><div className="sb-assistant-aside-help"><CircleHelp size={16} /><p><b>Tu décides.</b><br />Les propositions ne changent rien avant confirmation. Les recherches et les réponses peuvent contenir des erreurs.</p></div>
-      <button type="button" className="sb-assistant-settings-link" onClick={() => setView('settings')}><Headphones size={15} /> Connexion et clé Gemini <ExternalLink size={12} /></button>
-    </aside></div>
   </div>;
 };
