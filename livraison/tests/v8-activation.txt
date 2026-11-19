@@ -2,6 +2,7 @@
   ✓ pas de réacquisition en boucle ni de faux échec de capture pendant l’attente du geste
   ✓ bouton d’activation amené dans la zone mobile visible
   ✓ un clic JavaScript artificiel ne prétend pas résoudre le blocage
+  ✓ contexte définitivement bloqué remplacé, ancien fermé, un seul moteur actif
   ✓ resolve : tap tactile réel → contexte running → PCM non nuls envoyés
   ✓ la session existante reprend sans nouvel accès micro et le bouton disparaît
   ✓ suspension en cours de Live : activation clavier reprend aussi l’envoi
@@ -10,6 +11,7 @@
   ✓ pas de réacquisition en boucle ni de faux échec de capture pendant l’attente du geste
   ✓ bouton d’activation amené dans la zone mobile visible
   ✓ un clic JavaScript artificiel ne prétend pas résoudre le blocage
+  ✓ contexte définitivement bloqué remplacé, ancien fermé, un seul moteur actif
   ✓ reject : tap tactile réel → contexte running → PCM non nuls envoyés
   ✓ la session existante reprend sans nouvel accès micro et le bouton disparaît
   ✓ suspension en cours de Live : activation clavier reprend aussi l’envoi
@@ -18,10 +20,23 @@
   ✓ pas de réacquisition en boucle ni de faux échec de capture pendant l’attente du geste
   ✓ bouton d’activation amené dans la zone mobile visible
   ✓ un clic JavaScript artificiel ne prétend pas résoudre le blocage
+  ✓ contexte définitivement bloqué remplacé, ancien fermé, un seul moteur actif
   ✓ pending : tap tactile réel → contexte running → PCM non nuls envoyés
   ✓ la session existante reprend sans nouvel accès micro et le bouton disparaît
   ✓ suspension en cours de Live : activation clavier reprend aussi l’envoi
   ✓ aucun rejet non géré ni écriture musicale
+  ✓ sticky : vrai contexte suspended reconnu indépendamment du sort de la promesse resume()
+  ✓ pas de réacquisition en boucle ni de faux échec de capture pendant l’attente du geste
+  ✓ bouton d’activation amené dans la zone mobile visible
+  ✓ un clic JavaScript artificiel ne prétend pas résoudre le blocage
+  ✓ contexte définitivement bloqué remplacé, ancien fermé, un seul moteur actif
+  ✓ sticky : tap tactile réel → contexte running → PCM non nuls envoyés
+  ✓ la session existante reprend sans nouvel accès micro et le bouton disparaît
+  ✓ suspension en cours de Live : activation clavier reprend aussi l’envoi
+  ✓ aucun rejet non géré ni écriture musicale
+  ✓ suspension pendant l’attente des PCM : activation proposée au lieu de la même erreur de capture
+  ✓ suspension tardive : nouveau moteur produit des PCM réels, sans reprendre les permissions
+  ✓ suspension tardive : aucun rejet
   ✓ relance 1 après Terminer : activation réussie
   ✓ relance 2 après Terminer : activation réussie
   ✓ relance 3 après Terminer : activation réussie
@@ -37,4 +52,4 @@
   ✓ thème dark effectivement appliqué au compte de test
   ✓ audit axe activation dark : []
 
-38 contrôles d’activation réussis, dont 2 audits axe (Chromium à politique de geste stricte, panne suspended simulée).
+53 contrôles d’activation V8 réussis, dont 2 audits axe (Chromium à politique de geste stricte, panne suspended simulée).

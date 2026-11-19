@@ -1,4 +1,6 @@
-# Assistant V7 — contexte audio suspended
+# Assistant V7 — contexte audio suspended (archive)
+
+> La version actuelle est décrite dans `ASSISTANT-V8.md`. V8 remplace le moteur bloqué lors de l’activation tactile, surveille les suspensions pendant l’attente des PCM et sépare l’arrêt du micro de la préparation Gemini. Le signalement physique suivant confirme que V7 ne résolvait pas l’intermittence de façon fiable.
 
 ## Ce que montre la nouvelle capture
 

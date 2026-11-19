@@ -19,6 +19,7 @@ import { geminiService, type AssistantMessage, type AssistantReply, type Assista
 import { GeminiLiveSession, type LivePhase, type LiveToolName, type LiveCaptureStatus } from '../../services/geminiLive';
 import { prepareAssistantPlaylistDraft, assertAssistantSnapshot, type AssistantPlaylistDraft } from '../../services/assistantPlaylist';
 import { beginExportAttempt, clearExportAttempt, getExportAttempt, rememberExportPlaylist } from '../../services/exportRecovery';
+import { beginVoicePreparation, cancelVoicePreparation, completeVoicePreparation, getVoicePreparation, guardVoicePreparation, ownsVoicePreparation, recoverVoiceQuery, forgetVoiceQuery, subscribeVoicePreparation } from '../../services/assistantVoiceTask';
 import { accountRevision, assertAccountRevision } from '../../services/accountScope';
 import { isAssistantTrackExcluded, youtubeService } from '../../services/youtube';
 import { getStoredBlends, getStoredSettings } from '../../services/storage';
@@ -84,6 +85,7 @@ export const AssistantView: React.FC = () => {
   const [liveOpen, setLiveOpen] = useState(false);
   const [audioActivationRequired, setAudioActivationRequired] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<LiveCaptureStatus | null>(null);
+  const [finishing, setFinishing] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [liveQuote, setLiveQuote] = useState('');
   const liveOrb = useRef<HTMLDivElement>(null);
@@ -95,6 +97,10 @@ export const AssistantView: React.FC = () => {
   const [liveDetail, setLiveDetail] = useState('');
   const partialRef = useRef({ user: '', assistant: '' });
   const liveRef = useRef<GeminiLiveSession | null>(null);
+  const taskOwner = useRef<object>({});
+  const restoredTask = useRef<object | null>(null);
+  const [recoveryQuery, setRecoveryQuery] = useState<string | null>(() => getVoicePreparation() ? null : recoverVoiceQuery());
+  const finishingLive = useRef<GeminiLiveSession | null>(null);
   const alive = useRef(true), operation = useRef(0), busyRef = useRef(false);
   const actionAbort = useRef<AbortController | null>(null);
   const planRef = useRef<HTMLElement | null>(null);
@@ -120,10 +126,10 @@ export const AssistantView: React.FC = () => {
     alive.current = true;
     const stopForAuth = (event: Event) => {
       operation.current++; busyRef.current = false; actionAbort.current?.abort(); actionAbort.current = null;
-      liveRef.current?.stop(); liveRef.current = null;
+      liveRef.current?.stop(); liveRef.current = null; finishingLive.current?.stop(); finishingLive.current = null;
       partialRef.current = { user: '', assistant: '' };
       setPlan(null); setPlaylistDraft(null); setDestination(''); setMentionPickerOpen(false); setDraftMentions([]); setCaptureStatus(null); setAudioActivationRequired(false);
-      setBusy(false); setResponding(false); setBusyLabel(''); setLiveOpen(false); setCreatedBlend(null); setSpeaking(false); setLiveQuote('');
+      setBusy(false); setResponding(false); setBusyLabel(''); setFinishing(false); setRecoveryQuery(null); restoredTask.current = null; setLiveOpen(false); setCreatedBlend(null); setSpeaking(false); setLiveQuote('');
       if (event.type === 'sb:auth-changing') {
         // Une conversation peut contenir les titres et noms privés d'un compte.
         // Ne jamais les montrer ou les renvoyer à Gemini dans le compte suivant.
@@ -134,19 +140,47 @@ export const AssistantView: React.FC = () => {
     };
     const onHidden = () => {
       if (document.visibilityState === 'hidden' && liveRef.current?.hasMicrophone()) {
-        flushVoice(); liveRef.current.stop(); liveRef.current = null;
-        if (alive.current) { setNotice({ text: 'Vocal arrêté parce que l’application est passée en arrière-plan.' }); setLiveOpen(false); }
+        latest.current.stopVoice();
+        if (alive.current) { setNotice({ text: 'Micro coupé en arrière-plan. La demande déjà transmise continue tant que le navigateur reste actif.' }); setLiveOpen(false); }
       }
     };
     window.addEventListener('sb:auth-changing', stopForAuth);
     window.addEventListener('sb:auth-expired', stopForAuth);
     document.addEventListener('visibilitychange', onHidden);
     return () => {
-      alive.current = false; operation.current++; actionAbort.current?.abort(); actionAbort.current = null; liveRef.current?.stop(); liveRef.current = null;
+      alive.current = false; operation.current++;
+      if (!ownsVoicePreparation(actionAbort.current)) actionAbort.current?.abort(); actionAbort.current = null;
+      // Même la navigation vers une autre vue coupe seulement les dispositifs.
+      // Le service garde ses propres gardes de compte et son délai de fin.
+      liveRef.current?.finishInput(); liveRef.current = null; finishingLive.current = null;
       window.removeEventListener('sb:auth-changing', stopForAuth);
       window.removeEventListener('sb:auth-expired', stopForAuth);
       document.removeEventListener('visibilitychange', onHidden);
     };
+  }, []);
+
+  useEffect(() => {
+    const restore = () => {
+      const task = getVoicePreparation();
+      if (!task || task.owner === taskOwner.current) return;
+      if (task.status === 'running') {
+        busyRef.current = true; actionAbort.current = task.controller;
+        setBusy(true); setResponding(true); setBusyLabel('Gemini termine ta demande vocale…');
+        return;
+      }
+      busyRef.current = false; actionAbort.current = null; setBusy(false); setResponding(false); setBusyLabel('');
+      if (restoredTask.current === task) return;
+      restoredTask.current = task;
+      if (task.error) { setError(task.error); setRecoveryQuery(recoverVoiceQuery()); return; }
+      const result = task.result; if (!result) return;
+      messagesRef.current = result.messages; setMessages(result.messages);
+      setCatalog(result.catalog); setCatalogSelected(result.selected);
+      if (result.prepared) {
+        setPlan(result.answer); setPlaylistDraft(result.playlistDraft); setDestination('');
+        setSource(result.source); setExtraSources(result.extraSources); setInstruction(result.instruction); setMinutes(result.answer.durationMinutes);
+      }
+    };
+    const unsubscribe = subscribeVoicePreparation(restore); restore(); return unsubscribe;
   }, []);
 
   // Ne pas arracher la lecture d'un ancien message lors d'une réponse.
@@ -193,7 +227,8 @@ export const AssistantView: React.FC = () => {
 
   const send = async (raw = text, opts: { voice?: boolean; signal?: AbortSignal; attachDraft?: boolean } = {}): Promise<boolean> => {
     const request = raw.trim();
-    if (!request || request.length > 6000 || busyRef.current || generating || (liveRef.current && !opts.voice)) return false;
+    if (!request || request.length > 6000 || (opts.voice && getVoicePreparation()?.status === 'running') || busyRef.current || generating || ((liveRef.current || finishingLive.current) && !opts.voice)) return false;
+    if (!opts.voice) cancelVoicePreparation();
     stickToBottom.current = true;
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const controller = new AbortController(); actionAbort.current = controller;
@@ -201,16 +236,20 @@ export const AssistantView: React.FC = () => {
     const responseTimer = window.setTimeout(() => { timedOut = true; controller.abort(); }, 90000);
     const cancel = () => controller.abort();
     if (opts.signal?.aborted) controller.abort(); else opts.signal?.addEventListener('abort', cancel, { once: true });
-    const guard = () => guardFor(op, revision, serial, controller.signal);
+    const voiceTask = opts.voice ? beginVoicePreparation(taskOwner.current, request, controller) : null;
+    const guard = () => voiceTask ? guardVoicePreparation(voiceTask) : guardFor(op, revision, serial, controller.signal);
     busyRef.current = true; setBusy(true); setResponding(true); setError(''); setNotice(null);
     const references = opts.attachDraft || opts.voice ? [...draftMentions] : [];
     if (!opts.voice && opts.attachDraft) { setText(''); setDraftMentions([]); }
     else if (!opts.voice && !draftMentions.length) setText('');
-    append({ role: 'user', text: opts.voice ? `Demande vocale à préparer : ${request}` : request, ...(references.length ? { references } : {}) });
+    const requestMessage: AssistantMessage = { role: 'user', text: opts.voice ? `Demande vocale à préparer : ${request}` : request, ...(references.length ? { references } : {}) };
+    if (alive.current) append(requestMessage);
+    else messagesRef.current = [...messagesRef.current, requestMessage];
     const conversation = [...messagesRef.current];
     const activeProposal = plan?.action === 'blend' ? { title: plan.title, source: source === 'catalog' ? null : (() => { const i = source.indexOf(':'); return { type: source.slice(0, i) as 'playlist' | 'blend', id: source.slice(i + 1) }; })(),
       extraSources: extraSources.map((key) => { const i = key.indexOf(':'); return { type: key.slice(0, i) as 'playlist' | 'blend', id: key.slice(i + 1) }; }), instruction, durationMinutes: minutes } : undefined;
     let prepared = false;
+    let preparedDraft: AssistantPlaylistDraft | null = null;
     try {
       setBusyLabel('Lecture de ton contexte musical…');
       let contextPlaylists = playlists.map((p) => ({ ...p }));
@@ -282,6 +321,7 @@ export const AssistantView: React.FC = () => {
           if (!p) throw new Error('Cette playlist n’est plus disponible.');
           setBusyLabel('Vérification complète de la playlist et préparation de l’aperçu…');
           const proposal = await prepareAssistantPlaylistDraft(p, answer.playlistEdits); guard();
+          preparedDraft = proposal;
           setCreatedBlend(null); setPlaylistDraft(proposal); setPlan(answer); setDestination(''); prepared = true;
         }
       } else if (answer.action === 'blend' && (validSource(answer.source, contextPlaylists) || recommended.length)) {
@@ -291,9 +331,18 @@ export const AssistantView: React.FC = () => {
         setInstruction(blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)));
         setMinutes(answer.durationMinutes); prepared = true;
       }
-      // L'aperçu reste en place pendant le Live ; aucun défilement forcé.
+      // Le travail appartient au compte, pas au montage de la vue ni au micro.
+      if (voiceTask) completeVoicePreparation(voiceTask, {
+        messages: [...conversation, { role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) }],
+        answer, catalog: found, selected: recommended, prepared, playlistDraft: preparedDraft,
+        source: answer.source && validSource(answer.source, contextPlaylists) ? sourceKey(answer.source) : 'catalog',
+        extraSources: [...new Set(answer.extraSources.filter((s) => validSource(s, contextPlaylists) && (!answer.source || sourceKey(s) !== sourceKey(answer.source))).map(sourceKey))].slice(0, 3),
+        instruction: blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)),
+      });
       return prepared;
     } catch (e: any) {
+      if (voiceTask) completeVoicePreparation(voiceTask, undefined, timedOut ? 'La préparation vocale a dépassé le délai. Tu peux reprendre ta demande.' : e?.message || 'Préparation vocale impossible.');
+      if (alive.current) setRecoveryQuery(recoverVoiceQuery());
       if (alive.current && op === operation.current && (timedOut || !controller.signal.aborted)) setError(timedOut ? 'La réponse a dépassé le délai. Ta proposition précédente est conservée ; tu peux réessayer.' : e?.message || 'Impossible de préparer la réponse.');
       return false;
     } finally {
@@ -318,6 +367,7 @@ export const AssistantView: React.FC = () => {
 
   const launchBlend = async () => {
     if (!plan || plan.action !== 'blend' || !source || busyRef.current || generating) return;
+    cancelVoicePreparation();
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const guard = () => guardFor(op, revision, serial);
     busyRef.current = true; setBusy(true); setError('');
@@ -351,6 +401,7 @@ export const AssistantView: React.FC = () => {
   const applyPlaylist = async () => {
     const draft = playlistDraft, choice = destination;
     if (!draft || !choice || busyRef.current || generating || recovery) return;
+    cancelVoicePreparation();
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const controller = new AbortController(); actionAbort.current = controller;
     const guard = () => guardFor(op, revision, serial, controller.signal);
@@ -422,7 +473,10 @@ export const AssistantView: React.FC = () => {
     };
     if (name === 'proposer_action_musicale') {
       flushVoice();
-      const ok = await send(query, { voice: true, signal }); guard();
+      // Une demande acceptée appartient au chat, pas au dispositif micro.
+      const ok = await send(query, { voice: true });
+      assertAccountRevision(revision);
+      if (serial !== youtubeService.sessionRevision()) throw new Error('Préparation interrompue.');
       return ok ? { statut: 'aperçu préparé', instruction: 'Ne prétends pas que l’action est faite. La personne doit vérifier puis cliquer sur le bouton.' }
         : { statut: 'aucun aperçu exécutable', instruction: 'Demande une précision ou signale que la préparation n’a pas abouti.' };
     }
@@ -439,6 +493,7 @@ export const AssistantView: React.FC = () => {
 
   const startVoice = async () => {
     if (liveRef.current || busyRef.current || generating) return;
+    if (finishingLive.current) { setNotice({ text: 'La demande vocale précédente est encore en cours. Attends sa réponse avant de relancer le Live.' }); return; }
     setError(''); setNotice(null); setCaptureStatus(null); setAudioActivationRequired(false); partialRef.current = { user: '', assistant: '' }; setLiveQuote('');
     const key = getStoredSettings().geminiApiKey || GEMINI_API_KEY;
     if (!key.trim()) { setError('Ajoute une clé Gemini dans Réglages avant d’ouvrir le vocal.'); return; }
@@ -453,26 +508,42 @@ export const AssistantView: React.FC = () => {
     const session = new GeminiLiveSession({
       onPhase: (phase, detail) => { if (alive.current && liveRef.current === session) { setLivePhase(phase); setLiveDetail(detail || ''); } },
       onTranscript: (role, part, finished) => {
-        if (!alive.current || liveRef.current !== session) return;
+        if (!alive.current || (liveRef.current !== session && finishingLive.current !== session)) return;
         partialRef.current[role] = mergeLiveTranscript(partialRef.current[role], part);
         setLiveQuote(partialRef.current[role]);
         if (finished) flushVoice(role);
       },
-      onTurnComplete: () => { if (alive.current && liveRef.current === session) flushVoice(); },
+      onTurnComplete: () => { if (alive.current && (liveRef.current === session || finishingLive.current === session)) flushVoice(); },
+      onDrained: (timedOut) => {
+        if (finishingLive.current !== session) return;
+        finishingLive.current = null; setFinishing(false);
+        if (alive.current) { flushVoice(); setNotice(null); if (timedOut && !busyRef.current) setError('La réponse Live n’est pas arrivée à temps. Ta transcription est conservée ; renvoie-la dans le chat pour réessayer.'); }
+      },
       onSpeaking: (value) => { if (alive.current && liveRef.current === session) setSpeaking(value); },
       onAudioActivationRequired: (required) => { if (alive.current && liveRef.current === session) setAudioActivationRequired(required); },
       onCaptureStatus: (status) => { if (alive.current && liveRef.current === session) setCaptureStatus(status); },
       onLevel: (level) => { if (liveRef.current === session) liveOrb.current?.style.setProperty('--voice-level', String(level)); },
       onTool: (name, query, signal) => latest.current.handleVoiceTool(name, query, signal),
-      onError: (message) => { if (alive.current && liveRef.current === session) { flushVoice(); liveRef.current = null; setError(message); } },
+      onError: (message) => { if (alive.current && (liveRef.current === session || finishingLive.current === session)) { flushVoice(); if (liveRef.current === session) liveRef.current = null; if (finishingLive.current === session) { finishingLive.current = null; setFinishing(false); } setError(message); } },
     });
     liveRef.current = session;
     try { await session.start(key, context, { encyclopedia: false, web: false, catalog: youtubeService.isAuthenticated() }); }
     catch (e: any) {
+      session.stop();
       if (liveRef.current === session) { liveRef.current = null; if (alive.current) setError(e?.message || 'Impossible de démarrer le vocal.'); }
     }
   };
-  const stopVoice = () => { flushVoice(); liveRef.current?.stop(); liveRef.current = null; setLivePhase('off'); setSpeaking(false); setCaptureStatus(null); setAudioActivationRequired(false); };
+  const stopVoice = () => {
+    flushVoice(); const session = liveRef.current;
+    if (session) {
+      finishingLive.current = session;
+      const continues = session.finishInput(); liveRef.current = null;
+      setFinishing(continues);
+      if (!continues) finishingLive.current = null;
+      else setNotice({ text: 'Micro coupé. Gemini termine la demande dans la conversation ; aucune action ne sera appliquée sans confirmation.' });
+    }
+    setLivePhase('off'); setSpeaking(false); setCaptureStatus(null); setAudioActivationRequired(false);
+  };
   const closeLive = () => { stopVoice(); setLiveOpen(false); requestAnimationFrame(() => composerRef.current?.focus()); };
   useEffect(() => {
     if (!liveOpen) return;
@@ -488,7 +559,7 @@ export const AssistantView: React.FC = () => {
     button?.focus({ preventScroll: true });
     button?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
   }, [audioActivationRequired, liveOpen]);
-  useLayoutEffect(() => { latest.current = { handleVoiceTool, closeLive }; });
+  useLayoutEffect(() => { latest.current = { handleVoiceTool, closeLive, stopVoice }; });
   const toggleCatalog = (id: string) => setCatalogSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id].slice(0, 20));
   const toggleExtra = (value: string) => setExtraSources((old) => old.includes(value) ? old.filter((x) => x !== value) : [...old, value].slice(0, 3));
   const setExample = (value: string) => { setText(`${value}${draftMentions.length ? ` ${draftMentions.map(mentionToken).join(' ')}` : ''}`); composerRef.current?.focus({ preventScroll: true }); };
@@ -527,7 +598,8 @@ export const AssistantView: React.FC = () => {
   const sourceTitle = source.startsWith('playlist:') ? playlists.find((p) => `playlist:${p.id}` === source)?.title
     : source.startsWith('blend:') ? validBlends.find((b) => `blend:${b.id}` === source)?.title : 'Ta sélection YouTube';
   const resetConversation = () => {
-    if (busyRef.current || generating || liveRef.current) return;
+    if (busyRef.current || generating || liveRef.current || finishingLive.current) return;
+    cancelVoicePreparation(); setRecoveryQuery(null);
     messagesRef.current = []; setMessages([]); setDraftMentions([]); setMentionPickerOpen(false); setPlan(null); setPlaylistDraft(null); setCreatedBlend(null);
     setCatalog([]); setCatalogSelected([]); setSource(''); setExtraSources([]); setInstruction(''); setMinutes(45);
     setNotice(null); setError(''); setText(''); setLiveQuote(''); composerRef.current?.focus({ preventScroll: true });
@@ -543,7 +615,7 @@ export const AssistantView: React.FC = () => {
       {liveOpen && <button id="sb-live-close" type="button" className="sa-icon" onClick={closeLive} aria-label="Fermer le mode Live"><X size={20} /></button>}
       <div><h1>{liveOpen ? 'Assistant Live' : 'Assistant'}</h1><p>{liveOpen ? 'La musique, à voix haute' : 'Le son de tes envies'}</p></div>
       <div className="sa-header-actions">
-        {!liveOpen && <button type="button" className="sa-icon" disabled={busy || generating || livePhase !== 'off'} onClick={resetConversation} aria-label="Nouvelle conversation" title="Nouvelle conversation"><Plus size={21} /></button>}
+        {!liveOpen && <button type="button" className="sa-icon" disabled={busy || finishing || generating || livePhase !== 'off'} onClick={resetConversation} aria-label="Nouvelle conversation" title="Nouvelle conversation"><Plus size={21} /></button>}
         <button type="button" className="sa-icon sa-privacy-trigger" onClick={() => setPrivacyOpen(true)} aria-label="Confidentialité de l’assistant" aria-haspopup="dialog" title="Confidentialité"><ShieldCheck size={18} /></button>
       </div>
     </header>
@@ -557,7 +629,7 @@ export const AssistantView: React.FC = () => {
       <div className="sa-live-words" aria-live="polite"><blockquote>{liveQuote ? `« ${liveQuote.slice(-500)} »` : livePhase === 'connecting' ? 'Juste un instant…' : 'Dis-moi ton envie musicale.'}</blockquote>
         <p>{busy ? busyLabel : liveDetail || (livePhase === 'off' ? 'Une humeur, un artiste… Dis-le simplement.' : '') || 'Parle naturellement, je m’occupe du reste.'}</p></div>
       {error && <p className="sb-assistant-error" role="alert">{error}</p>}
-      {audioActivationRequired && <div className="sa-audio-activation"><p id="sa-audio-activation-hint">Le micro est autorisé, mais le moteur audio reste en pause. Essaie de le réactiver par un appui direct.</p><button type="button" className="sa-primary" id="sa-activate-audio" aria-describedby="sa-audio-activation-hint" onClick={() => liveRef.current?.activateAudio()}><AudioLines size={17} /> Activer l’audio</button></div>}
+      {audioActivationRequired && <div className="sa-audio-activation"><p id="sa-audio-activation-hint">Le micro est autorisé, mais le moteur audio reste en pause. Essaie de le réactiver par un appui direct.</p><button type="button" className="sa-primary" id="sa-activate-audio" aria-describedby="sa-audio-activation-hint" onClick={event => liveRef.current?.activateAudio(event.isTrusted)}><AudioLines size={17} /> Activer l’audio</button></div>}
       {plan && <button type="button" className="sa-live-proposal" onClick={closeLive}><span className="sa-orb sa-orb--tiny" /><span><b>{plan.title || 'Ta proposition musicale'}</b><small>Aperçu prêt · à vérifier dans la conversation</small></span><ChevronRight size={17} /></button>}
       {captureStatus && livePhase !== 'off' && <p className="sa-live-signal" data-signal={captureStatus.signal && livePhase === 'listening'}><i />{livePhase === 'muted' ? 'Micro en pause' : audioActivationRequired ? 'Audio en pause' : captureStatus.signal ? 'Signal micro reçu' : 'En attente de signal micro'}</p>}
       {livePhase === 'off' ? <div className="sa-live-consent"><button type="button" className="sa-primary" onClick={() => void startVoice()} disabled={busy || generating}><Mic size={17} /> Réessayer le Live</button></div>
@@ -566,7 +638,7 @@ export const AssistantView: React.FC = () => {
           <button type="button" className="sa-live-end" onClick={closeLive}><span><X size={24} /></span><small>Terminer</small></button>
           <button type="button" onClick={closeLive}><span><Keyboard size={20} /></span><small>Écrire</small></button>
         </div>}
-      <details className="sa-live-help"><summary>Le micro ne réagit pas ?</summary><p>Audio Live · révision 7</p>
+      <details className="sa-live-help"><summary>Le micro ne réagit pas ?</summary><p>Audio Live · révision 8</p>
         {captureStatus && <p className="sa-capture-diagnostic">Capture : {captureStatus.engine || 'initialisation'} · moteur {captureStatus.context}<br />Blocs reçus : {captureStatus.chunks} · envoyés : {captureStatus.sent}<br />{captureStatus.trackMuted ? 'Le périphérique signale un micro muet.' : captureStatus.signal ? 'Un signal audio a été reçu récemment.' : 'Aucun signal sonore mesuré récemment.'}</p>}
         <p>Si le moteur indique « suspended », utilise « Activer l’audio » : ce n’est pas un refus de permission. Une permission accordée ne garantit pas qu’un signal audio arrive. Si les blocs reçus augmentent mais que le signal reste nul, vérifie le coupe-micro Android, le casque/Bluetooth et les autres apps audio. Le Live essaie automatiquement un moteur de capture de secours.</p><p>Le Live nécessite une adresse HTTPS et une clé Gemini enregistrée sur cet appareil. Les réglages du PC ne sont pas automatiquement ceux du mobile.</p><p>Dans Chrome : ouvre les informations du site → Autorisations → Microphone → Autoriser. Sur Android, vérifie aussi Réglages → Applications → Chrome (ou l’app installée) → Autorisations → Microphone.</p><p>Si tu utilises un aperçu intégré, ouvre l’app dans un onglet Chrome normal. Une autorisation déjà accordée n’affiche pas forcément une nouvelle demande. Le statut ci-dessus indique l’étape en cours.</p></details>
       <p className="sa-live-foot">Micro transmis à Google via ta clé Gemini · quotas possibles.<br />Tu peux interrompre et terminer à tout moment. Aucune action sans confirmation à l’écran.</p>
@@ -593,6 +665,11 @@ export const AssistantView: React.FC = () => {
         {busy && !generating && <div className="sb-chat-thinking"><Loader2 size={15} className="anim-spin" /> {busyLabel || 'Un instant…'}</div>}
       </div>
       {error && <p className="sb-assistant-error" role="alert">{error}</p>}
+      {recoveryQuery && <div className="sb-assistant-notice" role="status"><span>
+        Une demande vocale a été interrompue : « {recoveryQuery} ». Seule sa consigne a été conservée, pas l’audio.
+        <button type="button" className="sb-assistant-inline-button" disabled={busy || finishing || generating} onClick={() => { const query = recoveryQuery; setRecoveryQuery(null); void send(query, { voice: true }); }}>Reprendre la demande vocale</button>
+        <button type="button" className="sb-assistant-inline-button" onClick={() => { forgetVoiceQuery(); setRecoveryQuery(null); }}>Oublier cette demande</button>
+      </span></div>}
       {notice && <div className="sb-assistant-notice" role="status"><Check size={16} /><span>{notice.text}{notice.url && <> <a href={notice.url} target="_blank" rel="noopener noreferrer">Ouvrir sur YouTube <ExternalLink size={12} /></a></>}</span></div>}
 
       {plan?.action === 'blend' && <>
@@ -664,10 +741,10 @@ export const AssistantView: React.FC = () => {
         </div>
         <div className="sa-compose-tools">
           <button type="button" className="sa-icon sa-mention-add" aria-label="Ajouter une référence YouTube" aria-haspopup="dialog" disabled={busy || generating} onClick={() => setMentionPickerOpen(true)}><Plus size={20} /></button>
-          <button type="button" className="sa-live-button" disabled={busy || generating} aria-describedby="sa-live-disclosure" onClick={() => { setLiveOpen(true); void startVoice(); }}><span className="sa-orb sa-orb--trigger" aria-hidden="true" /> Live</button>
+          <button type="button" className="sa-live-button" disabled={busy || finishing || generating} aria-describedby="sa-live-disclosure" onClick={() => { setLiveOpen(true); void startVoice(); }}><span className="sa-orb sa-orb--trigger" aria-hidden="true" /> Live</button>
           <span id="sa-live-disclosure" className="sr-only">Démarrer le micro et le Live avec Google via ta clé Gemini. Quotas possibles. Tu peux arrêter à tout moment.</span>
-          {responding && !generating && <button type="button" className="sa-send" aria-label="Arrêter la réponse" onClick={() => { operation.current++; actionAbort.current?.abort(); actionAbort.current = null; busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); setNotice({ text: 'Réponse interrompue. Tu peux reformuler ta demande.' }); }}><X size={18} /></button>}
-          <button type="submit" className="sa-send" disabled={!text.trim() || busy || generating} aria-label="Envoyer à l’assistant"><ArrowUp size={19} /></button>
+          {responding && !generating && <button type="button" className="sa-send" aria-label="Arrêter la réponse" onClick={() => { operation.current++; cancelVoicePreparation(); setRecoveryQuery(null); finishingLive.current?.stop(); finishingLive.current = null; setFinishing(false); actionAbort.current?.abort(); actionAbort.current = null; busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); setNotice({ text: 'Réponse interrompue. Tu peux reformuler ta demande.' }); }}><X size={18} /></button>}
+          <button type="submit" className="sa-send" disabled={!text.trim() || busy || finishing || generating} aria-label="Envoyer à l’assistant"><ArrowUp size={19} /></button>
         </div>
       </form>
       </div>, document.getElementById('root') || document.body)}

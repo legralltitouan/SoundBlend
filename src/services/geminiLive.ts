@@ -5,6 +5,7 @@ export type LivePhase = 'off' | 'connecting' | 'listening' | 'muted';
 export type LiveToolName = 'proposer_action_musicale' | 'rechercher_wikipedia' | 'rechercher_web' | 'rechercher_morceaux';
 export type LiveCaptureStatus = { engine: string; context: string; chunks: number; sent: number; level: number; signal: boolean; trackMuted: boolean };
 type LiveCallbacks = {
+  onDrained?: (timedOut: boolean) => void;
   onAudioActivationRequired?: (required: boolean) => void;
   onCaptureStatus?: (status: LiveCaptureStatus) => void;
   onPhase: (phase: LivePhase, detail?: string) => void;
@@ -161,6 +162,11 @@ export class GeminiLiveSession {
   private captureTimer: ReturnType<typeof setInterval> | null = null;
   private recovering = false;
   private silenceNotified = false;
+  private draining = false;
+  private turnPending = false;
+  private drainComplete = false;
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  private activationRebuilt = false;
   private awaitingActivation = false;
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private playing = new Set<AudioBufferSourceNode>();
@@ -173,7 +179,13 @@ export class GeminiLiveSession {
   private overflowNotice = false;
   private readonly seenCalls = new Set<string>();
 
-  constructor(private readonly callbacks: LiveCallbacks) {}
+  private readonly stopForAccount = () => this.stop();
+  constructor(private readonly callbacks: LiveCallbacks) {
+    // Le tour peut finir après démontage de la vue, jamais après changement de compte.
+    window.addEventListener('sb:auth-changing', this.stopForAccount);
+    window.addEventListener('sb:auth-expired', this.stopForAccount);
+    window.addEventListener('sb:account-changed', this.stopForAccount);
+  }
 
   private guard(): void {
     assertAccountRevision(this.revision);
@@ -198,9 +210,24 @@ export class GeminiLiveSession {
   /** Doit être appelé DIRECTEMENT depuis le clic/tap du bouton, pas après
    * une promesse. Le contexte réellement running, pas la résolution de resume,
    * est le critère de réussite. */
-  activateAudio(): void {
+  activateAudio(trusted = false): void {
     if (this.stopped) return;
-    try { this.guard(); unlockAudio(this); }
+    try {
+      this.guard();
+      if (trusted && this.awaitingActivation && !this.activationRebuilt && this.context?.state !== 'running') {
+        // Un contexte Android peut rester irrécupérable après une interruption.
+        // Construire le remplaçant DANS le geste, avec le même flux micro.
+        const AudioClass = window.AudioContext || (window as any).webkitAudioContext;
+        const old = audioRuntime;
+        const context = new AudioClass(); this.activationRebuilt = true;
+        this.stopAudio(); this.detachCapture();
+        if (old) clearUnlock(old);
+        audioRuntime = { context, owner: this, idle: Promise.resolve(), suspending: false, availableAt: 0, unlock: null };
+        this.context = context;
+        if (old && old.context.state !== 'closed') void old.context.close().catch(() => {});
+      }
+      unlockAudio(this);
+    }
     catch (error) { this.fail(error instanceof Error ? error.message : 'Activation audio impossible.'); }
   }
 
@@ -216,9 +243,9 @@ export class GeminiLiveSession {
     if (!context || context.state === 'closed') return Promise.reject(new AudioActivationError('Le moteur audio est fermé. Relance le Live.'));
     return new Promise((resolve, reject) => {
       const cleanup = () => { clearInterval(interval); clearTimeout(timer); context.removeEventListener('statechange', check); signal.removeEventListener('abort', cancel); };
-      const check = () => { if (context.state === 'running') { cleanup(); resolve(true); } };
+      const check = () => { if (this.context?.state === 'running') { cleanup(); resolve(true); } };
       const cancel = () => { cleanup(); reject(new Error('Activation audio interrompue.')); };
-      const interval = setInterval(check, 50), timer = setTimeout(() => { cleanup(); resolve(context.state === 'running'); }, milliseconds);
+      const interval = setInterval(check, 50), timer = setTimeout(() => { cleanup(); resolve(this.context?.state === 'running'); }, milliseconds);
       context.addEventListener('statechange', check); signal.addEventListener('abort', cancel, { once: true });
       if (signal.aborted) cancel(); else check();
     });
@@ -229,7 +256,7 @@ export class GeminiLiveSession {
     if (context?.state === 'running') return;
     if (context && context.state !== 'closed') void context.resume().catch(() => {});
     if (await this.waitForRunning(700)) return;
-    this.guard(); this.awaitingActivation = true;
+    this.guard(); this.awaitingActivation = true; this.activationRebuilt = false;
     if (this.startupTimer) clearTimeout(this.startupTimer); this.startupTimer = null;
     this.stopAudio();
     if (this.ready) { try { this.send({ realtimeInput: { audioStreamEnd: true } }); } catch { /* la fermeture du socket est traitée ailleurs */ } }
@@ -382,7 +409,7 @@ export class GeminiLiveSession {
   }
 
   private acceptPCM(pcm: Int16Array): void {
-    if (this.stopped || this.muted || !pcm.length) return;
+    if (this.stopped || this.draining || this.muted || !pcm.length) return;
     this.chunks++; this.lastChunkAt = Date.now();
     let energy = 0; for (const sample of pcm) energy += (sample / 32768) ** 2;
     const rms = Math.sqrt(energy / pcm.length), level = Math.min(1, rms * 12);
@@ -424,7 +451,20 @@ export class GeminiLiveSession {
     });
   }
 
+  private async verifiedSamples(after: number, milliseconds: number): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const received = await this.waitForSamples(after, milliseconds); this.guard();
+      if (this.context?.state === 'running') return received;
+      // Une suspension PENDANT l'attente n'est pas une panne du microphone.
+      await this.ensureAudioRunning(); this.guard();
+      after = this.chunks;
+      await this.buildCapture(this.captureEngine === 'Compatibilité');
+    }
+    throw new AudioActivationError('Le moteur audio se suspend à nouveau pendant la capture. Active l’audio dans cette page puis réessaie.');
+  }
+
   private async buildCapture(compatibility: boolean): Promise<void> {
+    await this.ensureAudioRunning(); this.guard();
     const ctx = this.context, stream = this.media;
     if (!ctx || !stream) throw new Error('Microphone indisponible.');
     this.detachCapture();
@@ -468,6 +508,7 @@ export class GeminiLiveSession {
     }
     this.input.connect(this.processor!); this.processor!.connect(this.silentGain); this.silentGain.connect(ctx.destination);
     await this.ensureAudioRunning(); this.guard();
+    if (ctx !== this.context) { await this.buildCapture(compatibility); return; }
     this.reportCapture();
   }
 
@@ -475,9 +516,9 @@ export class GeminiLiveSession {
     const before = this.chunks; this.captureStartedAt = Date.now();
     try { await this.buildCapture(false); }
     catch (error) { this.guard(); if (error instanceof AudioActivationError) throw error; await this.buildCapture(true); }
-    let received = await this.waitForSamples(before, 1400);
+    let received = await this.verifiedSamples(before, 1400);
     if (!received && this.captureEngine !== 'Compatibilité') {
-      await this.buildCapture(true); received = await this.waitForSamples(before, 1800);
+      await this.buildCapture(true); received = await this.verifiedSamples(before, 1800);
     }
     if (!received) received = await this.rearmCapture();
     if (!received) throw new Error(`Micro autorisé, mais toujours aucun échantillon après réinitialisation (capture : ${this.captureEngine}, contexte : ${this.context?.state || 'inactif'}). La route audio du navigateur n’a pas redémarré.`);
@@ -506,7 +547,7 @@ export class GeminiLiveSession {
     if (document.visibilityState === 'hidden') await this.waitForForeground(); this.guard();
     const before = this.chunks;
     await this.buildCapture(true); this.guard();
-    return this.waitForSamples(before, 3000);
+    return this.verifiedSamples(before, 3000);
   }
 
   private async recoverCapture(): Promise<void> {
@@ -516,7 +557,7 @@ export class GeminiLiveSession {
       this.guard(); const before = this.chunks;
       if (this.context?.state !== 'running') void this.context?.resume().catch(() => {});
       await this.buildCapture(true);
-      if (!await this.waitForSamples(before, 2000) && !this.muted) throw new Error(`La capture ne délivre plus d’audio après reprise du moteur (état : ${this.context?.state || 'inactif'}). Termine puis relance le Live.`);
+      if (!await this.verifiedSamples(before, 2000) && !this.muted) throw new Error(`La capture ne délivre plus d’audio après reprise du moteur (état : ${this.context?.state || 'inactif'}). Termine puis relance le Live.`);
       this.guard();
     } catch (error) { if (!this.stopped) this.fail(error instanceof Error ? error.message : 'Capture audio interrompue.'); }
     finally { this.recovering = false; }
@@ -534,9 +575,9 @@ export class GeminiLiveSession {
       }
     }
     for (const [role, transcript] of [['user', content?.inputTranscription], ['assistant', content?.outputTranscription]] as const) {
-      if (typeof transcript?.text === 'string' && transcript.text) this.callbacks.onTranscript(role, transcript.text.slice(0, 6000), !!transcript.finished);
+      if (typeof transcript?.text === 'string' && transcript.text) { if (role === 'user') this.turnPending = true; this.callbacks.onTranscript(role, transcript.text.slice(0, 6000), !!transcript.finished); }
     }
-    if (content?.turnComplete) this.callbacks.onTurnComplete();
+    if (content?.turnComplete) { this.turnPending = false; this.drainComplete = true; this.callbacks.onTurnComplete(); }
     if (data?.goAway) this.callbacks.onPhase(this.muted ? 'muted' : 'listening', 'La session Live va bientôt se terminer.');
     const calls = data?.toolCall?.functionCalls;
     if (Array.isArray(calls)) {
@@ -544,6 +585,7 @@ export class GeminiLiveSession {
       // une recherche réseau ou la préparation d'un aperçu.
       void this.handleCalls(calls.slice(0, 4));
     }
+    this.finishDrainIfReady();
   }
 
   private async handleCalls(calls: any[]): Promise<void> {
@@ -570,10 +612,11 @@ export class GeminiLiveSession {
     if (responses.length && !this.stopped) {
       try { this.send({ toolResponse: { functionResponses: responses } }); } catch { if (!this.stopped) this.fail('La réponse de l’outil vocal n’a pas pu être envoyée.'); }
     }
+    this.finishDrainIfReady();
   }
 
   private playAudio(encoded: string, mime: string): void {
-    const ctx = this.context; if (!ctx || this.awaitingActivation || encoded.length > 1500000) return;
+    const ctx = this.context; if (!ctx || this.draining || this.awaitingActivation || encoded.length > 1500000) return;
     const bytes = fromB64(encoded); if (bytes.length < 2 || bytes.length % 2) return;
     const rawRate = Number(mime.match(/rate=(\d+)/i)?.[1] || 24000);
     const rate = rawRate >= 16000 && rawRate <= 48000 ? rawRate : 24000;
@@ -596,10 +639,37 @@ export class GeminiLiveSession {
     if (muted) { try { this.send({ realtimeInput: { audioStreamEnd: true } }); } catch { /* la fermeture sera signalée */ } }
     this.callbacks.onPhase(muted ? 'muted' : 'listening', muted ? 'Micro coupé' : 'Micro ouvert · tu peux parler');
   }
+  /** Sortir du Live coupe immédiatement tous les dispositifs audio. Le socket
+   * peut finir le tour en cours, sans enregistrer ni lire de son. */
+  finishInput(): boolean {
+    if (this.stopped || !this.ready || (!this.turnPending && !this.toolCalls.size && !this.sentChunks)) { this.stop(); return false; }
+    if (this.draining) return true;
+    this.draining = true; this.drainComplete = false;
+    try { this.send({ realtimeInput: { audioStreamEnd: true } }); } catch { this.stop(); return false; }
+    if (this.captureTimer) clearInterval(this.captureTimer); this.captureTimer = null;
+    this.detachCapture(); this.media?.getTracks().forEach(t => t.stop()); this.media = null;
+    this.stopAudio(); releaseAudio(this); this.context = null;
+    this.callbacks.onLevel?.(0); this.callbacks.onPhase('off');
+    const timeout = () => { this.callbacks.onDrained?.(true); this.stop(); };
+    this.drainTimer = setTimeout(() => {
+      if (this.turnPending || this.toolCalls.size) this.drainTimer = setTimeout(timeout, 87000);
+      else { this.callbacks.onDrained?.(false); this.stop(); }
+    }, 3000);
+    return true;
+  }
+  private finishDrainIfReady(): void {
+    if (this.draining && this.drainComplete && !this.toolCalls.size) {
+      this.callbacks.onDrained?.(false); this.stop();
+    }
+  }
   private fail(message: string): void { if (this.stopped) return; this.stop(); this.callbacks.onError(message); }
   stop(): void {
     if (this.stopped) return;
     this.stopped = true; this.ready = false;
+    window.removeEventListener('sb:auth-changing', this.stopForAccount);
+    window.removeEventListener('sb:auth-expired', this.stopForAccount);
+    window.removeEventListener('sb:account-changed', this.stopForAccount);
+    if (this.drainTimer) clearTimeout(this.drainTimer); this.drainTimer = null;
     if (this.startupTimer) clearTimeout(this.startupTimer); this.startupTimer = null;
     this.awaitingActivation = false; this.callbacks.onAudioActivationRequired?.(false);
     this.controller.abort();

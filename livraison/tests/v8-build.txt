@@ -4,24 +4,24 @@
 
 vite v8.3.7 building client environment for production...
 transforming...
-✓ 2554 modules transformed.
+✓ 2555 modules transformed.
 rendering chunks...
 computing gzip size...
-dist/precache-assets.json                 0.29 kB │ gzip:   0.18 kB
+dist/precache-assets.json                 0.29 kB │ gzip:   0.19 kB
 dist/index.html                           2.64 kB │ gzip:   1.16 kB
 dist/assets/AssistantView-DZcvRFfB.css   22.64 kB │ gzip:   5.44 kB
 dist/assets/index-CTt-wz9Z.css          123.14 kB │ gzip:  24.25 kB
 dist/assets/trash-BZ2HX9mn.js             0.37 kB │ gzip:   0.24 kB
 dist/assets/exportRecovery-DlhT5TC6.js    2.72 kB │ gzip:   1.29 kB
-dist/assets/HistoryView-2hbXU3_A.js       4.20 kB │ gzip:   1.77 kB
-dist/assets/BlendView-BdsOqB6z.js        29.33 kB │ gzip:  10.49 kB
-dist/assets/AssistantView-ChBhGTn2.js    83.87 kB │ gzip:  26.36 kB
+dist/assets/HistoryView-CcSXO3_L.js       4.20 kB │ gzip:   1.77 kB
+dist/assets/BlendView-PPFlDHu3.js        29.33 kB │ gzip:  10.49 kB
+dist/assets/AssistantView-BgdnggUL.js    91.22 kB │ gzip:  28.46 kB
 dist/assets/Art-Bjncmvs4.js             167.26 kB │ gzip:  54.53 kB
-dist/assets/index-DnYDEa-b.js           528.30 kB │ gzip: 167.13 kB
+dist/assets/index-BwCqzqdq.js           528.30 kB │ gzip: 167.13 kB
 
 [plugin builtin:vite-reporter] 
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
-✓ built in 1.60s
+✓ built in 1.64s

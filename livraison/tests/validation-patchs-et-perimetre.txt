@@ -1,7 +1,8 @@
-Patch V6 → V7 : contrôle puis application réussis sur archive V6.
-Tous les fichiers suivis identiques à V7 après application.
-Patch complet : git apply --check réussi sur le commit GitHub initial.
-Comparaison intégrale des sources V6 : fichiers de production modifiés uniquement :
-src/components/views/AssistantView.css
+Patch V7 → V8 : contrôle puis application réussis sur archive V7 livrée.
+Tous les fichiers source suivis identiques à V8 après application.
+Patch complet : git apply --check réussi sur le commit initial.
+Comparaison intégrale des sources V7 : production modifiée uniquement :
+src/components/views/AssistantPrivacy.tsx
 src/components/views/AssistantView.tsx
 src/services/geminiLive.ts
+src/services/assistantVoiceTask.ts
