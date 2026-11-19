@@ -1,5 +1,0 @@
-# Fichier compris par Netlify et Cloudflare Pages.
-# L'app n'a qu'une seule page : quelle que soit l'adresse demandée,
-# on sert index.html et c'est le routeur de l'app qui décide. Sans ça,
-# recharger /settings renverrait une 404.
-/*  /index.html  200

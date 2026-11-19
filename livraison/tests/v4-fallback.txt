@@ -1,1 +1,0 @@
-✓ échec d’un module : message explicite, coque et navigation conservées
