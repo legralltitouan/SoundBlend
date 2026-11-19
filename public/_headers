@@ -1,0 +1,8 @@
+# En-têtes des hébergeurs statiques (Netlify, Cloudflare Pages).
+# Le service worker doit être revalidé à chaque visite : sinon une
+# ancienne version pourrait rester en place des jours entiers.
+/sw.js
+  Cache-Control: no-cache, must-revalidate
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,0 +1,27 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Test des diagnostics</title></head><body><div id="root"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { DataProvider, useData } from '/src/context/DataContext.tsx';
+import { GeneratingCaption } from '/src/components/modals/GeneratingOverlay.tsx';
+import { geminiService } from '/src/services/gemini.ts';
+import '/src/index.css';
+const seed = {id:'test-seed',videoId:'TEST0000001',title:'Titre',artist:'Artiste',category:'anchor'};
+const config = {durationMinutes:20,ratio:{anchor:40,deepDive:30,fresh:30}};
+let release;
+geminiService.generateBlend = async (seeds, config, exclusions, report) => {
+  window.testPush = report;
+  report('Clé Gemini refusée (403) — recherche de secours.');
+  report('Vérification des morceaux sur YouTube…');
+  await new Promise(resolve => { release=resolve; });
+  return seeds;
+};
+function Probe() {
+  const data = useData();
+  window.testGenerate = () => data.generate(config, {seeds:[seed]});
+  window.finishGenerate = () => release?.();
+  return data.generating ? React.createElement('div', {className:'sb-gen', 'data-mode':'dark'},
+    React.createElement(GeneratingCaption, {status:data.generatingStatus, history:data.generatingLog})) : null;
+}
+createRoot(document.getElementById('root')).render(React.createElement(DataProvider, null, React.createElement(Probe)));
+</script></body></html>

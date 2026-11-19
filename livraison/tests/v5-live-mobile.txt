@@ -1,0 +1,58 @@
+  ✓ getUserMedia invoqué pendant le geste utilisateur, avant réseau/await
+  ✓ permission en attente : visibilité transitoire ne détruit pas la session et aucun appel Gemini
+  ✓ permission différée accordée : flux audio réellement actif
+  ✓ une session active est toujours coupée au vrai passage en arrière-plan
+  ✓ aucune exception dans la reprise après permission système
+  ✓ permission résolue avant retour visible : pas de Gemini ni de sortie audio cachée
+  ✓ retour visible après permission reprend normalement
+  ✓ annulation avant permission : tout flux acquis tardivement est immédiatement libéré
+  ✓ pas de rejet non géré après annulation d’une demande de permission
+  ✓ absence de retour visible : délai borné, micro fermé, aucun envoi Gemini
+  ✓ aperçu bloqué par Permissions Policy : explication utile avant de demander le micro
+  ✓ refus micro : instructions pour le site et les autorisations Android
+  ✓ clé absente sur cet appareil : diagnostic sans fausse demande de permission
+  ✓ aide mobile précise les réglages propres à chaque appareil
+  ✓ permission sans réponse : timeout indique le problème micro, pas une panne Gemini
+  ✓ permission accordée après timeout : micro fermé sans réseau
+  ✓ vumètre local opérationnel AVANT Gemini, sans envoi ni file d’audio avant connexion
+  ✓ pas de statut connecté tant que Gemini n’a pas répondu
+  ✓ animation d’agrandissement présente sur l’orbe Live
+  ✓ animation d’entrée supprimée si réduction des mouvements demandée
+  ✓ capture normal : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
+  ✓ capture normal : l'orbe reçoit un niveau mesuré non nul
+  ✓ capture normal : chemin audio réellement actif indiqué
+  ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
+  ✓ un contexte audio suspendu après acquisition est repris et émet de nouveau
+  ✓ capture normal : arrêt libère micro et contexte
+  ✓ capture normal : aucun rejet ni erreur JavaScript
+  ✓ capture blocked : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
+  ✓ capture blocked : l'orbe reçoit un niveau mesuré non nul
+  ✓ capture blocked : chemin audio réellement actif indiqué
+  ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
+  ✓ capture blocked : arrêt libère micro et contexte
+  ✓ capture blocked : aucun rejet ni erreur JavaScript
+  ✓ capture no-worklet : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
+  ✓ capture no-worklet : l'orbe reçoit un niveau mesuré non nul
+  ✓ capture no-worklet : chemin audio réellement actif indiqué
+  ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
+  ✓ capture no-worklet : arrêt libère micro et contexte
+  ✓ capture no-worklet : aucun rejet ni erreur JavaScript
+  ✓ capture module-error : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
+  ✓ capture module-error : l'orbe reçoit un niveau mesuré non nul
+  ✓ capture module-error : chemin audio réellement actif indiqué
+  ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
+  ✓ capture module-error : arrêt libère micro et contexte
+  ✓ capture module-error : aucun rejet ni erreur JavaScript
+  ✓ capture module-hang : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
+  ✓ capture module-hang : l'orbe reçoit un niveau mesuré non nul
+  ✓ capture module-hang : chemin audio réellement actif indiqué
+  ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
+  ✓ capture module-hang : arrêt libère micro et contexte
+  ✓ capture module-hang : aucun rejet ni erreur JavaScript
+  ✓ Worklet qui cesse de répondre en cours de session : bascule de secours sans quitter Live
+  ✓ Worklet qui ne renvoie que des zéros : secours rétablit un signal non nul
+  ✓ deux chemins sans échantillons : erreur explicite, jamais un faux statut Micro ouvert
+  ✓ capture impossible : aucune piste conservée après erreur
+  ✓ capture impossible : aucun rejet non géré
+
+56 contrôles de démarrage mobile réussis (Chromium émulé, API et permissions simulées).

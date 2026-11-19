@@ -1,0 +1,6 @@
+# GitHub compte le projet comme JavaScript pour les statistiques,
+# et ne touche pas aux fins de ligne des fichiers binaires.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

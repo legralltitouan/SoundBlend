@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;background:#07060a"><div id="root" style="position:fixed;inset:0"></div>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { OrganicBlob } from '/src/components/ui/OrganicBlob.tsx';
+const style=document.createElement('style');style.textContent='.sb-organic{position:absolute;inset:0;overflow:hidden;pointer-events:none}.sb-organic-svg{position:absolute;inset:0;display:block;width:100%;height:100%}';document.head.append(style);
+const params=new URLSearchParams(location.search);
+const mode=params.get('mode')||'dark';
+const movement=params.get('movement')||'balade';
+document.body.style.background=mode==='dark'?'#07060a':'#fdf7f0';
+createRoot(document.getElementById('root')).render(React.createElement(OrganicBlob,{mode,movement}));
+</script></body></html>

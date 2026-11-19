@@ -1,0 +1,5 @@
+✓ modules des trois vues secondaires préchargés
+✓ première ouverture hors ligne : Assistant
+✓ première ouverture hors ligne : Mes blends
+✓ première ouverture hors ligne : Réglages
+✓ aucune exception JavaScript

@@ -1,0 +1,64 @@
+✓ + à gauche, Live à droite avant Envoyer
+✓ aucun rectangle rouge ou outline interne dans le champ de recherche
+✓ focus captif dans le dialogue natif
+✓ ouvrir la recherche ne consomme pas de quota
+✓ la frappe est temporisée comme dans les exclusions
+✓ recherche automatique après 400 ms sans bouton de validation
+✓ recherche explicite de vidéos musicales uniquement
+✓ clé API dans l’en-tête, jamais dans l’URL
+✓ miniatures externes non autorisées rejetées
+✓ sélection multiple de deux titres précis
+✓ changer de type nettoie les résultats précédents
+✓ artistes recherchés sous forme de chaînes YouTube
+✓ mentions #morceau et @artiste insérées dans le prompt existant
+✓ tags colorés dans le prompt, sans ligne de puces séparée
+✓ retour du focus au prompt
+✓ le décor et le textarea natif portent exactement le même texte
+✓ métriques de texte identiques pour préserver le curseur, la sélection et les retours à la ligne
+✓ tags synchronisés au défilement d’un long prompt
+✓ texte collé affiché sans interpréter de HTML
+✓ retirer une puce supprime sa mention du prompt
+✓ brouillon et références vidés après envoi
+✓ références envoyées consultables dans le message
+✓ identifiants et métadonnées exactes transmis au vrai sérialiseur Gemini
+✓ référence retirée non transmise à Gemini
+✓ références conservées dans le contexte des relances
+✓ simple question sans génération ni écriture YouTube automatique
+✓ aucun guillemet ni doublon de tags au-dessus du champ
+✓ références et messages non persistés dans localStorage
+✓ effacer le token retire le contexte ; texte libre non transformé en fausse référence
+✓ limite de huit références, sans empêcher leur désélection
+✓ Échap ferme le picker et garde les tags dans le prompt
+✓ Live reçoit les références du brouillon et de la conversation
+✓ changement de compte ferme la recherche et efface références, conversation et brouillon
+✓ aucune exception JavaScript dans le parcours complet
+✓ quota refusé expliqué sans faux résultat
+✓ résultat vide explicite
+✓ réponse tardive ignorée après modification du texte
+✓ morceau référencé utilisable comme amorce d’un aperçu sans exécution
+✓ réponse dédupliquée et identifiants/titres invalides rejetés
+✓ signal déjà annulé : aucune requête
+✓ réponse refusée si la session change pendant le réseau
+✓ jeton OAuth prioritaire sur la clé API
+✓ 401 invalide le jeton concerné et explique la reconnexion
+✓ morceau référencé soumis aux exclusions existantes
+✓ versions homonymes distinguées par leurs identifiants, pas leurs noms
+✓ absence de compte/clé expliquée avant tout appel
+✓ dialogue sans débordement 320 light
+✓ audit axe dialogue 320 light : []
+✓ audit axe prompt avec tags 320 light : []
+✓ dialogue sans débordement 390 dark
+✓ audit axe dialogue 390 dark : []
+✓ panneau et bouton Terminé au-dessus du clavier mobile simulé
+✓ audit axe prompt avec tags 390 dark : []
+✓ dialogue sans débordement 768 light
+✓ audit axe dialogue 768 light : []
+✓ audit axe prompt avec tags 768 light : []
+✓ dialogue sans débordement 1440 light
+✓ audit axe dialogue 1440 light : []
+✓ audit axe prompt avec tags 1440 light : []
+✓ dialogue sans débordement 1440 dark
+✓ audit axe dialogue 1440 dark : []
+✓ audit axe prompt avec tags 1440 dark : []
+
+62 contrôles V5 réussis, dont 10 audits axe (API simulées).

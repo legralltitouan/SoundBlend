@@ -1,0 +1,849 @@
+
+> soundblend-ai@6.9.45 lint
+> oxlint
+
+
+  ! eslint(no-unused-vars): Variable 'base' is declared but never used. Unused variables should start with a '_'.
+    ,-[verification/t-youtube-reel630.mjs:62:6]
+ 61 |  catch{started=false;process.exitCode=2;}
+ 62 |  let base=await measure(started?'lecteurs démarrés':'démarrage incomplet (mesure non concluante)');
+    :      ^^|^
+    :        `-- 'base' is declared here
+ 63 |  if(started){
+    `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Variable 'design' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/App.tsx:55:18]
+ 54 | const Toast: React.FC = () => {
+ 55 |   const { toast, design } = useUI();
+    :                  ^^^|^^
+    :                     `-- 'design' is declared here
+ 56 |   return (
+    `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Identifier 'Track' is imported but never used.
+   ,-[src/data/mockData.ts:1:20]
+ 1 | import { Playlist, Track } from '../types';
+   :                    ^^|^^
+   :                      `-- 'Track' is imported here
+ 2 | 
+   `----
+  help: Consider removing this import.
+
+  ! react-hooks(exhaustive-deps): React Hook useEffect has missing dependencies: 'lastReady.result.title', and 'lastReady.result'
+    ,-[src/components/ui/TaskTicker.tsx:69:6]
+ 67 |   useEffect(() => {
+ 68 |     if (lastReady?.result) setDone({ title: lastReady.result.title, id: lastReady.id });
+    :         ^^^^^^^^^                           ^^^^^^^^^^^^^^^^
+ 69 |   }, [lastReady?.id]);
+    :      ^^^^^^^^^^^^^^^
+ 70 | 
+    `----
+  help: Either include it or remove the dependency array.
+
+  ! eslint(no-unused-vars): Variable 'two' is declared but never used. Unused variables should start with a '_'.
+    ,-[verification/t-collections631.mjs:35:9]
+ 34 |   check('même vidéo bloquée malgré des métadonnées différentes', s.isExcluded(t('Autre nom','Autre chaîne','AAA00000001')));
+ 35 |   const two = s.block(t('Divers','Air','ZZZ00000001'),'artist');
+    :         ^|^
+    :          `-- 'two' is declared here
+ 36 |   check('un artiste bloqué est exclu même en collaboration', s.isExcluded(t('Test','Air feat. Artiste A','ZZZ00000002')));
+    `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Type alias 'ModelTask' is declared but never used.
+    ,-[src/services/gemini.ts:78:6]
+ 77 | /** Ce qu'on veut faire : écrire du texte structuré en JSON. */
+ 78 | type ModelTask = 'text';
+    :      ^^^^|^^^^
+    :          `-- 'ModelTask' is declared here
+ 79 | 
+    `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Variable 'powerOf' is declared but never used. Unused variables should start with a '_'.
+     ,-[src/services/gemini.ts:124:7]
+ 123 | /** La puissance annoncée d'un modèle : ce qu'il peut écrire, en tokens. */
+ 124 | const powerOf = (m: ApiModel): number => {
+     :       ^^^|^^^
+     :          `-- 'powerOf' is declared here
+ 125 |   const out = m.outputTokenLimit || 0;
+     `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Function 'usableCount' is declared but never used.
+     ,-[src/services/gemini.ts:471:10]
+ 470 | 
+ 471 | function usableCount(items: any): number {
+     :          ^^^^^|^^^^^
+     :               `-- 'usableCount' is declared here
+ 472 |   if (!Array.isArray(items)) return 0;
+     `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Variable 'fmt' is declared but never used. Unused variables should start with a '_'.
+     ,-[src/services/youtube.ts:783:11]
+ 782 | 
+ 783 |     const fmt = (v: Video) => ({
+     :           ^|^
+     :            `-- 'fmt' is declared here
+ 784 |       videoId: v.videoId,
+     `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Parameter '_' is declared but never used.
+     ,-[src/services/storage.ts:244:58]
+ 243 |   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+ 244 |   return Object.fromEntries(Object.entries(raw).filter(([_, v]) => v && Number.isFinite(v.at) && Number.isFinite(v.expiresAt) && v.expiresAt > Date.now()));
+     :                                                          |
+     :                                                          `-- '_' is declared here
+ 245 | };
+     `----
+  help: Consider removing this parameter.
+
+  ! eslint(no-unused-vars): Parameter '_' is declared but never used.
+     ,-[src/services/storage.ts:251:61]
+ 250 |   }
+ 251 |   return Object.fromEntries(Object.entries(result).filter(([_, t]) => t && t.expiresAt > Date.now()));
+     :                                                             |
+     :                                                             `-- '_' is declared here
+ 252 | };
+     `----
+  help: Consider removing this parameter.
+
+  ! eslint(no-useless-escape): Unnecessary escape character '('
+     ,-[src/services/covers.ts:145:21]
+ 144 |       .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+ 145 |       .replace(/\s*[\(\[].*?[\)\]]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+     :                     ^^
+ 146 | 
+     `----
+  help: Replace `\(` with `(`.
+
+  ! eslint(no-useless-escape): Unnecessary escape character '['
+     ,-[src/services/covers.ts:145:23]
+ 144 |       .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+ 145 |       .replace(/\s*[\(\[].*?[\)\]]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+     :                       ^^
+ 146 | 
+     `----
+  help: Replace `\[` with `[`.
+
+  ! eslint(no-useless-escape): Unnecessary escape character ')'
+     ,-[src/services/covers.ts:145:30]
+ 144 |       .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+ 145 |       .replace(/\s*[\(\[].*?[\)\]]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+     :                              ^^
+ 146 | 
+     `----
+  help: Replace `\)` with `)`.
+
+  ! react(immutability): Cannot access variable while it is being initialized
+     ,-[src/context/UIContext.tsx:129:65]
+ 128 |       sheetIsOpen.current = false; sheetOpener.current = null;
+ 129 |       setActionSheet(null); setModal(null); setModalData(null); setTask(null); setToast(null);
+     :                                                                 ^^^|^^^
+     :                                                                    `-- `setTask` is read during its own initialization
+ 130 |     };
+     `----
+  help: `setTask` is read while its declaration is still being initialized. Move the access after initialization. For a recursive callback, use a named function expression or restructure the callback so it does not capture itself during initialization
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/immutability
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/context/UIContext.tsx:193:14]
+ 192 | 
+ 193 | export const useUI = () => {
+     :              ^^^^^
+ 194 |   const ctx = useContext(UIContext);
+     `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+    ,-[src/components/ui/RatioWheel.tsx:19:14]
+ 18 | 
+ 19 | export const MIX_ORDER: WheelKey[] = ['anchor', 'deepDive', 'fresh'];
+    :              ^^^^^^^^^
+ 20 | 
+    `----
+
+  ! react(refs): Cannot access refs during render
+    ,-[src/components/ui/RatioWheel.tsx:57:11]
+ 56 |   const ratioRef = useRef(ratio);
+ 57 |   ratioRef.current = ratio;
+    :   ^^^^|^^^^^^^|^^^
+    :       |       `-- Cannot update ref value during render
+    :       `-- This value is a ref
+ 58 | 
+    `----
+  help: React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/refs
+
+  ! react(immutability): Cannot access variable while it is being initialized
+     ,-[src/context/ReplaceQueueContext.tsx:106:18]
+ 105 |       patch(next.id, { status: 'error', error: 'Tâche perdue.' });
+ 106 |       setTimeout(pump, 60);
+     :                  ^^|^
+     :                    `-- `pump` is read during its own initialization
+ 107 |       return;
+     `----
+  help: `pump` is read while its declaration is still being initialized. Move the access after initialization. For a recursive callback, use a named function expression or restructure the callback so it does not capture itself during initialization
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/immutability
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+    ,-[src/context/ReplaceQueueContext.tsx:67:14]
+ 66 | const KNOWN_STEPS = new Set(['taste', 'thinking', 'comparing', 'finding', 'artwork']);
+ 67 | export const isEngineNote = (s: string) => !!s && !KNOWN_STEPS.has(s) && s.length > 24;
+    :              ^^^^^^^^^^^^
+ 68 | 
+    `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+    ,-[src/context/ReplaceQueueContext.tsx:79:14]
+ 78 |    moteur — son analyse du morceau — et se montre telle quelle */
+ 79 | export const stepLabel = (s: string) => STEP_LABEL[s] || s || 'Recherche en cours';
+    :              ^^^^^^^^^
+ 80 | 
+    `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/context/ReplaceQueueContext.tsx:195:14]
+ 194 | 
+ 195 | export const useReplaceQueue = () => {
+     :              ^^^^^^^^^^^^^^^
+ 196 |   const ctx = useContext(QueueContext);
+     `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/context/ReplaceQueueContext.tsx:202:14]
+ 201 | 
+ 202 | export const useYoutubeAuth = () => youtubeService.isAuthenticated();
+     :              ^^^^^^^^^^^^^^
+     `----
+
+  ! react(refs): Cannot access refs during render
+    ,-[src/context/ReplaceQueueContext.tsx:86:10]
+ 85 |   const jobsRef = useRef<ReplaceJob[]>([]);
+ 86 |   jobsRef.current = jobs;
+    :   ^^^|^^^^^^^|^^^
+    :      |       `-- Cannot update ref value during render
+    :      `-- This value is a ref
+ 87 |   const runnersRef = useRef(new Map<string, (onStep: (s: string) => void) => Promise<any>>());
+    `----
+  help: React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/refs
+
+  ! react-hooks(exhaustive-deps): React Hook useCallback has unnecessary dependency: pump
+     ,-[src/context/ReplaceQueueContext.tsx:144:6]
+ 143 |     return id;
+ 144 |   }, [pump]);
+     :      ^^^^^^
+ 145 | 
+     `----
+  help: Either include it or remove the dependency array.
+
+  ! react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function.
+     ,-[src/context/ReplaceQueueContext.tsx:177:46]
+ 176 |     aliveRef.current = true;
+ 177 |     return () => { aliveRef.current = false; runnersRef.current.clear(); };
+     :                                              ^^^^^^^^^^^^^^^^^^
+ 178 |   }, []);
+     `----
+  help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+
+  ! eslint(no-unused-vars): Parameter 'essais' is declared but never used. Unused parameters should start with a '_'.
+     ,-[src/context/PlayerContext.tsx:295:32]
+ 294 |      la console — et on passe au suivant. */
+ 295 |   const jouer = (track: Track, essais = 0) => {
+     :                                ^^^|^^
+     :                                   `-- 'essais' is declared here
+ 296 |     if (!track.videoId) { sauter(track); return; }
+     `----
+  help: Consider removing this parameter.
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/context/PlayerContext.tsx:955:14]
+ 954 | 
+ 955 | export const usePlayer = () => {
+     :              ^^^^^^^^^
+ 956 |   const ctx = useContext(PlayerContext);
+     `----
+
+  ! react-hooks(exhaustive-deps): React Hook useCallback has a missing dependency: 'assurerClip'
+     ,-[src/context/PlayerContext.tsx:576:6]
+ 574 |     clipSlot.current = el;
+ 575 |     if (el) assurerClip();
+     :             ^^^^^|^^^^^
+     :                  `-- useCallback uses `assurerClip` here
+ 576 |   }, []);
+     :      ^^
+ 577 | 
+     `----
+  help: Either include it or remove the dependency array.
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+    ,-[src/components/ui/Art.tsx:24:14]
+ 23 | 
+ 24 | export const initials = (t: { title?: string; artist?: string }) => {
+    :              ^^^^^^^^
+ 25 |   const a = (t.artist || '').trim();
+    `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+    ,-[src/components/ui/Art.tsx:33:14]
+ 32 | /** la meilleure URL connue, sans requête réseau bloquante */
+ 33 | export const bestCover = (t: { videoId?: string; title?: string; artist?: string; thumbnailUrl?: string }) => {
+    :              ^^^^^^^^^
+ 34 |   const cached = getCachedCover(t.artist || '', t.title || '');
+    `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+    ,-[src/components/ui/Art.tsx:48:14]
+ 47 | 
+ 48 | export const useCover = (
+    :              ^^^^^^^^
+ 49 |   t: { videoId?: string; title?: string; artist?: string; thumbnailUrl?: string },
+    `----
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+     ,-[src/components/ui/Art.tsx:118:21]
+ 117 | 
+ 118 |   useEffect(() => { setShown(url); setFailed(false); }, [url]);
+     :   ^^^^|^^^^         ^^^^|^^^
+     :       |                 `-- Avoid calling setState() directly within an effect
+     :       `-- This is the containing effect
+ 119 | 
+     `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! eslint(no-unused-expressions): Expected expression to be used
+     ,-[src/components/player/PlayerGestures.ts:155:5]
+ 154 |     if (t.closest('.prail, input, textarea, select')) return;
+ 155 |     cancelRaf.current && cancelAnimationFrame(cancelRaf.current);
+     :     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 156 |     cancelRaf.current = null;
+     `----
+  help: Consider using this expression or removing it
+
+  ! eslint(no-unused-vars): Identifier 'ExternalLink' is imported but never used.
+   ,-[src/components/player/PlayerBar.tsx:5:14]
+ 4 |   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, ChevronUp,
+ 5 |   ListMusic, ExternalLink,
+   :              ^^^^^^|^^^^^
+   :                    `-- 'ExternalLink' is imported here
+ 6 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Variable 'pct' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/components/player/PlayerBar.tsx:90:9]
+ 89 | 
+ 90 |   const pct = useMemo(() => (duration ? Math.min(100, (progress / duration) * 100) : 0), [progress, duration]);
+    :         ^|^
+    :          `-- 'pct' is declared here
+ 91 | 
+    `----
+  help: Consider removing this declaration.
+
+  ! react(refs): Cannot access refs during render
+     ,-[src/components/player/PlayerBar.tsx:525:7]
+ 524 |   const live = useRef({ pct: 0, hover: false, playing: false, t: 0 });
+ 525 |   live.current.pct = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+     :   ^^|^^^^^|^^^
+     :     |     `-- Cannot update ref value during render
+     :     `-- This value is a ref
+ 526 |   live.current.hover = hovering || dragging;
+     `----
+  help: React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/refs
+
+  ! react(refs): Cannot access refs during render
+     ,-[src/components/player/PlayerBar.tsx:526:7]
+ 525 |   live.current.pct = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+ 526 |   live.current.hover = hovering || dragging;
+     :   ^^|^^^^^|^^^
+     :     |     `-- Cannot update ref value during render
+     :     `-- This value is a ref
+ 527 |   live.current.playing = isPlaying;
+     `----
+  help: React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/refs
+
+  ! react(refs): Cannot access refs during render
+     ,-[src/components/player/PlayerBar.tsx:527:7]
+ 526 |   live.current.hover = hovering || dragging;
+ 527 |   live.current.playing = isPlaying;
+     :   ^^|^^^^^|^^^
+     :     |     `-- Cannot update ref value during render
+     :     `-- This value is a ref
+ 528 | 
+     `----
+  help: React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/refs
+
+  ! eslint(no-unused-vars): Identifier 'LogOut' is imported but never used.
+   ,-[src/components/shell/Shell.tsx:4:49]
+ 3 | import {
+ 4 |   Library, History, MessageCircle, Plus, LogIn, LogOut, Search, Moon, Sun,
+   :                                                 ^^^|^^
+   :                                                    `-- 'LogOut' is imported here
+ 5 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+     ,-[src/components/shell/Shell.tsx:136:21]
+ 135 |   const [avatarRetry, setAvatarRetry] = useState(false);
+ 136 |   useEffect(() => { setAvatarFailed(false); setAvatarRetry(false); }, [userProfile?.avatarUrl]);
+     :   ^^^^|^^^^         ^^^^^^^|^^^^^^^
+     :       |                    `-- Avoid calling setState() directly within an effect
+     :       `-- This is the containing effect
+ 137 | 
+     `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! react-hooks(exhaustive-deps): React Hook useMemo has a missing dependency: 'palette'
+    ,-[src/components/shell/Ambience.tsx:32:52]
+ 31 |   /* la même palette garde le même objet de styles : pas de boucle de rendu */
+ 32 |   const css = useMemo(() => paletteToCss(palette), [key]);
+    :                                          ^^^|^^^   ^^^^^
+    :                                             `-- useMemo uses `palette` here
+ 33 | 
+    `----
+  help: Either include it or remove the dependency array.
+
+  ! react-hooks(exhaustive-deps): React Hook useMemo has unnecessary dependency: key
+    ,-[src/components/shell/Ambience.tsx:32:52]
+ 31 |   /* la même palette garde le même objet de styles : pas de boucle de rendu */
+ 32 |   const css = useMemo(() => paletteToCss(palette), [key]);
+    :                                                    ^^^^^
+ 33 | 
+    `----
+  help: Either include it or remove the dependency array.
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/context/DataContext.tsx:449:14]
+ 448 | 
+ 449 | export const useData = () => {
+     :              ^^^^^^^
+ 450 |   const ctx = useContext(DataContext);
+     `----
+
+  ! react-hooks(exhaustive-deps): React Hook useMemo has a missing dependency: 'searchCatalog'
+     ,-[src/context/DataContext.tsx:436:5]
+ 427 |           removeBlend,
+ 428 |           searchCatalog,
+     :           ^^^^^^|^^^^^^
+     :                 `-- useMemo uses `searchCatalog` here
+ 429 |           generating,
+ 430 |           generatingStatus,
+ 431 |           generatingLog,
+ 432 |           generate,
+ 433 |           syncState,
+ 434 |           syncNow,
+ 435 |         }),
+ 436 | ,->     [
+ 437 | |         settings, saveSettings, isAuthenticated, accountKnown, authReady, authNotice, userProfile, googleLoginState, googleLoginPending,
+ 438 | |         login, retryGoogleLogin, cancelGoogleLogin, dismissGoogleLoginError, logout, playlists, loadingLibrary,
+ 439 | |         libraryError, loadLibrary, loadPlaylistTracks, refreshLibrary, selectedTracks, toggleTrack,
+ 440 | |         removeTrack, clearSelection, isSelected, currentBlend, setCurrentBlend, updateBlend,
+ 441 | |         recentBlends, refreshBlends, removeBlend, generating, generatingStatus, generatingLog, generate, exclusions, blockTrack, unblockExclusion,
+ 442 | |         syncState, syncNow,
+ 443 | `->     ],
+ 444 |       );
+     `----
+  help: Either include it or remove the dependency array.
+
+  ! react(refs): Cannot access refs during render
+    ,-[src/lib/useAndroidBack.ts:33:12]
+ 32 |   const layersRef = useRef<BackLayer[]>(layers);
+ 33 |   layersRef.current = layers;
+    :   ^^^^|^^^^^^^^|^^^
+    :       |        `-- Cannot update ref value during render
+    :       `-- This value is a ref
+ 34 |   const atHomeRef = useRef(atHome);
+    `----
+  help: React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/refs
+
+  ! react(refs): Cannot access refs during render
+    ,-[src/lib/useAndroidBack.ts:35:12]
+ 34 |   const atHomeRef = useRef(atHome);
+ 35 |   atHomeRef.current = atHome;
+    :   ^^^^|^^^^^^^^|^^^
+    :       |        `-- Cannot update ref value during render
+    :       `-- This value is a ref
+ 36 |   /* relance la synchronisation quand un `back()` en vol s'est posé */
+    `----
+  help: React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/refs
+
+  ! eslint(no-useless-escape): Unnecessary escape character '['
+    ,-[src/lib/track.ts:87:22]
+ 86 |     .replace(/\((?:[^()]*?(?:official|audio|video|clip|lyric|remix|version)[^()]*?)\)/gi, ' ')
+ 87 |     .replace(/\[(?:[^\[\]]*?(?:official|audio|video|clip|lyric|remix|version)[^\[\]]*?)\]/gi, ' ')
+    :                      ^^
+ 88 |     .replace(/\((?:feat\.?|ft\.?|with)\s+[^()]*\)/gi, ' ')
+    `----
+  help: Replace `\[` with `[`.
+
+  ! eslint(no-useless-escape): Unnecessary escape character '['
+    ,-[src/lib/track.ts:87:80]
+ 86 |     .replace(/\((?:[^()]*?(?:official|audio|video|clip|lyric|remix|version)[^()]*?)\)/gi, ' ')
+ 87 |     .replace(/\[(?:[^\[\]]*?(?:official|audio|video|clip|lyric|remix|version)[^\[\]]*?)\]/gi, ' ')
+    :                                                                                ^^
+ 88 |     .replace(/\((?:feat\.?|ft\.?|with)\s+[^()]*\)/gi, ' ')
+    `----
+  help: Replace `\[` with `[`.
+
+  ! eslint(no-useless-escape): Unnecessary escape character '['
+    ,-[src/lib/track.ts:89:44]
+ 88 |     .replace(/\((?:feat\.?|ft\.?|with)\s+[^()]*\)/gi, ' ')
+ 89 |     .replace(/\[(?:feat\.?|ft\.?|with)\s+[^\[\]]*\]/gi, ' ')
+    :                                            ^^
+ 90 |     .replace(/^\s*\d{1,2}\s*[-.)]\s*/, '')          // numéro de piste
+    `----
+  help: Replace `\[` with `[`.
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+    ,-[src/lib/pwa.tsx:84:14]
+ 83 | 
+ 84 | export const useInstall = (): InstallState => {
+    :              ^^^^^^^^^^
+ 85 |   const [tick, setTick] = useState(0);
+    `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/lib/pwa.tsx:137:14]
+ 136 | /* la phrase qui explique le geste, selon l'appareil */
+ 137 | export const installHint = (platform: Platform) =>
+     :              ^^^^^^^^^^^
+ 138 |   platform === 'ios'
+     `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/lib/pwa.tsx:144:14]
+ 143 |    localhost pour les tests. Un aperçu ouvert en `file://` n'y a pas droit. */
+ 144 | export const installPossible = () =>
+     :              ^^^^^^^^^^^^^^^
+ 145 |   typeof window !== 'undefined' &&
+     `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/lib/pwa.tsx:168:14]
+ 167 |    fichiers périmés à chaque rechargement. */
+ 168 | export const registerServiceWorker = () => {
+     :              ^^^^^^^^^^^^^^^^^^^^^
+ 169 |   if (typeof window === 'undefined') return;
+     `----
+
+  ! react(only-export-components): Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components.
+     ,-[src/lib/pwa.tsx:181:16]
+ 180 | 
+ 181 | export default useInstall;
+     :                ^^^^^^^^^^
+     `----
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+    ,-[src/components/shell/WelcomeFlow.tsx:25:19]
+ 24 |   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
+ 25 |   useEffect(() => setGeminiKey(settings.geminiApiKey || ''), [settings.geminiApiKey, accountKnown]);
+    :   ^^^^|^^^^       ^^^^^^|^^^^^
+    :       |                 `-- Avoid calling setState() directly within an effect
+    :       `-- This is the containing effect
+ 26 | 
+    `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+    ,-[src/components/modals/GeneratingOverlay.tsx:43:20]
+ 41 | 
+ 42 |   useEffect(() => {
+    :   ^^^^|^^^^
+    :       `-- This is the containing effect
+ 43 |     if (!active) { setStep(0); return; }
+    :                    ^^^|^^^
+    :                       `-- Avoid calling setState() directly within an effect
+ 44 |     /* Pas de défilement ni de transition en préférence mouvement réduit. */
+    `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! eslint(no-unused-vars): Identifier 'ModalHeader' is imported but never used.
+    ,-[src/components/modals/PickerModal.tsx:9:17]
+  8 | import { usePlayer } from '../../context/PlayerContext';
+  9 | import { Modal, ModalHeader, ModalFooter } from '../ui/Modal';
+    :                 ^^^^^|^^^^^
+    :                      `-- 'ModalHeader' is imported here
+ 10 | import { Button } from '../ui';
+    `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'ModalFooter' is imported but never used.
+    ,-[src/components/modals/PickerModal.tsx:9:30]
+  8 | import { usePlayer } from '../../context/PlayerContext';
+  9 | import { Modal, ModalHeader, ModalFooter } from '../ui/Modal';
+    :                              ^^^^^|^^^^^
+    :                                   `-- 'ModalFooter' is imported here
+ 10 | import { Button } from '../ui';
+    `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Variable 'showCatalog' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/components/modals/PickerModal.tsx:47:10]
+ 46 |   const [searchError, setSearchError] = useState<string | null>(null);
+ 47 |   const [showCatalog, setShowCatalog] = useState(false);
+    :          ^^^^^|^^^^^
+    :               `-- 'showCatalog' is declared here
+ 48 |   const searchRef = useRef<HTMLInputElement>(null);
+    `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Variable 'setShowCatalog' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/components/modals/PickerModal.tsx:47:23]
+ 46 |   const [searchError, setSearchError] = useState<string | null>(null);
+ 47 |   const [showCatalog, setShowCatalog] = useState(false);
+    :                       ^^^^^^^|^^^^^^
+    :                              `-- 'setShowCatalog' is declared here
+ 48 |   const searchRef = useRef<HTMLInputElement>(null);
+    `----
+  help: Consider removing this declaration.
+
+  ! react(purity): Cannot call impure function during render
+    ,-[src/components/views/HistoryView.tsx:37:77]
+ 36 |         minutes: Math.max(1, Math.round(b.tracks.reduce((s, t) => s + (t.durationSeconds || 0), 0) / 60)),
+ 37 |         remaining: Math.max(0, Math.ceil((new Date(b.expiresAt).getTime() - Date.now()) / 86400000)),
+    :                                                                             ^^^^^|^^^^
+    :                                                                                  `-- Cannot call impure function
+ 38 |       })),
+    `----
+  help: `Date.now` is an impure function. Calling an impure function can produce unstable results that update unpredictably when the component re-renders
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/purity
+
+  ! eslint(no-unused-vars): Identifier 'Loader2' is imported but never used.
+   ,-[src/components/views/SettingsView.tsx:4:3]
+ 3 |   KeyRound, ShieldCheck, Check, ExternalLink, Palette, MonitorSmartphone,
+ 4 |   Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, Cloud, Ban, ListMusic, ChevronRight,
+   :   ^^^|^^^
+   :      `-- 'Loader2' is imported here
+ 5 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'Cpu' is imported but never used.
+   ,-[src/components/views/SettingsView.tsx:4:12]
+ 3 |   KeyRound, ShieldCheck, Check, ExternalLink, Palette, MonitorSmartphone,
+ 4 |   Loader2, Cpu, Download, Smartphone, Share, Plus, CheckCircle2, Cloud, Ban, ListMusic, ChevronRight,
+   :            ^|^
+   :             `-- 'Cpu' is imported here
+ 5 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Variable 'probe' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/components/views/SettingsView.tsx:39:10]
+ 38 |      triée par la même fonction que celle qui choisit le modèle. */
+ 39 |   const [probe, setProbe] = useState<{ busy: boolean; models?: string[]; ecartes?: { nom: string; raison: string }[]; error?: string }>({ busy: false });
+    :          ^^|^^
+    :            `-- 'probe' is declared here
+ 40 |   const probeModels = async () => {
+    `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Variable 'probeModels' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/components/views/SettingsView.tsx:40:9]
+ 39 |   const [probe, setProbe] = useState<{ busy: boolean; models?: string[]; ecartes?: { nom: string; raison: string }[]; error?: string }>({ busy: false });
+ 40 |   const probeModels = async () => {
+    :         ^^^^^|^^^^^
+    :              `-- 'probeModels' is declared here
+ 41 |     const key = geminiKey.trim();
+    `----
+  help: Consider removing this declaration.
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+    ,-[src/components/views/SettingsView.tsx:33:19]
+ 32 |   const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
+ 33 |   useEffect(() => setGeminiKey(settings.geminiApiKey || ''), [settings.geminiApiKey]);
+    :   ^^^^|^^^^       ^^^^^^|^^^^^
+    :       |                 `-- Avoid calling setState() directly within an effect
+    :       `-- This is the containing effect
+ 34 | 
+    `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! eslint(no-unused-vars): Identifier 'useRef' is imported but never used.
+   ,-[src/components/views/LibraryView.tsx:1:37]
+ 1 | import React, { useEffect, useMemo, useRef, useState } from 'react';
+   :                                     ^^^|^^
+   :                                        `-- 'useRef' is imported here
+ 2 | import { AnimatePresence, motion } from 'framer-motion';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'AnimatePresence' is imported but never used.
+   ,-[src/components/views/LibraryView.tsx:2:10]
+ 1 | import React, { useEffect, useMemo, useRef, useState } from 'react';
+ 2 | import { AnimatePresence, motion } from 'framer-motion';
+   :          ^^^^^^^|^^^^^^^
+   :                 `-- 'AnimatePresence' is imported here
+ 3 | import { Play, Plus, RefreshCw, ChevronRight, LogIn, Sparkles, ListMusic } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! react-hooks(exhaustive-deps): The ref's value `.current` is accessed directly in the effect cleanup function.
+     ,-[src/components/views/AssistantView.tsx:144:30]
+ 143 |     return () => {
+ 144 |       alive.current = false; operation.current++; actionAbort.current?.abort(); actionAbort.current = null; liveRef.current?.stop(); liveRef.current = null;
+     :                              ^^^^^^^^^^^^^^^^^
+ 145 |       window.removeEventListener('sb:auth-changing', stopForAuth);
+     `----
+  help: The ref value will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by react, copy it to a variable inside the effect and use that variable in the cleanup function.
+
+  ! eslint(no-unused-vars): Identifier 'AnimatePresence' is imported but never used.
+   ,-[src/components/views/BlendView.tsx:2:18]
+ 1 | import React, { useEffect, useMemo, useState } from 'react';
+ 2 | import { motion, AnimatePresence } from 'framer-motion';
+   :                  ^^^^^^^|^^^^^^^
+   :                         `-- 'AnimatePresence' is imported here
+ 3 | import confetti from 'canvas-confetti';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'Clock' is imported but never used.
+   ,-[src/components/views/BlendView.tsx:6:66]
+ 5 |   Play, Pause, Trash2, RefreshCw, Share2, ExternalLink,
+ 6 |   ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass, TriangleAlert,
+   :                                                                  ^^|^^
+   :                                                                    `-- 'Clock' is imported here
+ 7 |   MoreHorizontal, ArrowRight, Download, Radio,
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'MoreHorizontal' is imported but never used.
+   ,-[src/components/views/BlendView.tsx:7:3]
+ 6 |   ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass, TriangleAlert,
+ 7 |   MoreHorizontal, ArrowRight, Download, Radio,
+   :   ^^^^^^^|^^^^^^
+   :          `-- 'MoreHorizontal' is imported here
+ 8 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'ArrowRight' is imported but never used.
+   ,-[src/components/views/BlendView.tsx:7:19]
+ 6 |   ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass, TriangleAlert,
+ 7 |   MoreHorizontal, ArrowRight, Download, Radio,
+   :                   ^^^^^|^^^^
+   :                        `-- 'ArrowRight' is imported here
+ 8 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'Download' is imported but never used.
+   ,-[src/components/views/BlendView.tsx:7:31]
+ 6 |   ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass, TriangleAlert,
+ 7 |   MoreHorizontal, ArrowRight, Download, Radio,
+   :                               ^^^^|^^^
+   :                                   `-- 'Download' is imported here
+ 8 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'Radio' is imported but never used.
+   ,-[src/components/views/BlendView.tsx:7:41]
+ 6 |   ChevronUp, ChevronDown, ArrowLeft, Pencil, Lock, Globe, Check, Clock, Sparkles, Cpu, Compass, TriangleAlert,
+ 7 |   MoreHorizontal, ArrowRight, Download, Radio,
+   :                                         ^^|^^
+   :                                           `-- 'Radio' is imported here
+ 8 | } from 'lucide-react';
+   `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Identifier 'Equalizer' is imported but never used.
+    ,-[src/components/views/BlendView.tsx:20:18]
+ 19 | import { useReplaceQueue } from '../../context/ReplaceQueueContext';
+ 20 | import { Button, Equalizer } from '../ui';
+    :                  ^^^^|^^^^
+    :                      `-- 'Equalizer' is imported here
+ 21 | import { Art } from '../ui/Art';
+    `----
+  help: Consider removing this import.
+
+  ! eslint(no-unused-vars): Variable 'settings' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/components/views/BlendView.tsx:43:24]
+ 42 | const BlendViewContent: React.FC<{ blend: GeneratedBlend }> = ({ blend }) => {
+ 43 |   const { updateBlend, settings, isAuthenticated } = useData();
+    :                        ^^^^|^^^
+    :                            `-- 'settings' is declared here
+ 44 |   const { design, showToast, setView } = useUI();
+    `----
+  help: Consider removing this declaration.
+
+  ! eslint(no-unused-vars): Variable 'design' is declared but never used. Unused variables should start with a '_'.
+    ,-[src/components/views/BlendView.tsx:44:11]
+ 43 |   const { updateBlend, settings, isAuthenticated } = useData();
+ 44 |   const { design, showToast, setView } = useUI();
+    :           ^^^|^^
+    :              `-- 'design' is declared here
+ 45 |   const { playTrack, currentTrack, isPlaying } = usePlayer();
+    `----
+  help: Consider removing this declaration.
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+    ,-[src/components/views/BlendView.tsx:53:38]
+ 51 |   const [priv, setPriv] = useState(() => (blend.exportedMeta?.privacy || 'private') === 'private');
+ 52 |   useEffect(() => {
+    :   ^^^^|^^^^
+    :       `-- This is the containing effect
+ 53 |     if (blend.exportedMeta?.privacy) setPriv(blend.exportedMeta.privacy === 'private');
+    :                                      ^^^|^^^
+    :                                         `-- Avoid calling setState() directly within an effect
+ 54 |   }, [blend.exportedPlaylistId, blend.exportedMeta?.privacy]);
+    `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+    ,-[src/components/views/BlendView.tsx:61:44]
+ 60 |   const [exportWarning, setExportWarning] = useState('');
+ 61 |   useEffect(() => { if (blend.exportedUrl) setExported(blend.exportedUrl); }, [blend.exportedUrl]);
+    :   ^^^^|^^^^                                ^^^^^|^^^^^
+    :       |                                         `-- Avoid calling setState() directly within an effect
+    :       `-- This is the containing effect
+ 62 |   useEffect(() => {
+    `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+    ,-[src/components/views/BlendView.tsx:94:21]
+ 93 |   const [canSync, setCanSync] = useState(false);
+ 94 |   useEffect(() => { setCanSync(isAuthenticated && youtubeService.isAuthenticated()); }, [blend.exportedPlaylistId, isAuthenticated]);
+    :   ^^^^|^^^^         ^^^^^|^^^^
+    :       |                  `-- Avoid calling setState() directly within an effect
+    :       `-- This is the containing effect
+ 95 | 
+    `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+  ! react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders
+     ,-[src/components/views/BlendView.tsx:118:38]
+ 116 | 
+ 117 |   useEffect(() => {
+     :   ^^^^|^^^^
+     :       `-- This is the containing effect
+ 118 |     if (!blend.exportedPlaylistId) { setOutOfSync(false); return; }
+     :                                      ^^^^^^|^^^^^
+     :                                            `-- Avoid calling setState() directly within an effect
+ 119 |     const ref = blend.exportedMeta;
+     `----
+  help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+  note: React Compiler skipped optimizing this component or hook. Additional guidance: https://react.dev/reference/eslint-plugin-react-hooks/lints/set-state-in-effect
+
+Found 83 warnings and 0 errors.
+Finished in 862ms on 167 files with 116 rules using 2 threads.
