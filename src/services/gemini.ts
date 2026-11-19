@@ -1,3 +1,4 @@
+import { requestAssistantText } from './geminiAssistantStream';
 import { compactMention, type AssistantMention } from './assistantMentions';
 import { BlendConfig, Exclusions, Track, TrackCategory, Playlist, GeneratedBlend, type BlendGenerationCounts, type BlendGenerationReport, type DiscoveryRecord } from '../types';
 import { artistMatches, getStoredSettings, getDiscoveryHistory, isRecentlyProposed, isExcluded, recentArtists, getStoredPortrait } from './storage';
@@ -271,14 +272,14 @@ function rememberEngine(apiKey: string, model: string): void {
   });
 }
 
-/** Un appel `generateContent` avec un budget de temps ferme. */
+/** Budget ferme par défaut ; l’Assistant utilise un flux sans durée totale imposée. */
 async function callModel(
   model: string,
   apiKey: string,
   prompt: string,
   temperature: number,
   opts: {
-    json?: boolean; budgetMs?: number; signal?: AbortSignal;
+    json?: boolean; budgetMs?: number; signal?: AbortSignal; assistantStream?: boolean;
     /** sans limite de sortie imposée : le modèle prend son défaut */
     light?: boolean;
     /** sans aucun réglage de génération : juste le prompt */
@@ -287,13 +288,11 @@ async function callModel(
 ): Promise<string | null> {
   const budget = opts.budgetMs ?? 22000;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), budget);
+  const timer = opts.assistantStream ? null : setTimeout(() => ctrl.abort(), budget);
   const abort = () => ctrl.abort();
   if (opts.signal?.aborted) ctrl.abort(); else opts.signal?.addEventListener('abort', abort);
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
+    const request: RequestInit = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -304,7 +303,7 @@ async function callModel(
             generationConfig: {
               temperature,
               topP: 0.95,
-              ...(opts.light ? {} : { maxOutputTokens: 4096 }),
+              ...(opts.light || opts.assistantStream ? {} : { maxOutputTokens: 4096 }),
               /* le JSON est contraint côté serveur : le modèle ne peut pas
                  répondre autre chose qu'un objet exploitable */
               ...(opts.json ? { responseMimeType: 'application/json' } : {}),
@@ -312,8 +311,10 @@ async function callModel(
           }),
         }),
         signal: ctrl.signal,
-      },
-    );
+      };
+    if (opts.assistantStream) return await requestAssistantText(model,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`, request, ctrl.signal);
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, request);
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw Object.assign(new Error(`${model} ${res.status}`), { status: res.status, detail, model });
@@ -337,7 +338,7 @@ async function callModel(
     }
     return text;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     opts.signal?.removeEventListener('abort', abort);
   }
 }
@@ -359,7 +360,7 @@ async function callModelResilient(
   apiKey: string,
   prompt: string,
   temperature: number,
-  opts: { json?: boolean; budgetMs?: number; signal?: AbortSignal } = {},
+  opts: { json?: boolean; budgetMs?: number; signal?: AbortSignal; assistantStream?: boolean } = {},
 ): Promise<string | null> {
   try {
     return await callModel(model, apiKey, prompt, temperature, opts);
@@ -655,7 +656,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ti
       assertAccountRevision(revision);
       if (options.signal?.aborted) throw new Error('Préparation interrompue.');
       try {
-        const raw = await callModelResilient(model, apiKey, prompt, 0.5, { json: true, budgetMs: 26000, signal: options.signal });
+        const raw = await callModelResilient(model, apiKey, prompt, 0.5, { json: true, assistantStream: true, signal: options.signal });
         assertAccountRevision(revision);
         if (options.signal?.aborted) throw new Error('Préparation interrompue.');
         const data = firstJson(raw || '');

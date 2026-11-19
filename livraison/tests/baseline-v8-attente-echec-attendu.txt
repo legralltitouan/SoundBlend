@@ -1,0 +1,15 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: au-delà de 90 secondes la demande reste active et annulable
+    at check (file:///home/user/SoundBlend/verification/t-assistant-wait-v9.mjs:11:38)
+    at file:///home/user/SoundBlend/verification/t-assistant-wait-v9.mjs:87:2 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '=='
+}
+
+Node.js v20.20.2

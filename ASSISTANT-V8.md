@@ -1,4 +1,6 @@
-# Assistant V8 — micro intermittent et continuité après le Live
+# Assistant V8 — micro intermittent et continuité après le Live (archive)
+
+> Le signalement suivant confirme un fonctionnement du Live apparemment satisfaisant sur le téléphone. La version actuelle `ASSISTANT-V9.md` conserve le micro V8 et corrige séparément les annulations des analyses longues de l’Assistant (limites locales de 90 secondes au total et de 26 secondes par tentative).
 
 ## Signalement et niveau de preuve
 

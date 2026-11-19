@@ -1,8 +1,8 @@
-Patch V7 → V8 : contrôle puis application réussis sur archive V7 livrée.
-Tous les fichiers source suivis identiques à V8 après application.
+Patch V8 → V9 : contrôle puis application réussis sur archive V8 livrée.
+Tous les fichiers source suivis identiques à V9 après application.
 Patch complet : git apply --check réussi sur le commit initial.
-Comparaison intégrale des sources V7 : production modifiée uniquement :
-src/components/views/AssistantPrivacy.tsx
+Micro/service Live et tâche vocale : identiques octet par octet à V8.
+Production modifiée uniquement :
 src/components/views/AssistantView.tsx
-src/services/geminiLive.ts
-src/services/assistantVoiceTask.ts
+src/services/gemini.ts
+src/services/geminiAssistantStream.ts

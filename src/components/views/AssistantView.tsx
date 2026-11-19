@@ -65,6 +65,7 @@ export const AssistantView: React.FC = () => {
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [responding, setResponding] = useState(false);
+  const [longResponse, setLongResponse] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ text: string; url?: string } | null>(null);
@@ -232,8 +233,9 @@ export const AssistantView: React.FC = () => {
     stickToBottom.current = true;
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const controller = new AbortController(); actionAbort.current = controller;
-    let timedOut = false;
-    const responseTimer = window.setTimeout(() => { timedOut = true; controller.abort(); }, 90000);
+    setLongResponse(false);
+    // Information uniquement : ne pas annuler une analyse longue en cours.
+    const responseTimer = window.setTimeout(() => { if (alive.current && op === operation.current && !controller.signal.aborted) setLongResponse(true); }, 30000);
     const cancel = () => controller.abort();
     if (opts.signal?.aborted) controller.abort(); else opts.signal?.addEventListener('abort', cancel, { once: true });
     const voiceTask = opts.voice ? beginVoicePreparation(taskOwner.current, request, controller) : null;
@@ -341,15 +343,15 @@ export const AssistantView: React.FC = () => {
       });
       return prepared;
     } catch (e: any) {
-      if (voiceTask) completeVoicePreparation(voiceTask, undefined, timedOut ? 'La préparation vocale a dépassé le délai. Tu peux reprendre ta demande.' : e?.message || 'Préparation vocale impossible.');
+      if (voiceTask) completeVoicePreparation(voiceTask, undefined, e?.message || 'Préparation vocale impossible.');
       if (alive.current) setRecoveryQuery(recoverVoiceQuery());
-      if (alive.current && op === operation.current && (timedOut || !controller.signal.aborted)) setError(timedOut ? 'La réponse a dépassé le délai. Ta proposition précédente est conservée ; tu peux réessayer.' : e?.message || 'Impossible de préparer la réponse.');
+      if (alive.current && op === operation.current && !controller.signal.aborted) setError(e?.message || 'Impossible de préparer la réponse.');
       return false;
     } finally {
       clearTimeout(responseTimer);
       opts.signal?.removeEventListener('abort', cancel);
       if (actionAbort.current === controller) actionAbort.current = null;
-      if (alive.current && op === operation.current) { busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); }
+      if (alive.current && op === operation.current) { busyRef.current = false; setBusy(false); setResponding(false); setLongResponse(false); setBusyLabel(''); }
     }
   };
 
@@ -662,7 +664,7 @@ export const AssistantView: React.FC = () => {
           {!!m.references?.length && <div className="sa-message-mentions" aria-label="Références YouTube du message">{m.references.map((mention) => <a key={mentionKey(mention)} href={mentionUrl(mention)} target="_blank" rel="noopener noreferrer">{mention.kind === 'artist' ? '@' : '#'}{mention.title}<ExternalLink size={10} /></a>)}</div>}
           {m.catalog && <CatalogCard tracks={m.catalog} selected={catalogSelected} onToggle={toggleCatalog} onPrepare={() => prepareFromCatalog(m.catalog!)} />}
         </div>)}
-        {busy && !generating && <div className="sb-chat-thinking"><Loader2 size={15} className="anim-spin" /> {busyLabel || 'Un instant…'}</div>}
+        {busy && !generating && <div className="sb-chat-thinking"><Loader2 size={15} className="anim-spin" /> <span>{busyLabel || 'Un instant…'}{longResponse && <small style={{ display: 'block', marginTop: 6 }}>La préparation prend du temps. Elle continue ; tu peux l’arrêter à tout moment.</small>}</span></div>}
       </div>
       {error && <p className="sb-assistant-error" role="alert">{error}</p>}
       {recoveryQuery && <div className="sb-assistant-notice" role="status"><span>
