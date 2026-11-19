@@ -1,4 +1,6 @@
 import { createPortal } from 'react-dom';
+import { AssistantMentionPicker } from './AssistantMentionPicker';
+import { MAX_ASSISTANT_MENTIONS, compactMention, mentionKey, mentionToken, mentionTrack, mentionUrl, type AssistantMention } from '../../services/assistantMentions';
 import { AssistantPrivacy } from './AssistantPrivacy';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
@@ -57,6 +59,8 @@ export const AssistantView: React.FC = () => {
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const messagesRef = useRef<AssistantMessage[]>([]);
   const [text, setText] = useState('');
+  const [draftMentions, setDraftMentions] = useState<AssistantMention[]>([]);
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [responding, setResponding] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
@@ -114,7 +118,7 @@ export const AssistantView: React.FC = () => {
       operation.current++; busyRef.current = false; actionAbort.current?.abort(); actionAbort.current = null;
       liveRef.current?.stop(); liveRef.current = null;
       partialRef.current = { user: '', assistant: '' };
-      setPlan(null); setPlaylistDraft(null); setDestination('');
+      setPlan(null); setPlaylistDraft(null); setDestination(''); setMentionPickerOpen(false); setDraftMentions([]);
       setBusy(false); setResponding(false); setBusyLabel(''); setLiveOpen(false); setCreatedBlend(null); setSpeaking(false); setLiveQuote('');
       if (event.type === 'sb:auth-changing') {
         // Une conversation peut contenir les titres et noms privés d'un compte.
@@ -182,7 +186,7 @@ export const AssistantView: React.FC = () => {
     }
   };
 
-  const send = async (raw = text, opts: { voice?: boolean; signal?: AbortSignal } = {}): Promise<boolean> => {
+  const send = async (raw = text, opts: { voice?: boolean; signal?: AbortSignal; attachDraft?: boolean } = {}): Promise<boolean> => {
     const request = raw.trim();
     if (!request || request.length > 6000 || busyRef.current || generating || (liveRef.current && !opts.voice)) return false;
     stickToBottom.current = true;
@@ -194,8 +198,10 @@ export const AssistantView: React.FC = () => {
     if (opts.signal?.aborted) controller.abort(); else opts.signal?.addEventListener('abort', cancel, { once: true });
     const guard = () => guardFor(op, revision, serial, controller.signal);
     busyRef.current = true; setBusy(true); setResponding(true); setError(''); setNotice(null);
-    if (!opts.voice) setText('');
-    append({ role: 'user', text: opts.voice ? `Demande vocale à préparer : ${request}` : request });
+    const references = opts.attachDraft || opts.voice ? [...draftMentions] : [];
+    if (!opts.voice && opts.attachDraft) { setText(''); setDraftMentions([]); }
+    else if (!opts.voice && !draftMentions.length) setText('');
+    append({ role: 'user', text: opts.voice ? `Demande vocale à préparer : ${request}` : request, ...(references.length ? { references } : {}) });
     const conversation = [...messagesRef.current];
     const activeProposal = plan?.action === 'blend' ? { title: plan.title, source: source === 'catalog' ? null : (() => { const i = source.indexOf(':'); return { type: source.slice(0, i) as 'playlist' | 'blend', id: source.slice(i + 1) }; })(),
       extraSources: extraSources.map((key) => { const i = key.indexOf(':'); return { type: key.slice(0, i) as 'playlist' | 'blend', id: key.slice(i + 1) }; }), instruction, durationMinutes: minutes } : undefined;
@@ -215,7 +221,8 @@ export const AssistantView: React.FC = () => {
           { catalog: catalogData, proposal: activeProposal, signal: controller.signal });
         guard(); return r;
       };
-      const previousCatalog = catalog.filter((track) => catalogSelected.includes(track.videoId) && !isAssistantTrackExcluded(track));
+      const referencedTracks = references.map(mentionTrack).filter((track): track is Track => !!track);
+      const previousCatalog = uniqueAssistantTracks([...referencedTracks, ...catalog.filter((track) => catalogSelected.includes(track.videoId))], isAssistantTrackExcluded);
       let answer = await ask(previousCatalog);
       // Une source devinée par son nom doit être lue entièrement avant de
       // proposer quoi que ce soit, même quand elle n'était pas nommée.
@@ -236,7 +243,8 @@ export const AssistantView: React.FC = () => {
       guard();
       const warnings: string[] = [];
       let found: Track[] = [...previousCatalog];
-      if (answer.catalogQueries.length) {
+      const searchedThisTurn = answer.catalogQueries.length > 0;
+      if (searchedThisTurn) {
         if (!youtubeService.isAuthenticated()) warnings.push('Connecte ton compte Google pour rechercher des morceaux sur YouTube.');
         else {
           setBusyLabel('Recherche musicale sur YouTube…');
@@ -253,14 +261,14 @@ export const AssistantView: React.FC = () => {
         if (await loadChosen(answer)) answer = await ask(found);
       }
       guard(); setCatalog(found);
-      const recommended = [...new Set([...answer.catalogVideoIds, ...catalogSelected])].filter((id) => found.some((t) => t.videoId === id && !isAssistantTrackExcluded(t)));
+      const recommended = [...new Set([...answer.catalogVideoIds, ...referencedTracks.map((track) => track.videoId), ...catalogSelected])].filter((id) => found.some((t) => t.videoId === id && !isAssistantTrackExcluded(t)));
       setCatalogSelected(recommended);
       if (answer.source && !validSource(answer.source, contextPlaylists)) {
         answer = { ...answer, action: 'none', source: null,
           reply: `${answer.reply}\n\nJe ne retrouve pas cette source dans ta bibliothèque. Précise son nom.` };
       }
       const replyText = `${answer.reply}${warnings.length ? `\n\n${warnings.join(' ')}` : ''}`;
-      append({ role: 'assistant', text: replyText, ...(answer.catalogQueries.length || found.length ? { catalog: found } : {}) });
+      append({ role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) });
       if (answer.action === 'playlist_edit') {
         if (!answer.source || answer.source.type !== 'playlist' || !answer.playlistEdits) {
           setError('Il me manque la playlist ou les changements précis. Demande une nouvelle proposition en indiquant les titres.');
@@ -431,7 +439,9 @@ export const AssistantView: React.FC = () => {
     if (!key.trim()) { setError('Ajoute une clé Gemini dans Réglages avant d’ouvrir le vocal.'); return; }
     if (isPlaying) togglePlay();
     const context = JSON.stringify({ playlists: playlists.slice(0, 60).map((p) => ({ titre: p.title, nombre: p.trackCount })),
-      conversation: messagesRef.current.filter((m) => !m.grounded).slice(-10).map((m) => ({ role: m.role, text: m.text.slice(-800) })),
+      conversation: messagesRef.current.filter((m) => !m.grounded).slice(-10).map((m) => ({ role: m.role, text: m.text.slice(-800), referencesYouTube: (m.references || []).map(compactMention) })),
+      referencesDuBrouillon: draftMentions.map(compactMention),
+      texteDuBrouillon: draftMentions.length ? text.slice(-1000) : '',
       propositionEnCours: plan ? { titre: plan.title, source, consigne: instruction.slice(-2000), dureeMinutes: minutes } : null,
       blends: recentBlends.slice(0, 20).map((b) => ({ titre: b.title, nombre: b.tracks.length })),
       exclusions: { artistes: exclusions.artists, titres: exclusions.tracks.map((t) => ({ titre: t.title, artiste: t.artist })) } });
@@ -459,7 +469,7 @@ export const AssistantView: React.FC = () => {
   const closeLive = () => { stopVoice(); setLiveOpen(false); requestAnimationFrame(() => composerRef.current?.focus()); };
   useEffect(() => {
     if (!liveOpen) return;
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.querySelector('.sa-privacy[open]')) latest.current.closeLive(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !document.querySelector('.sa-privacy[open], .sa-mention-picker[open]')) latest.current.closeLive(); };
     document.addEventListener('keydown', escape);
     window.scrollTo({ top: 0, behavior: 'instant' });
     document.getElementById('sb-live-close')?.focus();
@@ -468,7 +478,30 @@ export const AssistantView: React.FC = () => {
   useLayoutEffect(() => { latest.current = { handleVoiceTool, closeLive }; });
   const toggleCatalog = (id: string) => setCatalogSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id].slice(0, 20));
   const toggleExtra = (value: string) => setExtraSources((old) => old.includes(value) ? old.filter((x) => x !== value) : [...old, value].slice(0, 3));
-  const setExample = (value: string) => { setText(value); composerRef.current?.focus({ preventScroll: true }); };
+  const setExample = (value: string) => { setText(`${value}${draftMentions.length ? ` ${draftMentions.map(mentionToken).join(' ')}` : ''}`); composerRef.current?.focus({ preventScroll: true }); };
+
+  const closeMentionPicker = () => {
+    setMentionPickerOpen(false);
+    requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+  };
+  const removeDraftMention = (mention: AssistantMention) => {
+    setDraftMentions((old) => old.filter((item) => mentionKey(item) !== mentionKey(mention)));
+    if (!draftMentions.some((item) => mentionKey(item) !== mentionKey(mention) && mentionToken(item) === mentionToken(mention))) {
+      setText((old) => old.split(mentionToken(mention)).join(''));
+    }
+  };
+  const toggleDraftMention = (mention: AssistantMention) => {
+    if (draftMentions.some((item) => mentionKey(item) === mentionKey(mention))) { removeDraftMention(mention); return; }
+    if (draftMentions.length >= MAX_ASSISTANT_MENTIONS) return;
+    const token = mentionToken(mention);
+    if (text.length + token.length + 1 > 6000) { showToast('Ton message est trop long pour ajouter une référence.'); return; }
+    setDraftMentions((old) => old.some((item) => mentionKey(item) === mentionKey(mention)) ? old : [...old, mention].slice(0, MAX_ASSISTANT_MENTIONS));
+    setText((old) => old.includes(token) ? old : `${old}${old && !/\s$/.test(old) ? ' ' : ''}${token} `);
+  };
+  const changePrompt = (value: string) => {
+    setText(value);
+    setDraftMentions((old) => old.filter((mention) => value.includes(mentionToken(mention))));
+  };
 
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 60000); return () => clearInterval(timer); }, []);
@@ -482,7 +515,7 @@ export const AssistantView: React.FC = () => {
     : source.startsWith('blend:') ? validBlends.find((b) => `blend:${b.id}` === source)?.title : 'Ta sélection YouTube';
   const resetConversation = () => {
     if (busyRef.current || generating || liveRef.current) return;
-    messagesRef.current = []; setMessages([]); setPlan(null); setPlaylistDraft(null); setCreatedBlend(null);
+    messagesRef.current = []; setMessages([]); setDraftMentions([]); setMentionPickerOpen(false); setPlan(null); setPlaylistDraft(null); setCreatedBlend(null);
     setCatalog([]); setCatalogSelected([]); setSource(''); setExtraSources([]); setInstruction(''); setMinutes(45);
     setNotice(null); setError(''); setText(''); setLiveQuote(''); composerRef.current?.focus({ preventScroll: true });
   };
@@ -502,6 +535,7 @@ export const AssistantView: React.FC = () => {
       </div>
     </header>
     {privacyOpen && <AssistantPrivacy onClose={() => setPrivacyOpen(false)} />}
+    {mentionPickerOpen && <AssistantMentionPicker selected={draftMentions} onToggle={toggleDraftMention} onClose={closeMentionPicker} />}
 
     {liveOpen && <section className="sa-live" aria-label="Mode vocal en direct">
       <div className="sa-live-state" role="status"><i data-active={livePhase === 'listening'} /> {busy ? 'ON PRÉPARE TON ENVIE' : livePhase === 'connecting' ? 'CONNEXION EN COURS' : speaking ? 'L’ASSISTANT TE RÉPOND' : livePhase === 'muted' ? 'MICRO EN PAUSE' : livePhase === 'off' ? 'À VOIX HAUTE' : 'À TON ÉCOUTE'}</div>
@@ -536,6 +570,7 @@ export const AssistantView: React.FC = () => {
       <div className="sb-chat" role="log" aria-label="Conversation avec l’assistant" aria-live="polite" aria-relevant="additions text">
         {messages.map((m, i) => <div className={`sb-chat-message sb-chat-message--${m.role}`} key={i}>
           {m.role === 'assistant' && <span className="sb-chat-label"><span className="sa-orb sa-orb--dot" /> Assistant</span>}<p>{m.text}</p>
+          {!!m.references?.length && <div className="sa-message-mentions" aria-label="Références YouTube du message">{m.references.map((mention) => <a key={mentionKey(mention)} href={mentionUrl(mention)} target="_blank" rel="noopener noreferrer">{mention.kind === 'artist' ? '@' : '#'}{mention.title}<ExternalLink size={10} /></a>)}</div>}
           {m.catalog && <CatalogCard tracks={m.catalog} selected={catalogSelected} onToggle={toggleCatalog} onPrepare={() => prepareFromCatalog(m.catalog!)} />}
         </div>)}
         {busy && !generating && <div className="sb-chat-thinking"><Loader2 size={15} className="anim-spin" /> {busyLabel || 'Un instant…'}</div>}
@@ -604,10 +639,12 @@ export const AssistantView: React.FC = () => {
 
       <div ref={chatEnd} className="sa-chat-end" />
       {createPortal(<div ref={dockRef} className={`sa-floating-compose${currentTrack ? ' has-player' : ''}`} hidden={liveOpen}>
-      <form className="sa-compose" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+      <form className="sa-compose" onSubmit={(e) => { e.preventDefault(); void send(text, { attachDraft: true }); }}>
+        {draftMentions.length > 0 && <div className="sa-draft-mentions" aria-label="Références du message">{draftMentions.map((mention) => <span className="sa-mention" key={mentionKey(mention)} title={mention.kind === 'track' ? `${mention.youtubeTitle} · ${mention.channelTitle} · ${mention.id}` : `${mention.title} · ${mention.id}`}><span>{mention.kind === 'artist' ? '@' : '#'}{mention.title}</span><button type="button" aria-label={`Retirer la référence ${mention.title}`} onClick={() => removeDraftMention(mention)}><X size={12} /></button></span>)}</div>}
         <label className="sr-only" htmlFor="sb-assistant-input">Ton message à l’assistant</label>
-        <textarea ref={composerRef} id="sb-assistant-input" rows={1} maxLength={6000} value={text} onChange={(e) => setText(e.target.value)} placeholder="Décris ton envie musicale…" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
+        <textarea ref={composerRef} id="sb-assistant-input" rows={1} maxLength={6000} value={text} onChange={(e) => changePrompt(e.target.value)} placeholder="Décris ton envie musicale…" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(text, { attachDraft: true }); } }} />
         <div className="sa-compose-tools">
+          <button type="button" className="sa-icon sa-mention-add" aria-label="Ajouter une référence YouTube" aria-haspopup="dialog" disabled={busy || generating} onClick={() => setMentionPickerOpen(true)}><Plus size={20} /></button>
           <button type="button" className="sa-live-button" disabled={busy || generating} onClick={() => { setLiveOpen(true); setError(''); }}><AudioLines size={15} /> Live</button>
           {responding && !generating && <button type="button" className="sa-send" aria-label="Arrêter la réponse" onClick={() => { operation.current++; actionAbort.current?.abort(); actionAbort.current = null; busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); setNotice({ text: 'Réponse interrompue. Tu peux reformuler ta demande.' }); }}><X size={18} /></button>}
           <button type="submit" className="sa-send" disabled={!text.trim() || busy || generating} aria-label="Envoyer à l’assistant"><ArrowUp size={19} /></button>

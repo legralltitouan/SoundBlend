@@ -1,4 +1,6 @@
-# Assistant épuré — deuxième passe
+# Assistant épuré — deuxième passe (archive V2)
+
+> La version actuelle est décrite dans `ASSISTANT-MENTIONS.md` (V3). Le « + » fonctionnel et les références YouTube de V3 remplacent le composeur sans « + » documenté ci-dessous.
 
 Cette livraison remplace la première version Assistant Studio. Les autres vues et la navbar ne sont pas modifiées.
 

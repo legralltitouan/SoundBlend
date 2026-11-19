@@ -88,7 +88,7 @@
 .sa-compose:focus-within { border-color: #b292c6; box-shadow: 0 4px 24px #b292c614; }
 .sa-compose textarea::placeholder { color: var(--sa-muted); }
 .sa-compose-tools { display: flex; align-items: center; gap: 9px; }
-.sa-live-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 12px; min-height: 33px; margin-right: auto; border-radius: 99px; font-size: 12px; background: var(--sa-surface); }
+.sa-live-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 12px; min-height: 33px; margin-left: auto; border-radius: 99px; font-size: 12px; background: var(--sa-surface); }
 .sa-live-button:hover { background: var(--bg-3); }
 .sa-send { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--ink); color: var(--bg); flex: none; }
 .sb-assistant-studio .sa-send:disabled { opacity: .28; }
@@ -191,3 +191,61 @@ html[data-mode='light'] .sb-assistant-studio, html[data-mode='light'] .sa-floati
 
 .sb-assistant-studio.is-live { padding-bottom: 28px; }
 @media (max-width: 819px) { .sb-assistant-studio.is-live { padding-bottom: calc(var(--nav-h) + var(--safe-b) + 20px); } .sb-assistant-studio.is-live.has-player { padding-bottom: calc(var(--nav-h) + var(--safe-b) * 2 + 98px); } }
+
+/* Références musicales : mentions structurées dans le composeur. */
+.sa-mention-add { width: 34px; height: 34px; margin-left: -4px; background: transparent; color: var(--sa-muted); }
+.sa-draft-mentions { display: flex; flex-wrap: wrap; gap: 6px; max-height: 96px; overflow-y: auto; padding: 0 1px 10px; }
+.sa-mention { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 5px 4px 9px; border-radius: 9px; border: 1px solid color-mix(in srgb, #b292c6 30%, var(--line)); background: var(--sa-surface); color: var(--ink); font-size: 11px; }
+.sa-mention > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sa-mention > button { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; flex: none; color: var(--sa-muted); }
+.sa-mention > button:hover { background: var(--bg-3); }
+.sa-message-mentions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sa-message-mentions a { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 5px 8px; border-radius: 8px; font-size: 10px; border: 1px solid var(--line-2); overflow-wrap: anywhere; }
+.sa-message-mentions a svg { flex: none; }
+/* Modal de recherche : liste scrollable, actions toujours accessibles. */
+.sa-mention-picker { width: min(540px, calc(100vw - 28px)); height: min(640px, calc(100dvh - 32px)); max-height: calc(100dvh - 32px); padding: 23px; overflow: hidden; color: var(--ink); background: var(--bg); border: 1px solid var(--line-2); border-radius: 25px; box-shadow: 0 24px 90px #00000024; }
+.sa-mention-picker[open] { display: flex; flex-direction: column; animation: sa-arrive .2s var(--ease) both; }
+.sa-mention-picker::backdrop { background: #08060e66; }
+.sa-mention-picker :focus-visible { outline: 2px solid #b292c6; outline-offset: 3px; }
+.sa-mention-picker button:disabled { opacity: .4; cursor: not-allowed; }
+.sa-picker-heading { display: flex; align-items: flex-start; gap: 12px; flex: none; }
+.sa-picker-heading > div { flex: 1; min-width: 0; }
+.sa-picker-heading h2 { font-size: 23px; line-height: 1.2; letter-spacing: -.04em; font-weight: 500; margin: 2px 0 8px; }
+.sa-picker-heading p { font-size: 12px; line-height: 1.5; color: var(--ink-2); margin: 0; }
+.sa-picker-heading .sa-icon { width: 36px; height: 36px; }
+.sa-picker-tabs { display: flex; gap: 5px; padding: 4px; border-radius: 13px; background: var(--bg-2); margin: 21px 0 14px; flex: none; }
+.sa-picker-tabs button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 7px; min-height: 37px; padding: 7px; font-size: 12px; color: var(--ink-2); border-radius: 10px; transition: color .18s, background .18s; }
+.sa-picker-tabs button[aria-selected='true'] { background: var(--bg); color: var(--ink); box-shadow: 0 1px 5px #0000000a; }
+.sa-picker-search { display: flex; align-items: center; gap: 9px; padding: 5px 5px 5px 12px; border: 1px solid var(--line-2); border-radius: 13px; flex: none; }
+.sa-picker-search > svg { flex: none; color: var(--ink-2); }
+.sa-picker-search:focus-within { border-color: #b292c6; }
+.sa-picker-search input { width: 0; min-width: 0; flex: 1; border: 0; background: transparent !important; color: var(--ink); padding: 6px 0; font: inherit; font-size: 16px; outline: none; }
+.sa-picker-search button { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--ink); color: var(--bg); flex: none; }
+.sa-picker-hint { margin: 10px 0 12px; color: var(--ink-2); font-size: 10px; line-height: 1.55; flex: none; }
+.sa-picker-results { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 3px; margin: -3px; }
+.sa-picker-empty { display: flex; align-items: center; flex-direction: column; justify-content: center; gap: 13px; min-height: 135px; height: 100%; margin: 0; padding: 12px; text-align: center; font-size: 12px; line-height: 1.65; color: var(--ink-2); }
+.sa-picker-empty > span { display: grid; place-items: center; width: 55px; height: 55px; border-radius: 18px; background: var(--bg-2); }
+.sa-picker-empty p { margin: 0; }
+.sa-picker-error { color: var(--ink); background: var(--accent-soft); border-radius: 13px; padding: 14px; font-size: 12px; line-height: 1.65; }
+.sa-picker-results ul { display: grid; gap: 5px; list-style: none; padding: 0; margin: 0; }
+.sa-picker-results li { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.sa-picker-result { display: flex; align-items: center; flex: 1; gap: 11px; min-width: 0; min-height: 74px; padding: 9px; border-radius: 14px; border: 1px solid transparent; text-align: left; transition: background .18s, border-color .18s; }
+.sa-picker-result:hover { background: var(--bg-2); }
+.sa-picker-result[aria-pressed='true'] { background: color-mix(in srgb, #b292c6 10%, var(--bg)); border-color: color-mix(in srgb, #b292c6 55%, var(--line)); }
+.sa-picker-art { display: block; position: relative; width: 46px; height: 46px; border-radius: 10px; overflow: hidden; flex: none; background: var(--bg-3); }
+.sa-picker-art.is-artist { border-radius: 50%; }
+.sa-picker-art > span { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-2); }
+.sa-picker-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.sa-picker-result-copy { display: block; min-width: 0; flex: 1; }
+.sa-picker-result-copy b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.sa-picker-result-copy small { display: block; margin-top: 4px; font-size: 10px; color: var(--ink-2); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.sa-picker-check { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; color: var(--ink-2); background: var(--bg-2); }
+.sa-picker-result[aria-pressed='true'] .sa-picker-check { background: var(--ink); color: var(--bg); }
+.sa-picker-results li > a { display: grid; place-items: center; width: 32px; height: 44px; border-radius: 10px; flex: none; color: var(--ink-2); }
+.sa-picker-results li > a:hover { background: var(--bg-2); }
+.sa-picker-footer { display: flex; align-items: center; gap: 12px; padding-top: 17px; margin-top: 12px; border-top: 1px solid var(--line); flex: none; }
+.sa-picker-footer > span { font-size: 11px; flex: 1; color: var(--ink); line-height: 1.5; }
+.sa-picker-footer small { display: block; margin-top: 3px; font-size: 9px; color: var(--ink-2); }
+.sa-picker-footer .sa-primary { min-height: 40px; font-size: 11px; }
+@media (max-width: 360px) { .sa-mention-picker { padding: 17px; } .sa-picker-heading h2 { font-size: 21px; } .sa-picker-footer { gap: 8px; } .sa-picker-footer .sa-primary { padding-inline: 12px; } }
+@media (prefers-reduced-motion: reduce) { .sa-mention-picker, .sa-mention-picker *, .sa-draft-mentions * { animation: none !important; transition: none !important; } }

@@ -17,8 +17,8 @@ export const AssistantPrivacy: React.FC<{ onClose: () => void }> = ({ onClose })
     <div className="sa-privacy-heading"><span><ShieldCheck size={20} /></span><button type="button" className="sa-icon" aria-label="Fermer la confidentialité" onClick={onClose} autoFocus><X size={19} /></button></div>
     <h2 id="sa-privacy-title">Ta musique, tes choix.</h2>
     <p id="sa-privacy-intro">L’essentiel sur tes données et l’assistant.</p>
-    <dl><div><dt>Ce qui est envoyé à Gemini</dt><dd>Tes messages, le contexte musical chargé et tes exclusions, via ta clé. Quotas et frais possibles.</dd></div>
-      <div><dt>Quand tu passes en Live</dt><dd>Le micro s’ouvre avec ton accord et transmet ta voix à Google. Quitter la page ou passer en arrière-plan coupe la session.</dd></div>
+    <dl><div><dt>Ce qui est envoyé à Gemini</dt><dd>Tes messages, les références YouTube choisies, le contexte musical chargé et tes exclusions, via ta clé. Quotas et frais possibles.</dd></div>
+      <div><dt>Quand tu passes en Live</dt><dd>Le micro s’ouvre avec ton accord et transmet ta voix à Google, avec les références de ton brouillon. Quitter la page ou passer en arrière-plan coupe la session.</dd></div>
       <div><dt>Tu gardes la main</dt><dd>La conversation reste en mémoire dans cette vue, sans sauvegarde locale. Les données envoyées suivent les conditions de Google. Aucune action musicale sans ta confirmation.</dd></div></dl>
     <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Conditions de l’API Gemini ↗</a>
     <button type="button" className="sa-primary" onClick={onClose}>Compris</button>
