@@ -1,3 +1,0 @@
-Preparing worktree (detached HEAD 51f92aa)
-HEAD is now at 51f92aa v6.9.45 - optimisations
-Patch complet validé sur HEAD de départ

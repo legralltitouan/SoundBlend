@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { promptWithTags } from './AssistantPrompt';
 import { AssistantMentionPicker } from './AssistantMentionPicker';
 import { MAX_ASSISTANT_MENTIONS, compactMention, mentionKey, mentionToken, mentionTrack, mentionUrl, type AssistantMention } from '../../services/assistantMentions';
 import { AssistantPrivacy } from './AssistantPrivacy';
@@ -85,6 +86,7 @@ export const AssistantView: React.FC = () => {
   const [liveQuote, setLiveQuote] = useState('');
   const liveOrb = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const promptDecorRef = useRef<HTMLDivElement>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [livePhase, setLivePhase] = useState<LivePhase>('off');
@@ -129,7 +131,7 @@ export const AssistantView: React.FC = () => {
       }
     };
     const onHidden = () => {
-      if (document.visibilityState === 'hidden' && liveRef.current) {
+      if (document.visibilityState === 'hidden' && liveRef.current?.hasMicrophone()) {
         flushVoice(); liveRef.current.stop(); liveRef.current = null;
         if (alive.current) { setNotice({ text: 'Vocal arrêté parce que l’application est passée en arrière-plan.' }); setLiveOpen(false); }
       }
@@ -157,6 +159,7 @@ export const AssistantView: React.FC = () => {
   useEffect(() => {
     const input = composerRef.current;
     if (input) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 144)}px`; }
+    if (input && promptDecorRef.current) promptDecorRef.current.scrollTop = input.scrollTop;
   }, [text, liveOpen]);
 
   // Le portail échappe au transform de transition du Shell : fixed reste
@@ -552,6 +555,7 @@ export const AssistantView: React.FC = () => {
           <button type="button" className="sa-live-end" onClick={closeLive}><span><X size={24} /></span><small>Terminer</small></button>
           <button type="button" onClick={closeLive}><span><Keyboard size={20} /></span><small>Écrire</small></button>
         </div>}
+      <details className="sa-live-help"><summary>Le micro ne s’ouvre pas ?</summary><p>Le Live nécessite une adresse HTTPS et une clé Gemini enregistrée sur cet appareil. Les réglages du PC ne sont pas automatiquement ceux du mobile.</p><p>Dans Chrome : ouvre les informations du site → Autorisations → Microphone → Autoriser. Sur Android, vérifie aussi Réglages → Applications → Chrome (ou l’app installée) → Autorisations → Microphone.</p><p>Si tu utilises un aperçu intégré, ouvre l’app dans un onglet Chrome normal. Une autorisation déjà accordée n’affiche pas forcément une nouvelle demande. Le statut ci-dessus indique l’étape en cours.</p></details>
       <p className="sa-live-foot">Tu peux m’interrompre à tout moment.<br />Aucune action sans confirmation à l’écran.</p>
     </section>}
 
@@ -569,7 +573,7 @@ export const AssistantView: React.FC = () => {
       </section>}
       <div className="sb-chat" role="log" aria-label="Conversation avec l’assistant" aria-live="polite" aria-relevant="additions text">
         {messages.map((m, i) => <div className={`sb-chat-message sb-chat-message--${m.role}`} key={i}>
-          {m.role === 'assistant' && <span className="sb-chat-label"><span className="sa-orb sa-orb--dot" /> Assistant</span>}<p>{m.text}</p>
+          {m.role === 'assistant' && <span className="sb-chat-label"><span className="sa-orb sa-orb--dot" /> Assistant</span>}<p>{m.references?.length ? promptWithTags(m.text, m.references) : m.text}</p>
           {!!m.references?.length && <div className="sa-message-mentions" aria-label="Références YouTube du message">{m.references.map((mention) => <a key={mentionKey(mention)} href={mentionUrl(mention)} target="_blank" rel="noopener noreferrer">{mention.kind === 'artist' ? '@' : '#'}{mention.title}<ExternalLink size={10} /></a>)}</div>}
           {m.catalog && <CatalogCard tracks={m.catalog} selected={catalogSelected} onToggle={toggleCatalog} onPrepare={() => prepareFromCatalog(m.catalog!)} />}
         </div>)}
@@ -640,9 +644,11 @@ export const AssistantView: React.FC = () => {
       <div ref={chatEnd} className="sa-chat-end" />
       {createPortal(<div ref={dockRef} className={`sa-floating-compose${currentTrack ? ' has-player' : ''}`} hidden={liveOpen}>
       <form className="sa-compose" onSubmit={(e) => { e.preventDefault(); void send(text, { attachDraft: true }); }}>
-        {draftMentions.length > 0 && <div className="sa-draft-mentions" aria-label="Références du message">{draftMentions.map((mention) => <span className="sa-mention" key={mentionKey(mention)} title={mention.kind === 'track' ? `${mention.youtubeTitle} · ${mention.channelTitle} · ${mention.id}` : `${mention.title} · ${mention.id}`}><span>{mention.kind === 'artist' ? '@' : '#'}{mention.title}</span><button type="button" aria-label={`Retirer la référence ${mention.title}`} onClick={() => removeDraftMention(mention)}><X size={12} /></button></span>)}</div>}
         <label className="sr-only" htmlFor="sb-assistant-input">Ton message à l’assistant</label>
-        <textarea ref={composerRef} id="sb-assistant-input" rows={1} maxLength={6000} value={text} onChange={(e) => changePrompt(e.target.value)} placeholder="Décris ton envie musicale…" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(text, { attachDraft: true }); } }} />
+        <div className={`sa-prompt-field${draftMentions.length ? ' has-tags' : ''}`}>
+          {draftMentions.length > 0 && <div ref={promptDecorRef} className="sa-prompt-decoration" aria-hidden="true">{promptWithTags(text, draftMentions)}{'\n'}</div>}
+          <textarea ref={composerRef} id="sb-assistant-input" rows={1} maxLength={6000} value={text} onChange={(e) => changePrompt(e.target.value)} onScroll={(e) => { if (promptDecorRef.current) { promptDecorRef.current.scrollTop = e.currentTarget.scrollTop; promptDecorRef.current.scrollLeft = e.currentTarget.scrollLeft; } }} placeholder="Décris ton envie musicale…" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(text, { attachDraft: true }); } }} />
+        </div>
         <div className="sa-compose-tools">
           <button type="button" className="sa-icon sa-mention-add" aria-label="Ajouter une référence YouTube" aria-haspopup="dialog" disabled={busy || generating} onClick={() => setMentionPickerOpen(true)}><Plus size={20} /></button>
           <button type="button" className="sa-live-button" disabled={busy || generating} onClick={() => { setLiveOpen(true); setError(''); }}><AudioLines size={15} /> Live</button>

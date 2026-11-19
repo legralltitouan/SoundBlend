@@ -112,6 +112,32 @@ export class GeminiLiveSession {
       throw new Error('Session vocale interrompue ou compte modifié.');
     }
   }
+  /** Une demande de permission système peut masquer brièvement Chrome Android.
+   * Ne pas l'assimiler à un micro actif passé en arrière-plan. */
+  hasMicrophone(): boolean { return !!this.media?.getAudioTracks().some((track) => track.readyState === 'live'); }
+
+  private untilStopped<T>(promise: Promise<T>): Promise<T> {
+    const signal = this.controller.signal;
+    return new Promise<T>((resolve, reject) => {
+      const cancel = () => reject(new Error('Démarrage vocal interrompu.'));
+      if (signal.aborted) { cancel(); return; }
+      signal.addEventListener('abort', cancel, { once: true });
+      promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', cancel));
+    });
+  }
+
+  private waitForForeground(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const signal = this.controller.signal;
+      const cleanup = () => { clearTimeout(timer); document.removeEventListener('visibilitychange', visible); signal.removeEventListener('abort', cancel); };
+      const visible = () => { if (document.visibilityState !== 'hidden') { cleanup(); resolve(); } };
+      const cancel = () => { cleanup(); reject(new Error('Démarrage vocal interrompu.')); };
+      const timer = setTimeout(() => { cleanup(); reject(new Error('Reviens sur SoundBlend puis réessaie le vocal. Le micro a été fermé en arrière-plan.')); }, 2000);
+      document.addEventListener('visibilitychange', visible); signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) cancel(); else visible();
+    });
+  }
+
   private send(message: unknown): void {
     this.guard();
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error('La connexion vocale est fermée.');
@@ -121,18 +147,30 @@ export class GeminiLiveSession {
   async start(key: string, libraryContext: string, opts: { encyclopedia: boolean; web: boolean; catalog: boolean }): Promise<void> {
     if (!key.trim()) throw new Error('Ajoute une clé Gemini dans Réglages avant d’ouvrir le vocal.');
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('Le vocal nécessite HTTPS et un navigateur autorisant le microphone.');
+    const policy = (document as Document & { permissionsPolicy?: { allowsFeature: (feature: string) => boolean }; featurePolicy?: { allowsFeature: (feature: string) => boolean } }).permissionsPolicy || (document as any).featurePolicy;
+    if (policy?.allowsFeature && !policy.allowsFeature('microphone')) throw new Error('Le microphone est bloqué dans cet aperçu intégré. Ouvre SoundBlend dans un onglet Chrome normal, sur son adresse HTTPS.');
     const AudioClass = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioClass || !window.AudioWorkletNode) throw new Error('Ce navigateur ne prend pas en charge le traitement audio nécessaire au vocal.');
-    this.callbacks.onPhase('connecting', 'Préparation du microphone…');
-    const startupTimer = setTimeout(() => { if (!this.ready) this.fail('Le démarrage vocal a dépassé le délai. Vérifie le réseau puis réessaie.'); }, 35000);
+    this.callbacks.onPhase('connecting', 'Autorise le microphone dans Chrome si une demande apparaît…');
+    const startupTimer = setTimeout(() => { if (!this.ready) this.fail(this.media ? 'Le démarrage vocal a dépassé le délai. Vérifie le réseau et la clé Gemini puis réessaie.' : 'Le navigateur n’a pas ouvert le micro. Vérifie l’autorisation Microphone du site et de Chrome dans Android, puis réessaie.'); }, 35000);
     try {
-      // Créé pendant le geste utilisateur : les navigateurs mobiles peuvent
-      // autrement bloquer la sortie audio après une requête réseau.
+      // Appel natif AVANT tout await/réseau, dans le geste utilisateur.
+      // La résolution tardive doit libérer le micro même après un arrêt.
+      const permission = navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }).then((stream) => {
+        if (this.stopped) { stream.getTracks().forEach((track) => track.stop()); throw new Error('Session vocale interrompue.'); }
+        this.media = stream; return stream;
+      });
+      // Capture immédiate du rejet : un constructeur audio peut échouer avant await.
+      void permission.catch(() => {});
       const context: AudioContext = new AudioClass(); this.context = context;
-      const resume = context.resume();
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-      if (this.stopped) { mic.getTracks().forEach((t) => t.stop()); throw new Error('Session vocale interrompue.'); }
-      this.media = mic; this.guard(); await resume; this.guard();
+      const resume = context.resume(); void resume.catch(() => {});
+      const mic = await this.untilStopped(permission); this.guard();
+      // Si l’utilisateur a réellement quitté l’app pendant la permission,
+      // aucun paquet ni recherche Gemini ne part en arrière-plan.
+      if (document.visibilityState === 'hidden') await this.waitForForeground();
+      this.guard();
+      this.callbacks.onPhase('connecting', 'Micro autorisé · activation audio…');
+      await this.untilStopped(resume); this.guard();
       if (context.sampleRate < 16000) throw new Error('La fréquence du microphone est inférieure à 16 kHz.');
       mic.getAudioTracks().forEach((track) => track.addEventListener('ended', () => {
         if (!this.stopped) this.fail('Le microphone a été déconnecté.');
@@ -146,7 +184,7 @@ export class GeminiLiveSession {
       this.callbacks.onPhase('listening', 'Micro ouvert · tu peux parler et interrompre la réponse');
     } catch (e: any) {
       this.stop();
-      if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') throw new Error('Accès au microphone refusé. Autorise le micro dans le navigateur, puis réessaie.');
+      if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') throw new Error('Accès au microphone refusé. Dans Chrome, autorise Microphone pour ce site. Sur Android, vérifie aussi Réglages → Applications → Chrome (ou l’app installée) → Autorisations → Microphone, puis réessaie.');
       if (e?.name === 'NotFoundError' || e?.name === 'DevicesNotFoundError') throw new Error('Aucun microphone disponible. Branche ou sélectionne un micro, puis réessaie.');
       if (e?.name === 'NotReadableError') throw new Error('Le microphone est indisponible ou déjà utilisé par une autre application.');
       throw e instanceof Error ? e : new Error('Impossible d’ouvrir la session vocale.');

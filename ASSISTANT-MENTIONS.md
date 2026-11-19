@@ -1,4 +1,6 @@
-# Assistant — V3, références YouTube
+# Assistant — V3, références YouTube (archive)
+
+> La version actuelle est décrite dans `ASSISTANT-V4.md` : panneau inspiré des exclusions, recherche temporisée, tags colorés sans guillemets et démarrage Live mobile renforcé. La suite V3 ci-dessous reste archivée ; utiliser `t-assistant-mentions-v4.mjs` sur la version actuelle.
 
 Cette version complète la V2. La navbar, le Shell, les autres vues, les dépendances et le générateur partagé restent inchangés.
 

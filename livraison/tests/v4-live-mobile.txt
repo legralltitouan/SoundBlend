@@ -1,0 +1,18 @@
+  ✓ getUserMedia invoqué pendant le geste utilisateur, avant réseau/await
+  ✓ permission en attente : visibilité transitoire ne détruit pas la session et aucun appel Gemini
+  ✓ permission différée accordée : flux audio réellement actif
+  ✓ une session active est toujours coupée au vrai passage en arrière-plan
+  ✓ aucune exception dans la reprise après permission système
+  ✓ permission résolue avant retour visible : pas de Gemini ni de sortie audio cachée
+  ✓ retour visible après permission reprend normalement
+  ✓ annulation avant permission : tout flux acquis tardivement est immédiatement libéré
+  ✓ pas de rejet non géré après annulation d’une demande de permission
+  ✓ absence de retour visible : délai borné, micro fermé, aucun envoi Gemini
+  ✓ aperçu bloqué par Permissions Policy : explication utile avant de demander le micro
+  ✓ refus micro : instructions pour le site et les autorisations Android
+  ✓ clé absente sur cet appareil : diagnostic sans fausse demande de permission
+  ✓ aide mobile précise les réglages propres à chaque appareil
+  ✓ permission sans réponse : timeout indique le problème micro, pas une panne Gemini
+  ✓ permission accordée après timeout : micro fermé sans réseau
+
+16 contrôles de démarrage mobile réussis (Chromium émulé, API et permissions simulées).

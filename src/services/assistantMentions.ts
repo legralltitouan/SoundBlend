@@ -9,10 +9,10 @@ export type AssistantMention =
   | { kind: 'artist'; id: string; title: string; thumbnailUrl: string };
 export const MAX_ASSISTANT_MENTIONS = 8;
 export const mentionKey = (mention: AssistantMention) => `${mention.kind}:${mention.id}`;
-// Une délimitation explicite permet de supprimer le texte d'une mention sans
-// perdre les autres, y compris deux titres homonymes d'artistes différents.
+// Le texte reste lisible sans guillemets ; les IDs sont conservés séparément.
+// L’affichage coloré n’est appliqué qu’aux références réellement sélectionnées.
 export const mentionToken = (mention: AssistantMention) => mention.kind === 'artist'
-  ? `@«${mention.title}»` : `#«${mention.title} · ${mention.artist}»`;
+  ? `@${mention.title}` : `#${mention.title} · ${mention.artist}`;
 export const mentionUrl = (mention: AssistantMention) => mention.kind === 'artist'
   ? `https://www.youtube.com/channel/${encodeURIComponent(mention.id)}` : `https://www.youtube.com/watch?v=${encodeURIComponent(mention.id)}`;
 export const mentionTrack = (mention: AssistantMention): Track | null => mention.kind === 'track' ? {
