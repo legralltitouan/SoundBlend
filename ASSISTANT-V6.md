@@ -1,4 +1,6 @@
-# Assistant V6 — arrêter puis relancer le Live
+# Assistant V6 — arrêter puis relancer le Live (archive)
+
+> La version actuelle est décrite dans `ASSISTANT-V7.md`. La capture mobile suivante a précisé le blocage : contexte `suspended`, zéro bloc reçu. V7 vérifie l’état natif et propose une activation tactile directe si la reprise automatique ne suffit pas, au lieu de traiter ce cas comme une panne de capture.
 
 ## Signalement
 

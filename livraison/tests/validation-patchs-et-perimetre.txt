@@ -1,4 +1,7 @@
-Patch V5 → V6 : contrôle puis application réussis sur archive V5.
-Tous les fichiers suivis identiques à V6 après application.
+Patch V6 → V7 : contrôle puis application réussis sur archive V6.
+Tous les fichiers suivis identiques à V7 après application.
 Patch complet : git apply --check réussi sur le commit GitHub initial.
-Comparaison intégrale des sources V5 : seul src/services/geminiLive.ts est modifié par V6.
+Comparaison intégrale des sources V6 : fichiers de production modifiés uniquement :
+src/components/views/AssistantView.css
+src/components/views/AssistantView.tsx
+src/services/geminiLive.ts

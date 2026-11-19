@@ -9,19 +9,19 @@ rendering chunks...
 computing gzip size...
 dist/precache-assets.json                 0.29 kB │ gzip:   0.18 kB
 dist/index.html                           2.64 kB │ gzip:   1.16 kB
-dist/assets/AssistantView-BS7yj-7p.css   22.31 kB │ gzip:   5.38 kB
+dist/assets/AssistantView-DZcvRFfB.css   22.64 kB │ gzip:   5.44 kB
 dist/assets/index-CTt-wz9Z.css          123.14 kB │ gzip:  24.25 kB
 dist/assets/trash-BZ2HX9mn.js             0.37 kB │ gzip:   0.24 kB
 dist/assets/exportRecovery-DlhT5TC6.js    2.72 kB │ gzip:   1.29 kB
-dist/assets/HistoryView-BJJ-JDaU.js       4.20 kB │ gzip:   1.77 kB
-dist/assets/BlendView-BW_gTLUe.js        29.33 kB │ gzip:  10.49 kB
-dist/assets/AssistantView-DNB2KeTr.js    80.11 kB │ gzip:  25.40 kB
+dist/assets/HistoryView-2hbXU3_A.js       4.20 kB │ gzip:   1.77 kB
+dist/assets/BlendView-BdsOqB6z.js        29.33 kB │ gzip:  10.49 kB
+dist/assets/AssistantView-ChBhGTn2.js    83.87 kB │ gzip:  26.36 kB
 dist/assets/Art-Bjncmvs4.js             167.26 kB │ gzip:  54.53 kB
-dist/assets/index-j9szWT1b.js           528.30 kB │ gzip: 167.13 kB
+dist/assets/index-DnYDEa-b.js           528.30 kB │ gzip: 167.13 kB
 
 [plugin builtin:vite-reporter] 
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
-✓ built in 1.54s
+✓ built in 1.60s

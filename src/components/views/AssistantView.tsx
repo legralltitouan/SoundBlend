@@ -82,6 +82,7 @@ export const AssistantView: React.FC = () => {
   const pageRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const [liveOpen, setLiveOpen] = useState(false);
+  const [audioActivationRequired, setAudioActivationRequired] = useState(false);
   const [captureStatus, setCaptureStatus] = useState<LiveCaptureStatus | null>(null);
   const [speaking, setSpeaking] = useState(false);
   const [liveQuote, setLiveQuote] = useState('');
@@ -121,7 +122,7 @@ export const AssistantView: React.FC = () => {
       operation.current++; busyRef.current = false; actionAbort.current?.abort(); actionAbort.current = null;
       liveRef.current?.stop(); liveRef.current = null;
       partialRef.current = { user: '', assistant: '' };
-      setPlan(null); setPlaylistDraft(null); setDestination(''); setMentionPickerOpen(false); setDraftMentions([]); setCaptureStatus(null);
+      setPlan(null); setPlaylistDraft(null); setDestination(''); setMentionPickerOpen(false); setDraftMentions([]); setCaptureStatus(null); setAudioActivationRequired(false);
       setBusy(false); setResponding(false); setBusyLabel(''); setLiveOpen(false); setCreatedBlend(null); setSpeaking(false); setLiveQuote('');
       if (event.type === 'sb:auth-changing') {
         // Une conversation peut contenir les titres et noms privés d'un compte.
@@ -438,7 +439,7 @@ export const AssistantView: React.FC = () => {
 
   const startVoice = async () => {
     if (liveRef.current || busyRef.current || generating) return;
-    setError(''); setNotice(null); setCaptureStatus(null); partialRef.current = { user: '', assistant: '' }; setLiveQuote('');
+    setError(''); setNotice(null); setCaptureStatus(null); setAudioActivationRequired(false); partialRef.current = { user: '', assistant: '' }; setLiveQuote('');
     const key = getStoredSettings().geminiApiKey || GEMINI_API_KEY;
     if (!key.trim()) { setError('Ajoute une clé Gemini dans Réglages avant d’ouvrir le vocal.'); return; }
     if (isPlaying) togglePlay();
@@ -459,6 +460,7 @@ export const AssistantView: React.FC = () => {
       },
       onTurnComplete: () => { if (alive.current && liveRef.current === session) flushVoice(); },
       onSpeaking: (value) => { if (alive.current && liveRef.current === session) setSpeaking(value); },
+      onAudioActivationRequired: (required) => { if (alive.current && liveRef.current === session) setAudioActivationRequired(required); },
       onCaptureStatus: (status) => { if (alive.current && liveRef.current === session) setCaptureStatus(status); },
       onLevel: (level) => { if (liveRef.current === session) liveOrb.current?.style.setProperty('--voice-level', String(level)); },
       onTool: (name, query, signal) => latest.current.handleVoiceTool(name, query, signal),
@@ -470,7 +472,7 @@ export const AssistantView: React.FC = () => {
       if (liveRef.current === session) { liveRef.current = null; if (alive.current) setError(e?.message || 'Impossible de démarrer le vocal.'); }
     }
   };
-  const stopVoice = () => { flushVoice(); liveRef.current?.stop(); liveRef.current = null; setLivePhase('off'); setSpeaking(false); setCaptureStatus(null); };
+  const stopVoice = () => { flushVoice(); liveRef.current?.stop(); liveRef.current = null; setLivePhase('off'); setSpeaking(false); setCaptureStatus(null); setAudioActivationRequired(false); };
   const closeLive = () => { stopVoice(); setLiveOpen(false); requestAnimationFrame(() => composerRef.current?.focus()); };
   useEffect(() => {
     if (!liveOpen) return;
@@ -480,6 +482,12 @@ export const AssistantView: React.FC = () => {
     document.getElementById('sb-live-close')?.focus();
     return () => document.removeEventListener('keydown', escape);
   }, [liveOpen]);
+  useEffect(() => {
+    if (!audioActivationRequired || !liveOpen || document.querySelector('.sa-privacy[open]')) return;
+    const button = document.getElementById('sa-activate-audio');
+    button?.focus({ preventScroll: true });
+    button?.scrollIntoView({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+  }, [audioActivationRequired, liveOpen]);
   useLayoutEffect(() => { latest.current = { handleVoiceTool, closeLive }; });
   const toggleCatalog = (id: string) => setCatalogSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id].slice(0, 20));
   const toggleExtra = (value: string) => setExtraSources((old) => old.includes(value) ? old.filter((x) => x !== value) : [...old, value].slice(0, 3));
@@ -543,23 +551,24 @@ export const AssistantView: React.FC = () => {
     {mentionPickerOpen && <AssistantMentionPicker selected={draftMentions} onToggle={toggleDraftMention} onClose={closeMentionPicker} />}
 
     {liveOpen && <section className="sa-live" aria-label="Mode vocal en direct">
-      <div className="sa-live-state" role="status"><i data-active={livePhase === 'listening'} /> {busy ? 'ON PRÉPARE TON ENVIE' : livePhase === 'connecting' ? 'CONNEXION EN COURS' : speaking ? 'L’ASSISTANT TE RÉPOND' : livePhase === 'muted' ? 'MICRO EN PAUSE' : livePhase === 'off' ? 'À VOIX HAUTE' : 'À TON ÉCOUTE'}</div>
-      <h2>{livePhase === 'connecting' ? 'On se retrouve…' : livePhase === 'muted' ? 'Prends ton temps.' : 'On suit ton envie.'}</h2>
+      <div className="sa-live-state" role="status"><i data-active={livePhase === 'listening'} /> {audioActivationRequired ? 'ACTIVATION AUDIO' : busy ? 'ON PRÉPARE TON ENVIE' : livePhase === 'connecting' ? 'CONNEXION EN COURS' : speaking ? 'L’ASSISTANT TE RÉPOND' : livePhase === 'muted' ? 'MICRO EN PAUSE' : livePhase === 'off' ? 'À VOIX HAUTE' : 'À TON ÉCOUTE'}</div>
+      <h2>{audioActivationRequired ? 'Active l’audio.' : livePhase === 'connecting' ? 'On se retrouve…' : livePhase === 'muted' ? 'Prends ton temps.' : 'On suit ton envie.'}</h2>
       <div ref={liveOrb} className={`sa-orb sa-orb--live ${speaking ? 'is-speaking' : ''} ${livePhase === 'listening' ? 'is-listening' : ''}`} aria-hidden="true"><div className="sa-wave">{[0, 1, 2, 3, 4].map((i) => <i key={i} style={{ '--i': i } as React.CSSProperties} />)}</div></div>
       <div className="sa-live-words" aria-live="polite"><blockquote>{liveQuote ? `« ${liveQuote.slice(-500)} »` : livePhase === 'connecting' ? 'Juste un instant…' : 'Dis-moi ton envie musicale.'}</blockquote>
         <p>{busy ? busyLabel : liveDetail || (livePhase === 'off' ? 'Une humeur, un artiste… Dis-le simplement.' : '') || 'Parle naturellement, je m’occupe du reste.'}</p></div>
       {error && <p className="sb-assistant-error" role="alert">{error}</p>}
+      {audioActivationRequired && <div className="sa-audio-activation"><p id="sa-audio-activation-hint">Le micro est autorisé, mais le moteur audio reste en pause. Essaie de le réactiver par un appui direct.</p><button type="button" className="sa-primary" id="sa-activate-audio" aria-describedby="sa-audio-activation-hint" onClick={() => liveRef.current?.activateAudio()}><AudioLines size={17} /> Activer l’audio</button></div>}
       {plan && <button type="button" className="sa-live-proposal" onClick={closeLive}><span className="sa-orb sa-orb--tiny" /><span><b>{plan.title || 'Ta proposition musicale'}</b><small>Aperçu prêt · à vérifier dans la conversation</small></span><ChevronRight size={17} /></button>}
-      {captureStatus && livePhase !== 'off' && <p className="sa-live-signal" data-signal={captureStatus.signal && livePhase !== 'muted'}><i />{livePhase === 'muted' ? 'Micro en pause' : captureStatus.signal ? 'Signal micro reçu' : 'En attente de signal micro'}</p>}
+      {captureStatus && livePhase !== 'off' && <p className="sa-live-signal" data-signal={captureStatus.signal && livePhase === 'listening'}><i />{livePhase === 'muted' ? 'Micro en pause' : audioActivationRequired ? 'Audio en pause' : captureStatus.signal ? 'Signal micro reçu' : 'En attente de signal micro'}</p>}
       {livePhase === 'off' ? <div className="sa-live-consent"><button type="button" className="sa-primary" onClick={() => void startVoice()} disabled={busy || generating}><Mic size={17} /> Réessayer le Live</button></div>
         : <div className="sa-live-controls">
-          <button type="button" disabled={livePhase === 'connecting'} aria-label={livePhase === 'muted' ? 'Rouvrir le microphone' : 'Couper le microphone'} aria-pressed={livePhase === 'muted'} onClick={() => liveRef.current?.setMuted(livePhase !== 'muted')}><span>{livePhase === 'muted' ? <MicOff size={21} /> : <Mic size={21} />}</span><small>{livePhase === 'muted' ? 'Micro coupé' : 'Micro activé'}</small></button>
+          <button type="button" disabled={livePhase === 'connecting'} aria-label={livePhase === 'muted' ? 'Rouvrir le microphone' : 'Couper le microphone'} aria-pressed={livePhase === 'muted'} onClick={() => liveRef.current?.setMuted(livePhase !== 'muted')}><span>{livePhase === 'muted' ? <MicOff size={21} /> : <Mic size={21} />}</span><small>{livePhase === 'muted' ? 'Micro coupé' : livePhase === 'connecting' ? 'Micro autorisé' : 'Micro activé'}</small></button>
           <button type="button" className="sa-live-end" onClick={closeLive}><span><X size={24} /></span><small>Terminer</small></button>
           <button type="button" onClick={closeLive}><span><Keyboard size={20} /></span><small>Écrire</small></button>
         </div>}
-      <details className="sa-live-help"><summary>Le micro ne réagit pas ?</summary>
-        {captureStatus && <p className="sa-capture-diagnostic">Capture : {captureStatus.engine || 'initialisation'} · moteur {captureStatus.context}<br />Blocs reçus : {captureStatus.chunks} · envoyés : {captureStatus.sent}<br />{captureStatus.trackMuted ? 'Le périphérique signale un micro muet.' : captureStatus.signal ? 'Un signal audio atteint bien l’application.' : 'Aucun signal sonore mesuré récemment.'}</p>}
-        <p>Une permission accordée ne garantit pas qu’un signal audio arrive. Si les blocs reçus augmentent mais que le signal reste nul, vérifie le coupe-micro Android, le casque/Bluetooth et les autres apps audio. Le Live essaie automatiquement un moteur de capture de secours.</p><p>Le Live nécessite une adresse HTTPS et une clé Gemini enregistrée sur cet appareil. Les réglages du PC ne sont pas automatiquement ceux du mobile.</p><p>Dans Chrome : ouvre les informations du site → Autorisations → Microphone → Autoriser. Sur Android, vérifie aussi Réglages → Applications → Chrome (ou l’app installée) → Autorisations → Microphone.</p><p>Si tu utilises un aperçu intégré, ouvre l’app dans un onglet Chrome normal. Une autorisation déjà accordée n’affiche pas forcément une nouvelle demande. Le statut ci-dessus indique l’étape en cours.</p></details>
+      <details className="sa-live-help"><summary>Le micro ne réagit pas ?</summary><p>Audio Live · révision 7</p>
+        {captureStatus && <p className="sa-capture-diagnostic">Capture : {captureStatus.engine || 'initialisation'} · moteur {captureStatus.context}<br />Blocs reçus : {captureStatus.chunks} · envoyés : {captureStatus.sent}<br />{captureStatus.trackMuted ? 'Le périphérique signale un micro muet.' : captureStatus.signal ? 'Un signal audio a été reçu récemment.' : 'Aucun signal sonore mesuré récemment.'}</p>}
+        <p>Si le moteur indique « suspended », utilise « Activer l’audio » : ce n’est pas un refus de permission. Une permission accordée ne garantit pas qu’un signal audio arrive. Si les blocs reçus augmentent mais que le signal reste nul, vérifie le coupe-micro Android, le casque/Bluetooth et les autres apps audio. Le Live essaie automatiquement un moteur de capture de secours.</p><p>Le Live nécessite une adresse HTTPS et une clé Gemini enregistrée sur cet appareil. Les réglages du PC ne sont pas automatiquement ceux du mobile.</p><p>Dans Chrome : ouvre les informations du site → Autorisations → Microphone → Autoriser. Sur Android, vérifie aussi Réglages → Applications → Chrome (ou l’app installée) → Autorisations → Microphone.</p><p>Si tu utilises un aperçu intégré, ouvre l’app dans un onglet Chrome normal. Une autorisation déjà accordée n’affiche pas forcément une nouvelle demande. Le statut ci-dessus indique l’étape en cours.</p></details>
       <p className="sa-live-foot">Micro transmis à Google via ta clé Gemini · quotas possibles.<br />Tu peux interrompre et terminer à tout moment. Aucune action sans confirmation à l’écran.</p>
     </section>}
 

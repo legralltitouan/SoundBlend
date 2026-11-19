@@ -253,3 +253,7 @@ html .sa-mention-picker input:focus-visible, html .sa-mention-picker input:focus
 @keyframes sa-live-reveal { from { opacity: .25; } to { opacity: 1; } }
 @keyframes sa-live-words { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .sa-live, .sa-live > *, .sa-live > .sa-orb--live::before { animation: none !important; } }
+
+.sa-audio-activation { width: 100%; max-width: 390px; padding: 15px 17px; margin: 12px 0; border: 1px solid var(--line-2); border-radius: 18px; background: var(--sa-surface); }
+.sa-audio-activation p { font-size: 12px; line-height: 1.6; color: var(--sa-muted); margin: 0 0 13px; }
+.sa-audio-activation .sa-primary { min-height: 46px; scroll-margin-block: 90px; }

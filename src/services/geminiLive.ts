@@ -5,6 +5,7 @@ export type LivePhase = 'off' | 'connecting' | 'listening' | 'muted';
 export type LiveToolName = 'proposer_action_musicale' | 'rechercher_wikipedia' | 'rechercher_web' | 'rechercher_morceaux';
 export type LiveCaptureStatus = { engine: string; context: string; chunks: number; sent: number; level: number; signal: boolean; trackMuted: boolean };
 type LiveCallbacks = {
+  onAudioActivationRequired?: (required: boolean) => void;
   onCaptureStatus?: (status: LiveCaptureStatus) => void;
   onPhase: (phase: LivePhase, detail?: string) => void;
   onTranscript: (role: 'user' | 'assistant', text: string, finished: boolean) => void;
@@ -85,29 +86,48 @@ async function discoverLiveModels(key: string, signal: AbortSignal): Promise<str
 /** Contexte matériel partagé, SANS piste, nœud de session, clé ni message au
  * repos. Android peut figer la route micro si close() et la réouverture du
  * contexte se croisent. On suspend le contexte et sérialise sa reprise. */
-type LiveAudioRuntime = { context: AudioContext; owner: object | null; idle: Promise<void>; suspending: boolean; availableAt: number };
+type LiveAudioRuntime = { context: AudioContext; owner: object | null; idle: Promise<void>; suspending: boolean; availableAt: number; unlock: AudioBufferSourceNode | null };
 let audioRuntime: LiveAudioRuntime | null = null;
 const captureModules = new WeakMap<AudioContext, Promise<void>>();
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 function leaseAudio(owner: object, AudioClass: new () => AudioContext) {
   if (!audioRuntime || audioRuntime.context.state === 'closed') {
-    audioRuntime = { context: new AudioClass(), owner: null, idle: Promise.resolve(), suspending: false, availableAt: 0 };
+    audioRuntime = { context: new AudioClass(), owner: null, idle: Promise.resolve(), suspending: false, availableAt: 0, unlock: null };
   }
   const runtime = audioRuntime;
   if (runtime.owner && runtime.owner !== owner) throw new Error('La session audio précédente doit être terminée avant de relancer le Live.');
   runtime.owner = owner;
   const waiting = runtime.suspending || performance.now() < runtime.availableAt;
   // Appel dans le clic, même si la libération du matériel doit finir ensuite.
-  void runtime.context.resume().catch(() => {});
+  unlockAudio(owner);
   const ready = runtime.idle.then(async () => {
     const delay = runtime.availableAt - performance.now(); if (delay > 0) await pause(delay);
     if (runtime.owner === owner && runtime.context.state !== 'closed') void runtime.context.resume().catch(() => {});
   });
   return { context: runtime.context, ready, waiting };
 }
+function clearUnlock(runtime: LiveAudioRuntime): void {
+  const node = runtime.unlock; runtime.unlock = null;
+  if (node) { node.onended = null; try { node.stop(); } catch { /* déjà fini */ } try { node.disconnect(); } catch { /* déjà détaché */ } }
+}
+function unlockAudio(owner: object): void {
+  const runtime = audioRuntime;
+  if (!runtime || runtime.owner !== owner || runtime.context.state === 'closed') return;
+  clearUnlock(runtime);
+  // Une impulsion SILENCIEUSE d’un échantillon branche la sortie pendant le
+  // geste tactile. Aucun son audible, aucune piste du micro renvoyée en sortie.
+  const node = runtime.context.createBufferSource();
+  node.buffer = runtime.context.createBuffer(1, 1, runtime.context.sampleRate); node.connect(runtime.context.destination);
+  runtime.unlock = node;
+  node.onended = () => { if (runtime.unlock === node) runtime.unlock = null; try { node.disconnect(); } catch { /* déjà détaché */ } };
+  node.start(0); void runtime.context.resume().catch(() => {});
+}
+class AudioActivationError extends Error {}
+
 function releaseAudio(owner: object): void {
   const runtime = audioRuntime;
   if (!runtime || runtime.owner !== owner) return;
+  clearUnlock(runtime);
   runtime.owner = null; runtime.availableAt = performance.now() + 300;
   runtime.suspending = true;
   // Ne jamais suspendre via un callback différé susceptible de viser le Live
@@ -141,6 +161,8 @@ export class GeminiLiveSession {
   private captureTimer: ReturnType<typeof setInterval> | null = null;
   private recovering = false;
   private silenceNotified = false;
+  private awaitingActivation = false;
+  private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private playing = new Set<AudioBufferSourceNode>();
   private nextTime = 0;
   private stopped = false;
@@ -173,6 +195,59 @@ export class GeminiLiveSession {
     });
   }
 
+  /** Doit être appelé DIRECTEMENT depuis le clic/tap du bouton, pas après
+   * une promesse. Le contexte réellement running, pas la résolution de resume,
+   * est le critère de réussite. */
+  activateAudio(): void {
+    if (this.stopped) return;
+    try { this.guard(); unlockAudio(this); }
+    catch (error) { this.fail(error instanceof Error ? error.message : 'Activation audio impossible.'); }
+  }
+
+  private armStartupTimeout(): void {
+    if (this.startupTimer) clearTimeout(this.startupTimer);
+    this.startupTimer = setTimeout(() => {
+      if (!this.ready && !this.awaitingActivation) this.fail(this.media ? 'Le démarrage vocal a dépassé le délai. Vérifie le réseau et la clé Gemini puis réessaie.' : 'Le navigateur n’a pas ouvert le micro. Vérifie l’autorisation Microphone du site et de Chrome dans Android, puis réessaie.');
+    }, 35000);
+  }
+
+  private waitForRunning(milliseconds: number): Promise<boolean> {
+    const context = this.context, signal = this.controller.signal;
+    if (!context || context.state === 'closed') return Promise.reject(new AudioActivationError('Le moteur audio est fermé. Relance le Live.'));
+    return new Promise((resolve, reject) => {
+      const cleanup = () => { clearInterval(interval); clearTimeout(timer); context.removeEventListener('statechange', check); signal.removeEventListener('abort', cancel); };
+      const check = () => { if (context.state === 'running') { cleanup(); resolve(true); } };
+      const cancel = () => { cleanup(); reject(new Error('Activation audio interrompue.')); };
+      const interval = setInterval(check, 50), timer = setTimeout(() => { cleanup(); resolve(context.state === 'running'); }, milliseconds);
+      context.addEventListener('statechange', check); signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) cancel(); else check();
+    });
+  }
+
+  private async ensureAudioRunning(): Promise<void> {
+    this.guard(); const context = this.context;
+    if (context?.state === 'running') return;
+    if (context && context.state !== 'closed') void context.resume().catch(() => {});
+    if (await this.waitForRunning(700)) return;
+    this.guard(); this.awaitingActivation = true;
+    if (this.startupTimer) clearTimeout(this.startupTimer); this.startupTimer = null;
+    this.stopAudio();
+    if (this.ready) { try { this.send({ realtimeInput: { audioStreamEnd: true } }); } catch { /* la fermeture du socket est traitée ailleurs */ } }
+    this.callbacks.onAudioActivationRequired?.(true);
+    this.callbacks.onPhase('connecting', 'Le moteur audio reste en pause. Appuie sur Activer l’audio.');
+    this.reportCapture();
+    try {
+      if (!await this.waitForRunning(30000)) throw new AudioActivationError('Chrome maintient le moteur audio en pause. Appuie sur Réessayer puis Activer l’audio dans cette page, ou ouvre l’app dans un onglet Chrome normal.');
+      this.guard();
+    } finally {
+      this.awaitingActivation = false; this.callbacks.onAudioActivationRequired?.(false);
+      if (!this.stopped) {
+        if (!this.ready) this.armStartupTimeout();
+        else this.callbacks.onPhase(this.muted ? 'muted' : 'listening', this.muted ? 'Micro coupé' : 'Audio réactivé · tu peux parler');
+      }
+    }
+  }
+
   private waitForForeground(): Promise<void> {
     return new Promise((resolve, reject) => {
       const signal = this.controller.signal;
@@ -199,7 +274,7 @@ export class GeminiLiveSession {
     const AudioClass = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioClass) throw new Error('Ce navigateur ne prend pas en charge le traitement audio nécessaire au vocal.');
     this.callbacks.onPhase('connecting', 'Autorise le microphone dans Chrome si une demande apparaît…');
-    const startupTimer = setTimeout(() => { if (!this.ready) this.fail(this.media ? 'Le démarrage vocal a dépassé le délai. Vérifie le réseau et la clé Gemini puis réessaie.' : 'Le navigateur n’a pas ouvert le micro. Vérifie l’autorisation Microphone du site et de Chrome dans Android, puis réessaie.'); }, 35000);
+    this.armStartupTimeout();
     try {
       const audio = leaseAudio(this, AudioClass); this.context = audio.context;
       // Le premier appel reste dans le clic. Une RELANCE attend uniquement la
@@ -216,8 +291,7 @@ export class GeminiLiveSession {
       this.callbacks.onPhase('connecting', 'Micro autorisé · activation audio…');
       // Sur Android, l’acquisition du micro peut suspendre de nouveau le
       // contexte créé pendant le clic. Relancer APRÈS acquisition aussi.
-      if (context.state !== 'running') void context.resume().catch(() => {});
-      this.guard();
+      await this.ensureAudioRunning(); this.guard();
       if (context.sampleRate < 16000) throw new Error('La fréquence du microphone est inférieure à 16 kHz.');
       this.callbacks.onPhase('connecting', 'Vérification du signal du microphone…');
       await this.startCapture(); this.guard();
@@ -233,7 +307,7 @@ export class GeminiLiveSession {
       if (e?.name === 'NotFoundError' || e?.name === 'DevicesNotFoundError') throw new Error('Aucun microphone disponible. Branche ou sélectionne un micro, puis réessaie.');
       if (e?.name === 'NotReadableError') throw new Error('La route audio du microphone est indisponible. Le navigateur n’a pas pu la réouvrir ; réessaie le Live.');
       throw e instanceof Error ? e : new Error('Impossible d’ouvrir la session vocale.');
-    } finally { clearTimeout(startupTimer); }
+    } finally { if (this.startupTimer) clearTimeout(this.startupTimer); this.startupTimer = null; }
   }
 
   private requestMicrophone(audio: MediaTrackConstraints | boolean = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }): Promise<MediaStream> {
@@ -393,14 +467,14 @@ export class GeminiLiveSession {
       };
     }
     this.input.connect(this.processor!); this.processor!.connect(this.silentGain); this.silentGain.connect(ctx.destination);
-    if (ctx.state !== 'running') void ctx.resume().catch(() => {});
+    await this.ensureAudioRunning(); this.guard();
     this.reportCapture();
   }
 
   private async startCapture(): Promise<void> {
     const before = this.chunks; this.captureStartedAt = Date.now();
     try { await this.buildCapture(false); }
-    catch { this.guard(); await this.buildCapture(true); }
+    catch (error) { this.guard(); if (error instanceof AudioActivationError) throw error; await this.buildCapture(true); }
     let received = await this.waitForSamples(before, 1400);
     if (!received && this.captureEngine !== 'Compatibilité') {
       await this.buildCapture(true); received = await this.waitForSamples(before, 1800);
@@ -442,7 +516,7 @@ export class GeminiLiveSession {
       this.guard(); const before = this.chunks;
       if (this.context?.state !== 'running') void this.context?.resume().catch(() => {});
       await this.buildCapture(true);
-      if (!await this.waitForSamples(before, 2000)) throw new Error(`La capture ne délivre plus d’audio après reprise du moteur (état : ${this.context?.state || 'inactif'}). Termine puis relance le Live.`);
+      if (!await this.waitForSamples(before, 2000) && !this.muted) throw new Error(`La capture ne délivre plus d’audio après reprise du moteur (état : ${this.context?.state || 'inactif'}). Termine puis relance le Live.`);
       this.guard();
     } catch (error) { if (!this.stopped) this.fail(error instanceof Error ? error.message : 'Capture audio interrompue.'); }
     finally { this.recovering = false; }
@@ -499,7 +573,7 @@ export class GeminiLiveSession {
   }
 
   private playAudio(encoded: string, mime: string): void {
-    const ctx = this.context; if (!ctx || encoded.length > 1500000) return;
+    const ctx = this.context; if (!ctx || this.awaitingActivation || encoded.length > 1500000) return;
     const bytes = fromB64(encoded); if (bytes.length < 2 || bytes.length % 2) return;
     const rawRate = Number(mime.match(/rate=(\d+)/i)?.[1] || 24000);
     const rate = rawRate >= 16000 && rawRate <= 48000 ? rawRate : 24000;
@@ -525,7 +599,10 @@ export class GeminiLiveSession {
   private fail(message: string): void { if (this.stopped) return; this.stop(); this.callbacks.onError(message); }
   stop(): void {
     if (this.stopped) return;
-    this.stopped = true; this.ready = false; this.controller.abort();
+    this.stopped = true; this.ready = false;
+    if (this.startupTimer) clearTimeout(this.startupTimer); this.startupTimer = null;
+    this.awaitingActivation = false; this.callbacks.onAudioActivationRequired?.(false);
+    this.controller.abort();
     this.handshakeReject?.(new Error('Session vocale interrompue.')); this.handshakeReject = null;
     this.toolCalls.forEach((c) => c.abort()); this.toolCalls.clear();
     this.stopAudio();

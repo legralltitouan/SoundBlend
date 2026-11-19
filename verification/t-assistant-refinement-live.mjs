@@ -26,8 +26,8 @@ async function setup(options = {}) {
     window.WebSocket = class extends WS { constructor(...args) { super(...args); window.__voiceSocket = this; } };
     if (window.AudioBufferSourceNode) {
       const oldStart = AudioBufferSourceNode.prototype.start, oldStop = AudioBufferSourceNode.prototype.stop;
-      AudioBufferSourceNode.prototype.start = function(...args) { window.__voicePlays = (window.__voicePlays || 0) + 1; return oldStart.apply(this, args); };
-      AudioBufferSourceNode.prototype.stop = function(...args) { window.__voiceStops = (window.__voiceStops || 0) + 1; return oldStop.apply(this, args); };
+      AudioBufferSourceNode.prototype.start = function(...args) { if(this.buffer?.length>1) window.__voicePlays = (window.__voicePlays || 0) + 1; return oldStart.apply(this, args); };
+      AudioBufferSourceNode.prototype.stop = function(...args) { if(this.buffer?.length>1) window.__voiceStops = (window.__voiceStops || 0) + 1; return oldStop.apply(this, args); };
     }
   }, { auth: options.auth !== false, deny: !!options.deny, key: options.key === undefined ? 'test-key' : options.key });
   await ctx.routeWebSocket(/wss:\/\/generativelanguage\.googleapis\.com\/.*/, (ws) => {
