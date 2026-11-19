@@ -1,0 +1,19 @@
+  ✓ cycle 1/2, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 1 : toutes les pistes fermées et retour au prompt
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+locator.waitFor: Timeout 18000ms exceeded.
+Call log:
+  - waiting for getByText('Signal micro reçu', { exact: true }) to be visible
+
+    at open (/home/user/SoundBlend/verification/t-assistant-live-restart-v6.mjs:112:135)
+    at async file:///home/user/SoundBlend/verification/t-assistant-live-restart-v6.mjs:119:4 {
+  log: [
+    "  - waiting for getByText('Signal micro reçu', { exact: true }) to be visible"
+  ],
+  name: 'TimeoutError'
+}
+
+Node.js v20.20.2

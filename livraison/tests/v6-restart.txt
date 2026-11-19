@@ -1,0 +1,93 @@
+  ✓ cycle 1/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 1 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 2/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 2 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 3/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 3 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 4/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 4 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 5/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 5 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 6/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 6 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 7/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 7 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 8/8, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 8 : toutes les pistes fermées et retour au prompt
+  ✓ un seul contexte audio réutilisé, pas de destruction/recréation concurrente
+  ✓ module Worklet enregistré une seule fois par contexte réutilisé
+  ✓ contexte inactif suspendu, aucune capture conservée entre deux Live
+  ✓ aucune erreur JavaScript ni promesse rejetée pendant les relances
+  ✓ aucune écriture musicale lors des cycles de Live
+  ✓ cycle 1/20, route normale : signal audio transmis
+  ✓ cycle 1 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 2/20, route normale : signal audio transmis
+  ✓ cycle 2 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 3/20, route normale : signal audio transmis
+  ✓ cycle 3 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 4/20, route normale : signal audio transmis
+  ✓ cycle 4 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 5/20, route normale : signal audio transmis
+  ✓ cycle 5 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 6/20, route normale : signal audio transmis
+  ✓ cycle 6 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 7/20, route normale : signal audio transmis
+  ✓ cycle 7 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 8/20, route normale : signal audio transmis
+  ✓ cycle 8 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 9/20, route normale : signal audio transmis
+  ✓ cycle 9 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 10/20, route normale : signal audio transmis
+  ✓ cycle 10 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 11/20, route normale : signal audio transmis
+  ✓ cycle 11 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 12/20, route normale : signal audio transmis
+  ✓ cycle 12 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 13/20, route normale : signal audio transmis
+  ✓ cycle 13 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 14/20, route normale : signal audio transmis
+  ✓ cycle 14 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 15/20, route normale : signal audio transmis
+  ✓ cycle 15 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 16/20, route normale : signal audio transmis
+  ✓ cycle 16 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 17/20, route normale : signal audio transmis
+  ✓ cycle 17 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 18/20, route normale : signal audio transmis
+  ✓ cycle 18 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 19/20, route normale : signal audio transmis
+  ✓ cycle 19 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 20/20, route normale : signal audio transmis
+  ✓ cycle 20 : toutes les pistes fermées et retour au prompt
+  ✓ un seul contexte audio réutilisé, pas de destruction/recréation concurrente
+  ✓ module Worklet enregistré une seule fois par contexte réutilisé
+  ✓ contexte inactif suspendu, aucune capture conservée entre deux Live
+  ✓ aucune erreur JavaScript ni promesse rejetée pendant les relances
+  ✓ aucune écriture musicale lors des cycles de Live
+  ✓ cycle 1/5, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 1 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 2/5, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 2 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 3/5, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 3 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 4/5, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 4 : toutes les pistes fermées et retour au prompt
+  ✓ cycle 5/5, route sensible aux fermetures : signal audio transmis
+  ✓ cycle 5 : toutes les pistes fermées et retour au prompt
+  ✓ un seul contexte audio réutilisé, pas de destruction/recréation concurrente
+  ✓ module Worklet enregistré une seule fois par contexte réutilisé
+  ✓ contexte inactif suspendu, aucune capture conservée entre deux Live
+  ✓ aucune erreur JavaScript ni promesse rejetée pendant les relances
+  ✓ aucune écriture musicale lors des cycles de Live
+  ✓ interruption du démarrage 1 : une seule piste active après reprise
+  ✓ interruption du démarrage 2 : une seule piste active après reprise
+  ✓ interruption du démarrage 3 : une seule piste active après reprise
+  ✓ interruption du démarrage 4 : une seule piste active après reprise
+  ✓ interruption du démarrage 5 : une seule piste active après reprise
+  ✓ arrêts rapides : pas de fuite audio ni rejet non géré
+  ✓ permission de l’ancien Live résolue tard : ne stoppe pas le nouveau Live
+  ✓ aucun callback tardif ne corrompt la nouvelle session
+  ✓ route initiale muette : un réarmement borné réacquiert une nouvelle piste et retrouve les PCM
+  ✓ réarmement réussi : signal envoyé sans erreur ni mutation musicale
+
+91 contrôles de relance Live réussis (route mobile et API simulées).

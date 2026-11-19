@@ -61,4 +61,4 @@
 ✓ audit axe dialogue 1440 dark : []
 ✓ audit axe prompt avec tags 1440 dark : []
 
-62 contrôles V5 réussis, dont 10 audits axe (API simulées).
+62 contrôles V6 réussis, dont 10 audits axe (API simulées).

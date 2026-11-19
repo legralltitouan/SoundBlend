@@ -82,6 +82,41 @@ async function discoverLiveModels(key: string, signal: AbortSignal): Promise<str
     .sort((a, b) => rank(b) - rank(a)).map((m) => m.name as string))];
 }
 
+/** Contexte matériel partagé, SANS piste, nœud de session, clé ni message au
+ * repos. Android peut figer la route micro si close() et la réouverture du
+ * contexte se croisent. On suspend le contexte et sérialise sa reprise. */
+type LiveAudioRuntime = { context: AudioContext; owner: object | null; idle: Promise<void>; suspending: boolean; availableAt: number };
+let audioRuntime: LiveAudioRuntime | null = null;
+const captureModules = new WeakMap<AudioContext, Promise<void>>();
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+function leaseAudio(owner: object, AudioClass: new () => AudioContext) {
+  if (!audioRuntime || audioRuntime.context.state === 'closed') {
+    audioRuntime = { context: new AudioClass(), owner: null, idle: Promise.resolve(), suspending: false, availableAt: 0 };
+  }
+  const runtime = audioRuntime;
+  if (runtime.owner && runtime.owner !== owner) throw new Error('La session audio précédente doit être terminée avant de relancer le Live.');
+  runtime.owner = owner;
+  const waiting = runtime.suspending || performance.now() < runtime.availableAt;
+  // Appel dans le clic, même si la libération du matériel doit finir ensuite.
+  void runtime.context.resume().catch(() => {});
+  const ready = runtime.idle.then(async () => {
+    const delay = runtime.availableAt - performance.now(); if (delay > 0) await pause(delay);
+    if (runtime.owner === owner && runtime.context.state !== 'closed') void runtime.context.resume().catch(() => {});
+  });
+  return { context: runtime.context, ready, waiting };
+}
+function releaseAudio(owner: object): void {
+  const runtime = audioRuntime;
+  if (!runtime || runtime.owner !== owner) return;
+  runtime.owner = null; runtime.availableAt = performance.now() + 300;
+  runtime.suspending = true;
+  // Ne jamais suspendre via un callback différé susceptible de viser le Live
+  // suivant : la demande native est faite avant de rendre le bouton relançable.
+  const idle = runtime.context.state === 'closed' ? Promise.resolve() : runtime.context.suspend().catch(() => {});
+  runtime.idle = idle.finally(() => { if (runtime.idle === completed) runtime.suspending = false; });
+  const completed = runtime.idle;
+}
+
 /** Une session Live appartient à la vue et au compte qui l'a ouverte.
     Aucun appel d'outil ne peut modifier YouTube : seule la vue sait afficher
     une proposition puis attendre le bouton de confirmation de la personne. */
@@ -166,17 +201,14 @@ export class GeminiLiveSession {
     this.callbacks.onPhase('connecting', 'Autorise le microphone dans Chrome si une demande apparaît…');
     const startupTimer = setTimeout(() => { if (!this.ready) this.fail(this.media ? 'Le démarrage vocal a dépassé le délai. Vérifie le réseau et la clé Gemini puis réessaie.' : 'Le navigateur n’a pas ouvert le micro. Vérifie l’autorisation Microphone du site et de Chrome dans Android, puis réessaie.'); }, 35000);
     try {
-      // Appel natif AVANT tout await/réseau, dans le geste utilisateur.
-      // La résolution tardive doit libérer le micro même après un arrêt.
-      const permission = navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false }).then((stream) => {
-        if (this.stopped) { stream.getTracks().forEach((track) => track.stop()); throw new Error('Session vocale interrompue.'); }
-        this.media = stream; return stream;
-      });
-      // Capture immédiate du rejet : un constructeur audio peut échouer avant await.
+      const audio = leaseAudio(this, AudioClass); this.context = audio.context;
+      // Le premier appel reste dans le clic. Une RELANCE attend uniquement la
+      // suspension précédente et le bref relâchement matériel, pas le réseau.
+      if (audio.waiting) this.callbacks.onPhase('connecting', 'Libération de la session audio précédente…');
+      const permission = audio.waiting ? this.untilStopped(audio.ready).then(() => { this.guard(); return this.requestMicrophone(); }) : this.requestMicrophone();
       void permission.catch(() => {});
-      const context: AudioContext = new AudioClass(); this.context = context;
-      const resume = context.resume(); void resume.catch(() => {});
-      const mic = await this.untilStopped(permission); this.guard();
+      await this.untilStopped(permission); await this.untilStopped(audio.ready); this.guard();
+      const context = audio.context;
       // Si l’utilisateur a réellement quitté l’app pendant la permission,
       // aucun paquet ni recherche Gemini ne part en arrière-plan.
       if (document.visibilityState === 'hidden') await this.waitForForeground();
@@ -187,9 +219,6 @@ export class GeminiLiveSession {
       if (context.state !== 'running') void context.resume().catch(() => {});
       this.guard();
       if (context.sampleRate < 16000) throw new Error('La fréquence du microphone est inférieure à 16 kHz.');
-      mic.getAudioTracks().forEach((track) => track.addEventListener('ended', () => {
-        if (!this.stopped) this.fail('Le microphone a été déconnecté.');
-      }, { once: true }));
       this.callbacks.onPhase('connecting', 'Vérification du signal du microphone…');
       await this.startCapture(); this.guard();
       this.callbacks.onPhase('connecting', 'Recherche d’un modèle vocal disponible…');
@@ -202,9 +231,21 @@ export class GeminiLiveSession {
       this.stop();
       if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') throw new Error('Accès au microphone refusé. Dans Chrome, autorise Microphone pour ce site. Sur Android, vérifie aussi Réglages → Applications → Chrome (ou l’app installée) → Autorisations → Microphone, puis réessaie.');
       if (e?.name === 'NotFoundError' || e?.name === 'DevicesNotFoundError') throw new Error('Aucun microphone disponible. Branche ou sélectionne un micro, puis réessaie.');
-      if (e?.name === 'NotReadableError') throw new Error('Le microphone est indisponible ou déjà utilisé par une autre application.');
+      if (e?.name === 'NotReadableError') throw new Error('La route audio du microphone est indisponible. Le navigateur n’a pas pu la réouvrir ; réessaie le Live.');
       throw e instanceof Error ? e : new Error('Impossible d’ouvrir la session vocale.');
     } finally { clearTimeout(startupTimer); }
+  }
+
+  private requestMicrophone(audio: MediaTrackConstraints | boolean = { echoCancellation: true, noiseSuppression: true, autoGainControl: true }): Promise<MediaStream> {
+    this.guard();
+    return navigator.mediaDevices.getUserMedia({ audio, video: false }).then((stream) => {
+      if (this.stopped || this.serial !== youtubeService.sessionRevision()) {
+        stream.getTracks().forEach((track) => track.stop()); throw new Error('Session vocale interrompue.');
+      }
+      this.media = stream;
+      stream.getAudioTracks().forEach((track) => track.addEventListener('ended', () => { if (!this.stopped) this.fail('Le microphone a été déconnecté.'); }, { once: true }));
+      return stream;
+    });
   }
 
   private connect(key: string, model: string, libraryContext: string, opts: { encyclopedia: boolean; web: boolean; catalog: boolean }): Promise<void> {
@@ -293,7 +334,7 @@ export class GeminiLiveSession {
   }
 
   private reportCapture(level = 0): void {
-    this.callbacks.onCaptureStatus?.({ engine: this.captureEngine, context: this.context?.state || 'closed', chunks: this.chunks, sent: this.sentChunks, level,
+    this.callbacks.onCaptureStatus?.({ engine: this.captureEngine, context: this.context?.state || 'inactif', chunks: this.chunks, sent: this.sentChunks, level,
       signal: !!this.lastSoundAt && Date.now() - this.lastSoundAt < 6000, trackMuted: !!this.media?.getAudioTracks()[0]?.muted });
   }
 
@@ -316,11 +357,17 @@ export class GeminiLiveSession {
     this.input = ctx.createMediaStreamSource(stream);
     this.silentGain = ctx.createGain(); this.silentGain.gain.value = 0;
     if (!compatibility && ctx.audioWorklet && window.AudioWorkletNode) {
-      const url = URL.createObjectURL(new Blob([workletSource], { type: 'text/javascript' }));
+      let loaded = captureModules.get(ctx);
+      if (!loaded) {
+        const url = URL.createObjectURL(new Blob([workletSource], { type: 'text/javascript' }));
+        const revoke = setTimeout(() => URL.revokeObjectURL(url), 1500);
+        loaded = ctx.audioWorklet.addModule(url).finally(() => { clearTimeout(revoke); URL.revokeObjectURL(url); });
+        void loaded.catch(() => {}); captureModules.set(ctx, loaded);
+      }
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await this.untilStopped(Promise.race([ctx.audioWorklet.addModule(url), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Initialisation du Worklet bloquée.')), 1200); })]));
-      } finally { if (timer) clearTimeout(timer); URL.revokeObjectURL(url); }
+        await this.untilStopped(Promise.race([loaded, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Initialisation du Worklet bloquée.')), 1200); })]));
+      } finally { if (timer) clearTimeout(timer); }
       this.guard();
       const node = new AudioWorkletNode(ctx, 'soundblend-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       this.processor = node; this.captureEngine = 'AudioWorklet';
@@ -358,7 +405,8 @@ export class GeminiLiveSession {
     if (!received && this.captureEngine !== 'Compatibilité') {
       await this.buildCapture(true); received = await this.waitForSamples(before, 1800);
     }
-    if (!received) throw new Error('Micro autorisé, mais aucun échantillon audio n’arrive du navigateur. Ferme les autres apps audio et réessaie le Live.');
+    if (!received) received = await this.rearmCapture();
+    if (!received) throw new Error(`Micro autorisé, mais toujours aucun échantillon après réinitialisation (capture : ${this.captureEngine}, contexte : ${this.context?.state || 'inactif'}). La route audio du navigateur n’a pas redémarré.`);
     this.captureTimer = setInterval(() => {
       if (this.stopped || this.muted || this.recovering) return;
       if (this.context?.state !== 'running') void this.context?.resume().catch(() => {});
@@ -373,6 +421,20 @@ export class GeminiLiveSession {
     }, 1000);
   }
 
+  /** Un seul réarmement complet et borné si le nouveau flux reste sans PCM.
+   * Pas de nouvelle demande d’autorisation si le site est déjà autorisé. */
+  private async rearmCapture(): Promise<boolean> {
+    this.guard();
+    this.callbacks.onPhase('connecting', 'Réinitialisation de la route du microphone…');
+    this.detachCapture(); this.media?.getTracks().forEach((track) => track.stop()); this.media = null;
+    await this.untilStopped(pause(400)); this.guard();
+    await this.untilStopped(this.requestMicrophone(true)); this.guard();
+    if (document.visibilityState === 'hidden') await this.waitForForeground(); this.guard();
+    const before = this.chunks;
+    await this.buildCapture(true); this.guard();
+    return this.waitForSamples(before, 3000);
+  }
+
   private async recoverCapture(): Promise<void> {
     if (this.recovering || this.stopped || this.muted) return;
     this.recovering = true;
@@ -380,7 +442,7 @@ export class GeminiLiveSession {
       this.guard(); const before = this.chunks;
       if (this.context?.state !== 'running') void this.context?.resume().catch(() => {});
       await this.buildCapture(true);
-      if (!await this.waitForSamples(before, 2000)) throw new Error('Le navigateur ne délivre plus de signal micro. Termine le Live puis réessaie ; vérifie aussi les apps audio ou le casque connecté.');
+      if (!await this.waitForSamples(before, 2000)) throw new Error(`La capture ne délivre plus d’audio après reprise du moteur (état : ${this.context?.state || 'inactif'}). Termine puis relance le Live.`);
       this.guard();
     } catch (error) { if (!this.stopped) this.fail(error instanceof Error ? error.message : 'Capture audio interrompue.'); }
     finally { this.recovering = false; }
@@ -471,7 +533,7 @@ export class GeminiLiveSession {
     this.detachCapture();
     this.media?.getTracks().forEach((t) => t.stop()); this.media = null;
     try { this.ws?.close(); } catch { /* déjà fermée */ } this.ws = null;
-    if (this.context && this.context.state !== 'closed') void this.context.close().catch(() => {});
+    releaseAudio(this);
     this.context = null; this.callbacks.onLevel?.(0); this.reportCapture(); this.callbacks.onPhase('off');
   }
 }

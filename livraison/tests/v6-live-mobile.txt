@@ -23,31 +23,31 @@
   ✓ capture normal : chemin audio réellement actif indiqué
   ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
   ✓ un contexte audio suspendu après acquisition est repris et émet de nouveau
-  ✓ capture normal : arrêt libère micro et contexte
+  ✓ capture normal : arrêt libère le micro et suspend le contexte
   ✓ capture normal : aucun rejet ni erreur JavaScript
   ✓ capture blocked : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
   ✓ capture blocked : l'orbe reçoit un niveau mesuré non nul
   ✓ capture blocked : chemin audio réellement actif indiqué
   ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
-  ✓ capture blocked : arrêt libère micro et contexte
+  ✓ capture blocked : arrêt libère le micro et suspend le contexte
   ✓ capture blocked : aucun rejet ni erreur JavaScript
   ✓ capture no-worklet : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
   ✓ capture no-worklet : l'orbe reçoit un niveau mesuré non nul
   ✓ capture no-worklet : chemin audio réellement actif indiqué
   ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
-  ✓ capture no-worklet : arrêt libère micro et contexte
+  ✓ capture no-worklet : arrêt libère le micro et suspend le contexte
   ✓ capture no-worklet : aucun rejet ni erreur JavaScript
   ✓ capture module-error : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
   ✓ capture module-error : l'orbe reçoit un niveau mesuré non nul
   ✓ capture module-error : chemin audio réellement actif indiqué
   ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
-  ✓ capture module-error : arrêt libère micro et contexte
+  ✓ capture module-error : arrêt libère le micro et suspend le contexte
   ✓ capture module-error : aucun rejet ni erreur JavaScript
   ✓ capture module-hang : blocs PCM16 de 100 ms, 16 kHz, transmis sans second clic
   ✓ capture module-hang : l'orbe reçoit un niveau mesuré non nul
   ✓ capture module-hang : chemin audio réellement actif indiqué
   ✓ démarrage direct, une seule acquisition, activation utilisateur conservée
-  ✓ capture module-hang : arrêt libère micro et contexte
+  ✓ capture module-hang : arrêt libère le micro et suspend le contexte
   ✓ capture module-hang : aucun rejet ni erreur JavaScript
   ✓ Worklet qui cesse de répondre en cours de session : bascule de secours sans quitter Live
   ✓ Worklet qui ne renvoie que des zéros : secours rétablit un signal non nul

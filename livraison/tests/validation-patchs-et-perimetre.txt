@@ -1,14 +1,4 @@
-Patch V4 → V5 : git apply --check puis application réussis sur archive V4.
-Tous les fichiers suivis identiques à V5 après application.
+Patch V5 → V6 : contrôle puis application réussis sur archive V5.
+Tous les fichiers suivis identiques à V6 après application.
 Patch complet : git apply --check réussi sur le commit GitHub initial.
-Fichiers vérifiés octet pour octet inchangés :
-src/components/shell/Shell.tsx
-src/components/modals/ActionSheets.tsx
-src/components/views/SettingsView.tsx
-src/services/exclusionCatalog.ts
-src/index.css
-src/App.tsx
-src/context/DataContext.tsx
-package.json
-package-lock.json
-public/sw.js
+Comparaison intégrale des sources V5 : seul src/services/geminiLive.ts est modifié par V6.

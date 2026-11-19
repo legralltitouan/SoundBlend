@@ -1,4 +1,6 @@
-# Assistant V5 — capture audio vérifiée et entrée Live directe
+# Assistant V5 — capture audio vérifiée et entrée Live directe (archive)
+
+> La livraison actuelle est décrite dans `ASSISTANT-V6.md`. Elle traite spécifiquement les relances après « Terminer » : pistes et nœuds libérés, contexte audio neutre suspendu puis réutilisé au lieu d’une fermeture/recréation concurrente. Utiliser les suites V6 pour valider ce cycle de vie.
 
 ## Signalement et limite du diagnostic
 
