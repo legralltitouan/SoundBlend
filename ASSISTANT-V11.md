@@ -1,4 +1,6 @@
-# Assistant V11 — discussions sauvegardées et synchronisées
+# Assistant V11 — discussions sauvegardées et synchronisées (archive)
+
+> Voir `ASSISTANT-V11.1.md` pour le correctif de continuité de la réflexion pendant la navigation et des états d’attente bloqués.
 
 ## Demande et choix retenu
 

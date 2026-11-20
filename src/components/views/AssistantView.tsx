@@ -1,11 +1,12 @@
+import { prepareAssistantConversation } from '../../services/assistantPreparation';
 import { AssistantHistoryPanel } from './AssistantHistoryPanel';
 import { assistantHistoryWarning, assistantRuntime, cleanConversationSnapshot, getActiveConversationId, getAssistantConversations, newConversationId, saveAssistantConversation, setActiveConversationId, stampAssistantMessage, emptyConversationSnapshot } from '../../services/assistantHistory';
 import { createPortal } from 'react-dom';
 import { promptWithTags } from './AssistantPrompt';
 import { AssistantMentionPicker } from './AssistantMentionPicker';
-import { MAX_ASSISTANT_MENTIONS, compactMention, mentionKey, mentionToken, mentionTrack, mentionUrl, type AssistantMention } from '../../services/assistantMentions';
+import { MAX_ASSISTANT_MENTIONS, compactMention, mentionKey, mentionToken, mentionUrl, type AssistantMention } from '../../services/assistantMentions';
 import { AssistantMosaic, AssistantSeedPreview, AssistantInstruction, AssistantDuration, AssistantSourcePalette, AssistantThinking, type AssistantSourceChoice } from './AssistantBlendDesign';
-import { assertAssistantBlendDraft, prepareAssistantBlendDraft, type AssistantBlendDraft } from '../../services/assistantBlend';
+import { assertAssistantBlendDraft, type AssistantBlendDraft } from '../../services/assistantBlend';
 import { AssistantPrivacy } from './AssistantPrivacy';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
@@ -16,22 +17,20 @@ import {
 import { useData } from '../../context/DataContext';
 import { usePlayer } from '../../context/PlayerContext';
 import { PlaylistArt } from '../ui/Art';
-import { blendInstruction, mergeLiveTranscript, uniqueAssistantTracks } from '../../services/assistantConversation';
+import { mergeLiveTranscript, uniqueAssistantTracks } from '../../services/assistantConversation';
 import './AssistantView.css';
 import { useUI } from '../../context/UIContext';
-import { geminiService, type AssistantMessage, type AssistantReply, type AssistantSource } from '../../services/gemini';
+import { type AssistantMessage, type AssistantReply } from '../../services/gemini';
 import { GeminiLiveSession, type LivePhase, type LiveToolName, type LiveCaptureStatus } from '../../services/geminiLive';
-import { prepareAssistantPlaylistDraft, assertAssistantSnapshot, type AssistantPlaylistDraft } from '../../services/assistantPlaylist';
+import { assertAssistantSnapshot, type AssistantPlaylistDraft } from '../../services/assistantPlaylist';
 import { beginExportAttempt, clearExportAttempt, getExportAttempt, rememberExportPlaylist } from '../../services/exportRecovery';
-import { beginVoicePreparation, cancelVoicePreparation, completeVoicePreparation, getVoicePreparation, guardVoicePreparation, ownsVoicePreparation, recoverVoiceQuery, forgetVoiceQuery, subscribeVoicePreparation, updateVoicePreparation } from '../../services/assistantVoiceTask';
+import { beginVoicePreparation, cancelVoicePreparation, runVoicePreparation, getVoicePreparation, ownsVoicePreparation, recoverVoiceQuery, forgetVoiceQuery, subscribeVoicePreparation } from '../../services/assistantVoiceTask';
 import { accountRevision, assertAccountRevision } from '../../services/accountScope';
 import { isAssistantTrackExcluded, youtubeService } from '../../services/youtube';
 import { getStoredBlends, getStoredSettings } from '../../services/storage';
 import { GEMINI_API_KEY } from '../../config/app';
-import { norm } from '../../lib/track';
-import type { GeneratedBlend, Playlist, Track } from '../../types';
+import type { GeneratedBlend, Track } from '../../types';
 
-const sourceKey = (s: AssistantSource) => `${s.type}:${s.id}`;
 const playlistLink = (id: string) => `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`;
 const videoLink = (id: string) => `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
 const rawVideoTitle = (t: Track) => {
@@ -127,6 +126,7 @@ const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id
   const liveRef = useRef<GeminiLiveSession | null>(null);
   const taskOwner = useRef<object>({});
   const restoredTask = useRef<object | null>(null);
+  const observedTask = useRef<ReturnType<typeof getVoicePreparation>>(null);
   const [recoveryQuery, setRecoveryQuery] = useState<string | null>(() => initial?.run || getVoicePreparation(conversationId) ? null : recoverVoiceQuery());
   const finishingLive = useRef<GeminiLiveSession | null>(null);
   const alive = useRef(true), operation = useRef(0), busyRef = useRef(false);
@@ -189,24 +189,29 @@ const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id
   useEffect(() => {
     const restore = () => {
       const task = getVoicePreparation(conversationId);
-      if (!task) { setHistoryVersion(v=>v+1); return; }
-      if (task.owner === taskOwner.current) return;
+      if (!task) {
+        if(observedTask.current && actionAbort.current===observedTask.current.controller){busyRef.current=false;actionAbort.current=null;setBusy(false);setResponding(false);setLongResponse(false);setBusyLabel('');restoredTask.current=null;observedTask.current=null;}
+        setHistoryVersion(v=>v+1); return;
+      }
       const storedRun=getAssistantConversations().find(c=>c.id===conversationId)?.run;
-      if(storedRun && storedRun.id!==task.run.id)return;
       if (task.status === 'running') {
+        observedTask.current=task;
+        if(storedRun && storedRun.id!==task.run.id)return;
         busyRef.current = true; actionAbort.current = task.controller;
         setBusy(true); setResponding(true); setLongResponse(Date.now()-task.run.startedAt>=30000); setBusyLabel(task.run.stage || 'Gemini termine ta demande…');
         return;
       }
-      busyRef.current = false; actionAbort.current = null; setBusy(false); setResponding(false); setBusyLabel('');
       if (restoredTask.current === task) return;
+      busyRef.current = false; actionAbort.current = null; setBusy(false); setResponding(false); setLongResponse(false); setBusyLabel('');
       restoredTask.current = task;
-      if (task.error) { setError(task.error); setRecoveryQuery(recoverVoiceQuery()); return; }
+      if(storedRun && storedRun.id!==task.run.id)return;
+      if (task.error) { setError(task.run.status==='cancelled'?'':task.error); setRecoveryQuery(task.run.status==='cancelled'?null:recoverVoiceQuery()); return; }
       const result = task.result; if (!result) return;
-      if(initial?.run?.status==='done') {
+      if(initial?.run?.id===task.run.id && initial.run.status==='done') {
         if(initial.snapshot.needsRefresh && result.prepared){setPlan(result.answer);setPlaylistDraft(result.playlistDraft);setBlendDraft(result.blendDraft || null);setNeedsRefresh(false);}
         return;
       }
+      setNeedsRefresh(false);if(result.prepared)setCreatedBlend(null);
       messagesRef.current = result.messages; setMessages(result.messages);
       setCatalog(result.catalog); setCatalogSelected(result.selected);
       if (result.prepared) {
@@ -282,8 +287,6 @@ const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id
     return () => { observer.disconnect(); viewport?.removeEventListener('resize', updateViewport); viewport?.removeEventListener('scroll', updateViewport); };
   }, [liveOpen]);
 
-  const validSource = (s: AssistantSource | null, pls: Playlist[]) => !!s && (s.type === 'playlist'
-    ? pls.some((p) => p.id === s.id) : getStoredBlends().some((b) => b.id === s.id && Date.parse(b.expiresAt) > Date.now()));
   const guardFor = (op: number, revision: number, serial: number, signal?: AbortSignal) => {
     assertAccountRevision(revision);
     if (!alive.current || op !== operation.current || signal?.aborted || serial !== youtubeService.sessionRevision()) {
@@ -296,7 +299,7 @@ const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id
     if (!request || request.length > 6000 || (getVoicePreparation(conversationId)?.status === 'running') || busyRef.current || generating || ((liveRef.current || finishingLive.current) && !opts.voice)) return false;
     if (!opts.voice) cancelVoicePreparation(conversationId);
     stickToBottom.current = true;
-    const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
+    const op = ++operation.current, revision = accountRevision();
     const controller = new AbortController(); actionAbort.current = controller;
     setLongResponse(false);
     // Information uniquement : ne pas annuler une analyse longue en cours.
@@ -304,7 +307,6 @@ const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id
     const cancel = () => controller.abort();
     if (opts.signal?.aborted) controller.abort(); else opts.signal?.addEventListener('abort', cancel, { once: true });
     const voiceTask = beginVoicePreparation(taskOwner.current, request, controller, conversationId, !!opts.voice);
-    const guard = () => voiceTask ? guardVoicePreparation(voiceTask) : guardFor(op, revision, serial, controller.signal);
     busyRef.current = true; setBusy(true); setResponding(true); setError(''); setNotice(null);
     const references = opts.attachDraft || opts.voice ? [...draftMentions] : [];
     if (!opts.voice && opts.attachDraft) { setText(''); setDraftMentions([]); }
@@ -317,119 +319,15 @@ const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id
     setActiveConversationId(conversationId);
     const activeProposal = plan && (plan.action === 'blend' || plan.action === 'blend_edit') ? { action: plan.action, blendEdits: plan.blendEdits, title: plan.title, source: plan.action === 'blend_edit' && blendDraft ? { type: 'blend' as const, id: blendDraft.blendId } : source === 'catalog' ? null : (() => { const i = source.indexOf(':'); return { type: source.slice(0, i) as 'playlist' | 'blend', id: source.slice(i + 1) }; })(),
       extraSources: extraSources.map((key) => { const i = key.indexOf(':'); return { type: key.slice(0, i) as 'playlist' | 'blend', id: key.slice(i + 1) }; }), instruction, durationMinutes: minutes } : undefined;
-    let prepared = false;
-    let preparedDraft: AssistantPlaylistDraft | null = null;
-    let preparedBlendDraft: AssistantBlendDraft | null = null;
     try {
-      updateVoicePreparation(voiceTask,'Lecture de ton contexte musical…'); setBusyLabel('Lecture de ton contexte musical…');
-      let contextPlaylists = playlists.map((p) => ({ ...p }));
-      const namedText = norm(conversation.filter((m) => m.role === 'user').map((m) => m.text).join(' '));
-      const named = contextPlaylists.filter((p) => norm(p.title).length >= 3 && namedText.includes(norm(p.title)) && !p.tracks);
-      for (const p of named.slice(0, 3)) {
-        const tracks = await loadPlaylistTracks(p.id); guard();
-        contextPlaylists = contextPlaylists.map((x) => x.id === p.id ? { ...x, tracks } : x);
-      }
-      const ask = async (catalogData: Track[] = []) => {
-        guard(); setBusyLabel('Gemini réfléchit à ta demande…');
-        const r = await geminiService.converse(conversation, contextPlaylists, getStoredBlends(), exclusions,
-          { catalog: catalogData, proposal: activeProposal, signal: controller.signal, onProgress: (stage) => { updateVoicePreparation(voiceTask,stage); if (alive.current && op === operation.current && !controller.signal.aborted) setBusyLabel(stage); } });
-        guard(); return r;
-      };
-      const referencedTracks = references.map(mentionTrack).filter((track): track is Track => !!track);
-      const previousCatalog = uniqueAssistantTracks([...referencedTracks, ...catalog.filter((track) => catalogSelected.includes(track.videoId))], isAssistantTrackExcluded);
-      let answer = await ask(previousCatalog);
-      // Une source devinée par son nom doit être lue entièrement avant de
-      // proposer quoi que ce soit, même quand elle n'était pas nommée.
-      const loadChosen = async (r: AssistantReply): Promise<boolean> => {
-        const needed = [r.source, ...r.extraSources].filter((s): s is AssistantSource => !!s && s.type === 'playlist');
-        let loaded = false;
-        for (const s of needed.slice(0, 4)) {
-          const p = contextPlaylists.find((x) => x.id === s.id);
-          if (p && !p.tracks) {
-            setBusyLabel(`Lecture de « ${p.title} » sur YouTube…`);
-            const tracks = await loadPlaylistTracks(p.id); guard();
-            contextPlaylists = contextPlaylists.map((x) => x.id === p.id ? { ...x, tracks } : x); loaded = true;
-          }
-        }
-        return loaded;
-      };
-      if (await loadChosen(answer)) answer = await ask(previousCatalog);
-      guard();
-      const warnings: string[] = [];
-      let found: Track[] = [...previousCatalog];
-      const searchedThisTurn = answer.catalogQueries.length > 0;
-      if (searchedThisTurn) {
-        if (!youtubeService.isAuthenticated()) warnings.push('Connecte ton compte Google pour rechercher des morceaux sur YouTube.');
-        else {
-          setBusyLabel('Recherche musicale sur YouTube…');
-          for (const query of answer.catalogQueries.slice(0, 2)) {
-            try {
-              const result = await youtubeService.searchAssistantCatalog(query); guard();
-              found.push(...result.filter((t) => !found.some((x) => x.videoId === t.videoId)));
-            } catch (e: any) { guard(); warnings.push(e?.message || 'Recherche YouTube indisponible.'); break; }
-          }
-        }
-      }
-      if (found.some((track) => !previousCatalog.some((old) => old.videoId === track.videoId))) {
-        answer = await ask(found);
-        if (await loadChosen(answer)) answer = await ask(found);
-      }
-      guard(); setCatalog(found);
-      const recommended = [...new Set([...answer.catalogVideoIds, ...referencedTracks.map((track) => track.videoId), ...catalogSelected])].filter((id) => found.some((t) => t.videoId === id && !isAssistantTrackExcluded(t)));
-      setCatalogSelected(recommended);
-      if (answer.source && !validSource(answer.source, contextPlaylists)) {
-        answer = { ...answer, action: 'none', source: null,
-          reply: `${answer.reply}\n\nJe ne retrouve pas cette source dans ta bibliothèque. Précise son nom.` };
-      }
-      const replyText = `${answer.reply}${warnings.length ? `\n\n${warnings.join(' ')}` : ''}`;
-      const responseMessage = stampAssistantMessage({ role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) });
-      append(responseMessage);
-      if (answer.action === 'blend_edit') {
-        if (!answer.source || answer.source.type !== 'blend' || !answer.blendEdits) throw new Error('Précise le blend à modifier et les changements souhaités.');
-        setBusyLabel('Vérification du blend et préparation des changements…');
-        preparedBlendDraft = await prepareAssistantBlendDraft(answer.source.id, answer.blendEdits); guard();
-        if (preparedBlendDraft.mode === 'regenerate' && !answer.instruction.trim()) throw new Error('Il manque la direction musicale pour recomposer ce blend.');
-        setCreatedBlend(null); setBlendDraft(preparedBlendDraft); setPlaylistDraft(null); setPlan(answer); setDestination('');
-        setSource(sourceKey(answer.source)); setExtraSources([]);
-        setInstruction(blendInstruction(answer.instruction, conversation.filter(m => m.role === 'user').map(m => m.text))); setMinutes(answer.durationMinutes); prepared = true;
-      } else if (answer.action === 'playlist_edit') {
-        if (!answer.source || answer.source.type !== 'playlist' || !answer.playlistEdits) {
-          setError('Il me manque la playlist ou les changements précis. Demande une nouvelle proposition en indiquant les titres.');
-        } else {
-          const p = contextPlaylists.find((x) => x.id === answer.source!.id);
-          if (!p) throw new Error('Cette playlist n’est plus disponible.');
-          setBusyLabel('Vérification complète de la playlist et préparation de l’aperçu…');
-          const proposal = await prepareAssistantPlaylistDraft(p, answer.playlistEdits); guard();
-          preparedDraft = proposal;
-          setCreatedBlend(null); setBlendDraft(null); setPlaylistDraft(proposal); setPlan(answer); setDestination(''); prepared = true;
-        }
-      } else if (answer.action === 'blend' && (validSource(answer.source, contextPlaylists) || recommended.length)) {
-        setCreatedBlend(null); setPlan(answer); setBlendDraft(null); setPlaylistDraft(null); setDestination('');
-        setSource(answer.source && validSource(answer.source, contextPlaylists) ? sourceKey(answer.source) : 'catalog');
-        setExtraSources([...new Set(answer.extraSources.filter((s) => validSource(s, contextPlaylists) && (!answer.source || sourceKey(s) !== sourceKey(answer.source))).map(sourceKey))].slice(0, 3));
-        setInstruction(blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)));
-        setMinutes(answer.durationMinutes); prepared = true;
-      }
-      // Le travail appartient au compte, pas au montage de la vue ni au micro.
-      if (voiceTask) completeVoicePreparation(voiceTask, {
-        messages: [...conversation, responseMessage],
-        answer, catalog: found, selected: recommended, prepared, playlistDraft: preparedDraft, blendDraft: preparedBlendDraft,
-        source: answer.source && validSource(answer.source, contextPlaylists) ? sourceKey(answer.source) : 'catalog',
-        extraSources: [...new Set(answer.extraSources.filter((s) => validSource(s, contextPlaylists) && (!answer.source || sourceKey(s) !== sourceKey(answer.source))).map(sourceKey))].slice(0, 3),
-        instruction: blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)),
-      });
-      if(alive.current)setNeedsRefresh(false);
-      return prepared;
-    } catch (e: any) {
-      if (voiceTask) completeVoicePreparation(voiceTask, undefined, e?.message || 'Préparation vocale impossible.');
-      if (alive.current) setRecoveryQuery(recoverVoiceQuery());
-      if (alive.current && op === operation.current && !controller.signal.aborted) setError(e?.message || 'Impossible de préparer la réponse.');
-      return false;
+      const result=await runVoicePreparation(voiceTask,()=>prepareAssistantConversation(voiceTask,{
+        conversation,playlists,exclusions,proposal:activeProposal,catalog,selected:catalogSelected,references,loadPlaylistTracks,
+      }));
+      return !!result?.prepared;
     } finally {
-      clearTimeout(responseTimer);
-      opts.signal?.removeEventListener('abort', cancel);
-      if (actionAbort.current === controller) actionAbort.current = null;
-      if (alive.current && op === operation.current) { busyRef.current = false; setBusy(false); setResponding(false); setLongResponse(false); setBusyLabel(''); }
+      clearTimeout(responseTimer);opts.signal?.removeEventListener('abort',cancel);
+      // Subscribers restore this task in whichever view is currently mounted.
+      if(actionAbort.current===controller)actionAbort.current=null;
     }
   };
 

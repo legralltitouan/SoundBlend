@@ -1,3 +1,0 @@
-✓ expiration et activation : missing
-✓ expiration et activation : during
-✓ expiration et activation : valid

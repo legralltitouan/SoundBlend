@@ -18,11 +18,11 @@ export async function requestAssistantText(model: string, url: string, init: Req
       throw Object.assign(new Error(`${model} ${response.status}`), { status: response.status, detail, model });
     }
     onProgress?.('Connexion établie. Réception de la réponse Gemini…');
-    let text = '', finish = '', announcedText = false;
+    let text = '', finish = '', announcedText = false, terminal = false;
     const accept = (value: any) => {
       if (value?.error) throw Object.assign(new Error(`${model} : erreur Gemini`), { status: value.error.code, detail: String(value.error.message || ''), model });
       const candidate = value?.candidates?.[0];
-      if (candidate?.finishReason) finish = candidate.finishReason;
+      if (candidate?.finishReason && candidate.finishReason !== 'FINISH_REASON_UNSPECIFIED') { finish = candidate.finishReason; terminal = true; }
       // Ne pas exposer ni mélanger le raisonnement interne au JSON de réponse.
       for (const part of candidate?.content?.parts || []) if (typeof part?.text === 'string' && !part.thought) { text += part.text; if (!announcedText && text.trim()) { announcedText = true; onProgress?.('Réception de la réponse. Validation de l’aperçu à la fin du flux…'); } }
       if (text.length > MAX_TEXT) throw new Error('Réponse Gemini trop volumineuse.');
@@ -36,7 +36,8 @@ export async function requestAssistantText(model: string, url: string, init: Req
       const decoder = new TextDecoder(); let pending = '', eventData: string[] = [];
       const dispatch = () => {
         const data = eventData.join('\n').trim(); eventData = [];
-        if (data && data !== '[DONE]') accept(JSON.parse(data));
+        if (data === '[DONE]') terminal = true;
+        else if (data) accept(JSON.parse(data));
       };
       const line = (value: string) => {
         if (!value) dispatch();
@@ -45,7 +46,7 @@ export async function requestAssistantText(model: string, url: string, init: Req
       const abortReader = () => { void reader.cancel().catch(() => {}); };
       controller.signal.addEventListener('abort', abortReader, { once: true });
       try {
-        while (true) {
+        while (!terminal) {
           if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
           const { done, value } = await reader.read();
           if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');

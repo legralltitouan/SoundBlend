@@ -49,11 +49,14 @@ export function beginVoicePreparation(owner: object, query: string, controller: 
   tasks.set(conversationId || 'legacy',value);
   if (voice) try { localStorage.setItem(value.journalKey, JSON.stringify({ query, at: Date.now() })); } catch { /* no false recovery guarantee */ }
   if (conversationId) saveAssistantConversation(conversationId,{run:value.run},value.revision);
+  const abort=()=>completeVoicePreparation(value,undefined,'Demande interrompue. Tu peux la relancer.');
+  controller.signal.addEventListener('abort',abort,{once:true});
+  if(controller.signal.aborted)abort();
   notify(); return value;
 }
 export function guardVoicePreparation(value: VoicePreparation): void {
   assertAccountRevision(value.revision);
-  if (tasks.get(value.conversationId || 'legacy') !== value || value.controller.signal.aborted || value.serial !== youtubeService.sessionRevision()) throw new Error('Préparation interrompue.');
+  if (tasks.get(value.conversationId || 'legacy') !== value || value.status !== 'running' || value.controller.signal.aborted || value.serial !== youtubeService.sessionRevision()) throw new Error('Préparation interrompue.');
 }
 export function updateVoicePreparation(value: VoicePreparation, stage: string): void {
   guardVoicePreparation(value);
@@ -63,16 +66,34 @@ export function updateVoicePreparation(value: VoicePreparation, stage: string): 
   notify();
 }
 export function completeVoicePreparation(value: VoicePreparation, result?: VoicePreparationResult, error?: string): void {
-  try { guardVoicePreparation(value); } catch { return; }
+  if(tasks.get(value.conversationId || 'legacy')!==value || value.status!=='running')return;
+  if(!error)try{guardVoicePreparation(value);}catch(e){error=e instanceof Error?e.message:'Préparation interrompue.';}
   value.status = error ? 'error' : 'done'; value.result = result; value.error = error;
-  value.run={...value.run,status:error?'error':'done',error:(error || '').slice(0,2000),stage:''};
-  if (value.conversationId) {
-    const old = getAssistantConversations().find(c=>c.id===value.conversationId);
-    saveAssistantConversation(value.conversationId,{run:value.run,...(result ? {messages:result.messages,snapshot:cleanConversationSnapshot({...(old?.snapshot || {}),plan:result.prepared ? result.answer : old?.snapshot.plan,catalog:result.catalog,selected:result.selected,source:result.source,extraSources:result.extraSources,instruction:result.instruction,minutes:result.answer.durationMinutes,needsRefresh:result.prepared && result.answer.action!=='blend'})} : {})},value.revision);
-  }
-  if (!error && value.journalKey) try { localStorage.removeItem(value.journalKey); } catch { /* unavailable */ }
-  notify();
+  value.run={...value.run,status:value.controller.signal.aborted?'cancelled':error?'error':'done',error:(error || '').slice(0,2000),stage:''};
+  try {
+    // An abort is terminal too. Never leave a running marker just because
+    // the normal success guard rejects an aborted signal or an old session.
+    if (value.conversationId && value.revision===accountRevision() && value.serial===youtubeService.sessionRevision()) {
+      const old = getAssistantConversations().find(c=>c.id===value.conversationId);
+      saveAssistantConversation(value.conversationId,{run:value.run,...(result && !error ? {messages:result.messages,snapshot:cleanConversationSnapshot({...(old?.snapshot || {}),plan:result.prepared ? result.answer : old?.snapshot.plan,catalog:result.catalog,selected:result.selected,source:result.source,extraSources:result.extraSources,instruction:result.instruction,minutes:result.answer.durationMinutes,needsRefresh:result.prepared && result.answer.action!=='blend'})} : {})},value.revision);
+    }
+    if (!error && value.journalKey) try { localStorage.removeItem(value.journalKey); } catch { /* unavailable */ }
+  } catch(e) {
+    value.status='error';value.error=e instanceof Error?e.message:'Impossible de conserver la réponse.';
+    value.run={...value.run,status:'error',error:value.error.slice(0,2000)};
+  } finally { notify(); }
 }
+/** The promise and all finalization belong to the task, never a React view. */
+export async function runVoicePreparation(value:VoicePreparation, execute:()=>Promise<VoicePreparationResult>):Promise<VoicePreparationResult | null> {
+  let abort=()=>{};
+  const cancelled=new Promise<never>((_resolve,reject)=>{abort=()=>reject(new DOMException('Préparation interrompue.','AbortError'));if(value.controller.signal.aborted)abort();else value.controller.signal.addEventListener('abort',abort,{once:true});});
+  try {
+    const work=Promise.resolve().then(()=>{guardVoicePreparation(value);return execute();});
+    const result=await Promise.race([work,cancelled]);guardVoicePreparation(value);completeVoicePreparation(value,result);return value.status==='done'?result:null;
+  } catch(e){completeVoicePreparation(value,undefined,e instanceof Error?e.message:'Impossible de préparer la réponse.');return null;}
+  finally {value.controller.signal.removeEventListener('abort',abort);}
+}
+
 export function ownsVoicePreparation(controller: AbortController | null): boolean { return !!controller && [...tasks.values()].some(t=>t.controller===controller && t.revision===accountRevision() && t.serial===youtubeService.sessionRevision() && t.status==='running'); }
 export function cancelVoicePreparation(conversationId?: string): void {
   for (const [key,value] of tasks) {
