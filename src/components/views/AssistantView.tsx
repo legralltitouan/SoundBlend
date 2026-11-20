@@ -1,4 +1,4 @@
-import { getLiveVoiceVolume, setLiveVoiceVolume, subscribeLiveVoiceVolume } from '../../services/liveVoiceOutput';
+import { DEFAULT_LIVE_VOICE_VOLUME, getLiveVoiceVolume, setLiveVoiceVolume, subscribeLiveVoiceVolume } from '../../services/liveVoiceOutput';
 import { prepareAssistantConversation } from '../../services/assistantPreparation';
 import { AssistantHistoryPanel } from './AssistantHistoryPanel';
 import { assistantHistoryWarning, assistantRuntime, cleanConversationSnapshot, getActiveConversationId, getAssistantConversations, newConversationId, saveAssistantConversation, setActiveConversationId, stampAssistantMessage, emptyConversationSnapshot } from '../../services/assistantHistory';
@@ -647,14 +647,11 @@ const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id
           <button type="button" className="sa-live-end" onClick={closeLive}><span><X size={24} /></span><small>Terminer</small></button>
           <button type="button" onClick={closeLive}><span><Keyboard size={20} /></span><small>Écrire</small></button>
         </div>}
-      <details className="sa-live-volume">
-        <summary><Volume2 size={14}/>{voiceVolume<1 ? `Son de la voix · ${Math.round(voiceVolume*100)} %` : 'Voix trop forte ?'}</summary>
-        <p>Essaie d’abord les boutons du téléphone pendant que l’IA parle. Si cela ne suffit pas, ce réglage atténue uniquement sa voix sur cet appareil, pas ta musique ni le micro.</p>
-        <div><label htmlFor="sa-live-voice-volume">Volume de secours de la voix IA</label><output htmlFor="sa-live-voice-volume">{Math.round(voiceVolume*100)} %</output></div>
-        <input id="sa-live-voice-volume" type="range" min={0} max={100} step={1} value={Math.round(voiceVolume*100)} aria-label="Volume de secours de la voix IA" aria-valuetext={`${Math.round(voiceVolume*100)} pour cent`} onChange={e=>setLiveVoiceVolume(Number(e.target.value)/100)} style={{'--fill':`${voiceVolume*100}%`} as React.CSSProperties}/>
-        <button type="button" className="sb-assistant-inline-button" onClick={()=>setLiveVoiceVolume(1)}>Réinitialiser l’atténuation</button>
-        <p>Le navigateur peut utiliser le volume d’appel pendant que le micro est ouvert. Ce réglage local ne change pas les volumes du téléphone.</p>
-      </details>
+      <section className="sa-live-volume" aria-label="Volume de la voix IA">
+        <div><label htmlFor="sa-live-voice-volume"><Volume2 size={14}/> Volume de la voix IA</label><output htmlFor="sa-live-voice-volume">{Math.round(voiceVolume*100)} %</output></div>
+        <input id="sa-live-voice-volume" type="range" min={0} max={100} step={1} value={Math.round(voiceVolume*100)} aria-label="Volume de la voix IA" aria-describedby="sa-live-volume-note" aria-valuetext={`${Math.round(voiceVolume*100)} pour cent`} onChange={e=>setLiveVoiceVolume(Number(e.target.value)/100)} style={{'--fill':`${voiceVolume*100}%`} as React.CSSProperties}/>
+        <div className="sa-live-volume-footer"><p id="sa-live-volume-note">Voix IA uniquement · échelle douce</p><button type="button" className="sb-assistant-inline-button" onClick={()=>setLiveVoiceVolume(DEFAULT_LIVE_VOICE_VOLUME)}>Réinitialiser à 50 %</button></div>
+      </section>
       <details className="sa-live-help"><summary>Le micro ne réagit pas ?</summary><p>Audio Live · révision 8</p>
         {captureStatus && <p className="sa-capture-diagnostic">Capture : {captureStatus.engine || 'initialisation'} · moteur {captureStatus.context}<br />Blocs reçus : {captureStatus.chunks} · envoyés : {captureStatus.sent}<br />{captureStatus.trackMuted ? 'Le périphérique signale un micro muet.' : captureStatus.signal ? 'Un signal audio a été reçu récemment.' : 'Aucun signal sonore mesuré récemment.'}</p>}
         <p>Si le moteur indique « suspended », utilise « Activer l’audio » : ce n’est pas un refus de permission. Une permission accordée ne garantit pas qu’un signal audio arrive. Si les blocs reçus augmentent mais que le signal reste nul, vérifie le coupe-micro Android, le casque/Bluetooth et les autres apps audio. Le Live essaie automatiquement un moteur de capture de secours.</p><p>Le Live nécessite une adresse HTTPS et une clé Gemini enregistrée sur cet appareil. Les réglages du PC ne sont pas automatiquement ceux du mobile.</p><p>Dans Chrome : ouvre les informations du site → Autorisations → Microphone → Autoriser. Sur Android, vérifie aussi Réglages → Applications → Chrome (ou l’app installée) → Autorisations → Microphone.</p><p>Si tu utilises un aperçu intégré, ouvre l’app dans un onglet Chrome normal. Une autorisation déjà accordée n’affiche pas forcément une nouvelle demande. Le statut ci-dessus indique l’étape en cours.</p></details>

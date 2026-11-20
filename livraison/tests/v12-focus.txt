@@ -1,6 +1,0 @@
-  ✓ ouverture des inspirations : focus sur Fermer, jamais sur la recherche
-  ✓ recherche focalisable à la demande
-  ✓ Échap restitue le focus au bouton ouvrant
-  ✓ réouverture sans focaliser la recherche
-  ✓ axe inspirations : []
-5 contrôles de focus réussis

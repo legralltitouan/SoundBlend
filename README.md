@@ -1,114 +1,115 @@
-# SoundBlend AI · 6.9.45
+# SoundBlend
 
-Application web React/TypeScript pour écouter sa bibliothèque YouTube, composer des blends et utiliser un assistant Gemini. Cette version conserve l'interface et le parcours de connexion par redirection introduit dans l'essai 6.9.42.
+**Tes morceaux. Tes envies. Un nouveau mélange.**
 
-## Connexion Google actuelle
+SoundBlend est une application web musicale pour retrouver ses playlists YouTube, composer des **blends personnalisés** et discuter avec un assistant Gemini, à l’écrit ou à la voix. Son interface s’adapte au mobile et à l’ordinateur, avec une application installable et des thèmes clair et sombre.
 
-Au clic, SoundBlend quitte temporairement la page pour Google, puis revient sur l'URL de base enregistrée dans Google Cloud. Le retour est accepté seulement si l'état aléatoire de la tentative correspond et a moins de dix minutes ; les autorisations, la durée du jeton et l'identité du compte sont vérifiées avant activation. Le fragment contenant la réponse est retiré de l'adresse avant le chargement des scripts tiers. Le traitement de la réponse nécessite le même contexte `sessionStorage` à l'aller et au retour.
+> Les captures ci-dessous montrent l’interface réelle avec des données de démonstration : compte, morceaux, pochettes abstraites et réponse de l’assistant fictifs. Elles ne contiennent aucune donnée personnelle et ne constituent pas un test des services Google réels. Ces exemples ne sont pas ajoutés à ton compte par l’installation.
 
-La redirection recharge l'application : lecture, sélection et conversation en mémoire peuvent être interrompues. Les PWA ou navigateurs qui ouvrent Google dans un autre contexte peuvent nécessiter un essai spécifique. Google peut afficher un écran de consentement ou un avertissement d'application non validée ; ces écrans dépendent de sa configuration. La déconnexion existante peut révoquer les autorisations Google et la synchronisation Drive peut démarrer automatiquement après connexion.
+## Découvrir l’app
 
-Le propriétaire du site a indiqué que l'essai de redirection fonctionnait avec son compte ; cela ne démontre pas le premier consentement ni tous les navigateurs ou appareils. Aucun compte réel n'a été utilisé pour les tests automatisés. L'ancien code popup est conservé pour les comparaisons historiques ; il n'est pas le parcours utilisé par les boutons.
+### 1. Ta bibliothèque, au même endroit
 
-## Utiliser l'application
+Retrouve les playlists de ton compte connecté, reprends un blend ou démarre une nouvelle sélection. La recherche permet de choisir des morceaux et des artistes comme points de départ.
 
-- **Bibliothèque** : parcours les playlists du compte connecté, sélectionne des titres et crée un blend. Sans compte, les playlists affichées sont des exemples.
-- **Assistant** : écris ou démarre le dialogue vocal avec Gemini Live. Il peut discuter, chercher des morceaux sur YouTube, préparer un blend ou proposer des changements précis à une playlist. Une clé Gemini personnelle et les droits d'accès aux modèles correspondants sont nécessaires. Le vocal utilise directement cette clé dans le navigateur, sans serveur supplémentaire ; il demande HTTPS, l'autorisation micro et un navigateur compatible. Son fonctionnement réel dépend des modèles, quotas et accès de Google.
-- **Avant toute action** : pour un blend, choisis les sources et la consigne, puis clique « Générer ce blend » ; pour une playlist, contrôle l'aperçu, choisis **modifier l'originale** ou **créer une copie privée**, puis confirme. Rien n'est écrit par une simple discussion ou confirmation orale. L'édition accepte au maximum 5 ajouts et 25 changements ; la copie est limitée à 150 titres. Les vidéos privées ou manquantes, les changements concurrents détectés et les résultats ambigus bloquent la préparation ou l'application.
-- **Rechercher** : active explicitement Wikipédia pour des extraits encyclopédiques, ou la recherche Web Google pour une réponse sourcée via ta clé Gemini. Cette dernière dépend de l'accès Google Search et peut être facturée ; ses sources et suggestions sont affichées avec la réponse, en mémoire seulement. Dans le vocal, une recherche Web affiche le résultat à l'écran mais ne le lit pas automatiquement. Les sources Google ne sont pas transformées automatiquement en modification de playlist.
-- **Blend / Mes blends** : écoute, remplace ou retire des titres, exporte une playlist, retrouve les blends encore valides. Un blend expire après 14 jours selon l’horloge de l’appareil. Supprimer le blend dans SoundBlend ne supprime jamais sa playlist YouTube.
-- **Bloquer** : le bouton associé au titre ouvre une feuille animée depuis le bas, avec deux choix séparés : ne plus proposer **cette musique**, ou ne plus proposer **cet artiste**. Les deux se débloquent séparément dans **Réglages**. Bloquer un morceau ne bannit pas automatiquement son artiste. Les anciens pouces ne sont pas convertis en blocages.
-- **Réglages → Exclusions** : les deux boutons ouvrent la même feuille. Les onglets « Musiques » et « Artistes » permettent de consulter et débloquer chaque type. Le champ cherche dans les exclusions et dans le catalogue YouTube Music ; « Ajouter une exclusion » lui donne immédiatement le focus. Les correspondances reposent notamment sur les noms : des homonymes ou certaines variantes d'un titre peuvent être regroupés (par exemple « One More Time » et « One More Time (Radio Edit) » du même artiste).
-- **Réglages** : compte, clé Gemini, apparence et état de synchronisation. Sur téléphone, ils s'ouvrent par l'avatar de la barre inférieure.
+![Bibliothèque SoundBlend sur ordinateur, playlists et accès à la création d’un blend](docs/images/01-bibliotheque.webp)
 
-Les découvertes et faces cachées réellement affichées sont mémorisées 14 jours pour éviter de les reproposer. Les amorces explicitement choisies peuvent revenir même si elles sont récentes. L'identification dépend des métadonnées disponibles : des variantes mal étiquetées ou des informations absentes peuvent échapper au rapprochement. Une réponse oEmbed n'est pas une garantie que la vidéo sera lisible dans tous les pays ou pour tous les comptes.
+### 2. Tes blends à retrouver
 
-**Si une catégorie manque après génération**, l'application réutilise d'abord les propositions admissibles, puis complète avec des piliers encore disponibles et des découvertes, proportionnellement aux parts choisies. Si les piliers manquent, elle essaie davantage de découvertes ; si les découvertes manquent, elle essaie les piliers restants. Dès le départ, si la proportion choisie demande plus de piliers qu'il n'y a d'amorces, les places manquantes sont demandées en découvertes : l'écran le précise et le bilan conserve aussi la répartition choisie avant ce plafonnement. Exclusions, historique et doublons restent contrôlés. Un bandeau conservé avec le blend montre les écarts, les ajouts et le total réellement enregistré. Si le dernier contrôle écarte un titre après la sélection, les chiffres antérieurs et finaux sont distingués. Si aucune piste admissible supplémentaire n'est trouvée, le blend peut rester plus court et le bandeau l'indique. L'objectif de nombre de titres est estimé depuis la durée, pas une garantie de durée exacte.
+Un blend rassemble tes points de départ et des suggestions musicales. Retrouve tes créations récentes, ouvre leur sélection, écoute ou ajuste les titres et exporte vers une playlist YouTube. Les blends restent disponibles pendant leur durée de validité de 14 jours.
 
-Une limite Gemini **HTTP 429 réellement rencontrée** est distinguée d'une erreur réseau, de droits ou d'un titre YouTube écarté. Le bandeau mentionne tous les modèles compatibles seulement lorsque leurs refus ou limites mémorisées ont effectivement été constatés pour une sélection. Si aucun titre n'a pu être conservé, aucun blend vide n'est enregistré : le diagnostic reste dans les réglages de génération pour permettre un nouvel essai. Une découverte de secours par voisinage (via Piped) n'est pas garantie conforme à une consigne libre : c'est indiqué. Si une consigne explicite ne peut être appliquée par aucun modèle, la génération échoue plutôt que de prétendre la respecter. Les 400/404 de la capture de console `youtube.com/oembed` concernent la vérification YouTube, **pas une preuve de quota Gemini** ; leur affichage dans les outils du navigateur n'est pas supprimable par l'application.
+![Liste des blends dans l’interface de bureau](docs/images/02-blends.webp)
 
-Pendant la composition, la sphère garde ses pigments et son grain ; ses nappes arrière se courbent dans les virages. Des phrases françaises défilent, tandis que l'étape réelle reste lisible en dessous. Les 50 derniers messages réels, même émis très rapidement, sont consultables sous « Étapes précédentes » pendant la génération. Le réglage de mouvement réduit fige la sphère et les phrases, y compris lorsqu'on le modifie pendant la génération.
+### 3. Un assistant pour tes envies musicales
 
-Dans le grand lecteur, le sélecteur **Titre / Vidéo** reprend la couleur de la pochette et suit le glissement vers le morceau voisin. La teinte est plus discrète en mode clair. Les commandes configurables de l'iframe YouTube sont désactivées, mais YouTube peut toujours afficher son titre, sa marque, des éléments de pause ou des publicités. Sur les écrans courts, la disposition réserve autant que possible un carré de 200 × 200 px au clip, puis compacte les commandes et la file ; une fenêtre trop étroite ne peut pas offrir cette taille.
+Décris ce que tu veux écouter, ajoute des références précises et affine la proposition dans la conversation. Le bouton **+ en haut à droite** donne accès aux trois dernières discussions, liées au compte et synchronisées dans son espace privé Drive lorsque l’autorisation est active.
 
-**Attention — intégration YouTube héritée à refondre avant une diffusion conforme :** le lecteur audio est masqué derrière l'application et mesure 320 × 180 px ; un second lecteur muet peut jouer en même temps pour le clip. L'iframe du clip ne reçoit pas les interactions et ses coins sont arrondis. Ces choix préexistants ne respectent pas plusieurs [exigences YouTube](https://developers.google.com/youtube/terms/required-minimum-functionality) et [politiques sur le lecteur et la séparation audio/vidéo](https://developers.google.com/youtube/terms/developer-policies#i.-additional-prohibitions). Cette version améliore la taille du clip, mais **ne rend pas l'intégration entièrement conforme**. Une refonte vers un lecteur unique, visible et interactif, diffusant ensemble le son et l'image du même contenu, changerait l'expérience actuelle et nécessite de nouveaux essais.
+![Accueil de l’assistant musical SoundBlend](docs/images/03-assistant.webp)
 
-## Données et confidentialité
+### 4. Une proposition avant de créer
 
-Pour répondre, Gemini reçoit la conversation récente, les noms et identifiants des playlists, leurs titres déjà chargés, les blends valides et leurs consignes, ainsi que les exclusions. Une playlist reconnue mais pas encore chargée est lue avant la proposition finale. Lors de la composition, la source sélectionnée et la consigne sont transmises au modèle. Ne saisis pas d'informations que tu ne souhaites pas envoyer à Google.
+L’assistant prépare un aperçu avec les sources, la consigne et la durée souhaitée. Tu peux les modifier avant de lancer la génération. Les modifications de playlists passent également par une prévisualisation et une confirmation explicite : une discussion seule ne modifie pas ta bibliothèque YouTube.
 
-Le vocal transmet directement le son et un résumé musical à Google pendant que le micro est ouvert. Il s'arrête quand la vue est quittée, quand la page passe en arrière-plan ou quand le compte change ; il peut être coupé ou arrêté manuellement. La clé personnelle reste accessible au code du navigateur et la connexion WebSocket l'utilise pour l'authentification : protège ton navigateur, restreins ta clé et surveille tes quotas. **Aucun serveur ni token éphémère n'est ajouté.**
+![Proposition de blend, titres de départ et validation avant génération](docs/images/04-proposition.webp)
 
-La recherche Wikipédia envoie le sujet à Wikipédia. La recherche Web Google transmet la question à Gemini/Google Search ; vérifie les [conditions Google](https://aistudio.google.com/docs/terms#grounding-with-google-search), notamment les règles de facturation et celles applicables à l'Espace économique européen, ainsi que les [tarifs et quotas](https://ai.google.dev/gemini-api/docs/pricing). Google indique conserver les prompts, le contexte et les réponses de ce service 30 jours pour le créer et en assurer le fonctionnement. La recherche est désactivée par défaut ; la réponse Google et ses suggestions restent en mémoire dans l'onglet, ne sont pas enregistrées dans un stockage persistant et ne sont pas utilisées automatiquement par le curateur. Une réponse sans suggestions affichables ou sources exploitables est refusée au lieu d'être présentée comme sourcée.
+### 5. Choisis tes inspirations
 
-**Avant de mettre l'application à disposition d'autres personnes**, vérifie les [conditions Gemini API](https://aistudio.google.com/docs/terms) : elles prévoient notamment un usage professionnel ou commercial, une limite d'âge de 18 ans et, pour les clients API mis à disposition dans l'EEE, en Suisse ou au Royaume-Uni, l'utilisation de services payants. Ces conditions peuvent changer ; leur respect ne peut pas être garanti par les tests.
+Associe jusqu’à quatre sources, filtre les playlists et les blends, puis ajuste la durée. La recherche du sélecteur ne prend pas automatiquement le focus : sur mobile, tu choisis quand ouvrir le clavier.
 
-Les réglages, exclusions, blends, le portrait et l'historique récent sont enregistrés localement dans un espace propre à l'identifiant Google vérifié. Après autorisation, ils peuvent être synchronisés dans l'espace privé **appDataFolder** de ce compte Drive. **La clé Gemini est enregistrée en clair** dans le navigateur et dans ce fichier privé, sans chiffrement par l'application. Ne partage pas un compte Drive ou un navigateur auquel tu ne souhaites pas donner accès à cette clé.
+<img src="docs/images/05-inspirations.webp" width="340" alt="Sélecteur d’inspirations sur mobile, avec recherche, filtres et sources sélectionnables" />
 
-**Les anciennes données locales sans compte sont conservées séparément, sans import automatique dans un compte.** Une déconnexion les rend de nouveau accessibles dans l'espace local. La conversation de l'Assistant, la sélection de titres, la file de lecture et la position de lecture ne sont pas synchronisées. La conversation de l'Assistant est effacée lors d'un changement de compte, pour ne pas transmettre les informations de l'ancien compte au suivant. Les jetons Google sont gardés dans la session de l'onglet plutôt que partagés comme données de compte entre onglets.
+### 6. Parle avec l’assistant Live
 
-Au passage depuis une ancienne version, l'identité de toute session Google encore valide est vérifiée avant la synchronisation. Si la vérification échoue ou si la session a expiré, reconnecte-toi ; les données locales historiques ne sont pas envoyées au compte. En revanche, les données déjà présentes dans l'espace Drive privé de ce compte restent destinées à être fusionnées avec lui. Si une ancienne version a déjà mélangé les données de deux comptes, la mise à jour ne peut pas deviner leur provenance ni les séparer automatiquement : il faut examiner les données de chaque compte et les corriger avec précaution.
+Le Live permet un échange vocal avec Gemini. Le micro peut être coupé à tout moment et **Terminer** ferme les dispositifs audio. Le curseur agit uniquement sur la voix IA :
 
-La recherche de musiques et d'artistes dans les exclusions interroge le catalogue YouTube Music par les filtres `music_songs` et `music_artists` d'instances **Piped publiques indépendantes** : ce n'est pas une API officielle YouTube Music. La requête est envoyée à ces services, sans clé Gemini ni jeton Google. La recherche nécessite Internet et leur disponibilité ; une panne est signalée et peut être réessayée. Les images affichées peuvent provenir de services distants. D'autres recherches de morceaux de l'application peuvent aussi passer par Piped.
+| Volume affiché | Gain appliqué à la voix IA |
+|---|---:|
+| 0 % | Silence |
+| **50 % — valeur initiale** | **5 % du gain unitaire** |
+| 100 % | 10 % du gain unitaire |
 
-La synchronisation relit et fusionne les changements automatiquement, conserve les suppressions en attente et signale les erreurs, les délais et l'expiration du jeton. Elle refuse d'écraser un fichier Drive mal formé ou d'une version inconnue. Les erreurs temporaires sont réessayées avec temporisation, et une reprise est déclenchée au retour du réseau ou de l'application au premier plan ; les changements distants sont aussi recherchés périodiquement. **Le bouton « Synchroniser maintenant » a été retiré** : si l'autorisation a expiré, il faut toutefois la réactiver dans Réglages. Une absence de réseau ou un refus de droits ne peut pas être réparé automatiquement. La synchronisation ne dispose pas d'un verrou atomique Drive : une écriture simultanée dans la dernière fenêtre entre lecture et écriture peut encore être perdue. Après des modifications simultanées, garde les appareils connectés pour qu'ils se relisent ; un conflit sur un même blend est résolu par version entière, pas morceau par morceau. Les horloges très désaccordées et les suppressions effectuées simultanément hors ligne restent des cas limites. Un blend expiré est masqué localement ; le nettoyage distant attend une connexion. Les tests fournis simulent Drive et deux appareils ; ils ne remplacent pas un essai sur un vrai compte.
+Cette échelle volontairement douce ne change ni la musique ni la capture du micro. Le choix est mémorisé sur l’appareil ; **Réinitialiser à 50 %** rétablit la valeur initiale. Le gain mesure l’amplitude du signal, pas la sonie perçue. Les boutons matériels du téléphone peuvent rester sans effet selon le navigateur et son routage audio.
 
-Une playlist n'est annoncée vérifiée qu'après relecture des morceaux, de leur ordre, du titre et de la visibilité. Dans l'Assistant, les écritures YouTube sont successives, non atomiques et peuvent être partielles après une panne ou une annulation ; vérifie YouTube avant une nouvelle tentative. Une modification depuis un autre appareil peut encore se produire entre la vérification et l'écriture. Le journal d'intention local d'une copie bloque une recréation silencieuse et conserve son lien quand il est reçu : ne le réinitialise qu'après vérification. Pour l'export d'un blend, si une création est partielle, le lien reste accessible et « Mettre à jour » reprend sur cette playlist. Si YouTube a créé la playlist mais que le navigateur ne peut pas enregistrer son lien, conserve le lien affiché et libère de l'espace avant de réessayer l'enregistrement. Si le lien a été perdu ou si la réponse est incertaine, vérifie ta bibliothèque YouTube, puis associe le lien de la bonne playlist ; ne débloque un nouvel export qu'après avoir vérifié qu'aucune playlist n'a été créée. Le journal de récupération est local à cet appareil : il ne constitue pas une garantie d'unicité absolue entre appareils concurrents.
+<img src="docs/images/06-live.webp" width="340" alt="Assistant Live sur mobile, commandes micro et curseur de volume réglé à 50 %" />
 
-## Essayer localement
+### 7. Garde le contrôle
 
-Prérequis : Node.js 20.19 ou plus dans la série 20, ou 22.12 ou plus. Dans le dossier extrait contenant `package.json` :
+L’avatar ouvre les réglages : compte Google, accès Gemini, apparence, synchronisation et exclusions. Tu peux exclure un morceau ou un artiste séparément et revenir sur ces choix.
+
+<img src="docs/images/07-reglages.webp" width="340" alt="Réglages SoundBlend sur mobile : compte, synchronisation et préférences" />
+
+## Lancer le projet
+
+Prérequis : **Node.js 22.12 ou plus récent** et npm.
+
+Dans le dossier contenant `package.json` :
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
-Ouvre <http://localhost:5173/>. Le client OAuth public figure dans `src/config/app.ts` ; l'origine du site doit être autorisée dans Google Cloud Console. Aucune clé YouTube n'est demandée dans l'interface ; la clé Gemini personnelle se saisit dans **Réglages**. Ne place jamais de clé secrète dans le dépôt, `.env.example` ou le code.
+Ouvre **http://localhost:5173** — ou le port indiqué par Vite si celui-ci est occupé.
 
-Pour produire et prévisualiser le site :
+Pour compiler et vérifier le site :
 
 ```sh
+npm run lint
 npm run build
 npm run preview
 ```
 
-La compilation crée `dist/`, servi sur <http://localhost:4173/>. Pour GitHub Pages en sous-dossier, utiliser `BASE_PATH=/SoundBlend/` pour la compilation et la prévisualisation.
+Le site compilé est créé dans `dist/` ; la prévisualisation utilise **http://localhost:4173**. Le ZIP contient les sources, pas les dépendances ni une compilation préfabriquée.
 
-La PWA peut rouvrir son **interface** hors ligne après une première visite et l'activation de son service worker. Les vues Assistant, Blends et détail du blend sont chargées à la demande ; un inventaire `precache-assets.json` permet au service worker de précharger aussi leurs modules. Un premier chargement complet en ligne est nécessaire. L’installation de la mise à jour est refusée si un module ou l’inventaire manque ; sur réseau lent, une vue peut afficher brièvement « Chargement… ». Après mise à jour, ouvre l'application en ligne, puis ferme et rouvre **tous les onglets et toutes les fenêtres installées sur chaque appareil** ; vérifie « v6.9.45 » dans Réglages avant de changer de compte. Un ancien onglet garde son ancien code tant qu'il n'est pas rechargé. Le nouveau service worker refuse d'activer une mise à jour dont les ressources sont incomplètes ; le comportement d'un ancien cache dépend aussi de l'hébergeur. Déploie le site complet d'un seul tenant et vérifie son fonctionnement en ligne avant de compter sur le hors-ligne. La lecture YouTube, la recherche, Gemini et Drive restent des services réseau ; la musique n'est pas téléchargée pour une lecture hors ligne.
+### Configuration essentielle
 
-## GitHub Pages
+- **Google / YouTube** : le client OAuth public se configure dans `src/config/app.ts`. Autorise l’origine du site et son URI de redirection exacte dans Google Cloud. Aucun secret client ne doit être ajouté au navigateur.
+- **Gemini** : saisis ta clé personnelle dans **Réglages**. L’assistant et le Live dépendent des accès aux modèles, des quotas et d’une éventuelle facturation Google.
+- **Microphone** : HTTPS ou localhost, autorisation micro et navigateur compatible requis. Une installation sur téléphone ne garantit pas la prise en charge du Live sur tous les appareils.
+- **Sous-dossier** : si nécessaire, compile avec `BASE_PATH=/nom-du-depot/ npm run build`. Le workflow GitHub Pages existant est conservé dans `.github/workflows/` ; aucun guide de déploiement séparé n’est joint.
 
-Pour un dépôt existant, sauvegarde tes modifications, compare les fichiers avant de les remplacer et conserve ta configuration personnelle, notamment `src/config/app.ts` si tu l'as modifiée. Après `npm ci` et `npm run build`, vérifie le diff et crée toi-même le commit et l'envoi. Aucun script de mise à jour automatique n'est fourni pour cette version. Le workflow `.github/workflows/pages.yml` est conservé : il choisit la base adaptée au nom du dépôt. Pour tester manuellement une compilation en sous-dossier :
+## Données et limites à connaître
 
-```sh
-BASE_PATH=/SoundBlend/ npm run build
+- L’app fonctionne **sans serveur applicatif ajouté**. Les requêtes Gemini partent du navigateur. Le contexte musical et les échanges nécessaires à la réponse, ainsi que l’audio pendant le Live, sont envoyés à Google. Certaines recherches utilisent aussi des instances Piped indépendantes ; les pochettes peuvent provenir de services externes.
+- Les données locales sont séparées par compte. Après autorisation, des réglages, blends, exclusions et discussions peuvent être synchronisés dans l’espace privé `appDataFolder` de Google Drive. La clé Gemini est accessible en clair au navigateur et peut être synchronisée avec les réglages : protège ton appareil et ton compte.
+- Une préparation peut continuer pendant la navigation interne tant que la page reste active. **Aucun calcul n’est garanti après fermeture, suspension ou arrêt du navigateur.** Une tâche interrompue peut nécessiter une relance explicite.
+- La PWA peut conserver son interface après un premier chargement complet en ligne ; YouTube, Gemini, Drive et les recherches nécessitent le réseau. La musique n’est pas téléchargée pour l’écoute hors ligne.
+- Les exports et modifications YouTube ne sont pas atomiques. Après une interruption, vérifie la playlist existante avant de relancer une création.
+- Le lecteur YouTube hérité utilise une sortie masquée et peut ajouter un second lecteur de clip : **l’intégration doit être revue avant une diffusion conforme aux règles YouTube**. Vérifie également les conditions Gemini applicables à ton usage, notamment dans l’EEE. Cette archive n’apporte pas de garantie de conformité ou de disponibilité des services tiers.
+
+## Dans ce dossier
+
+```text
+SoundBlend/
+├── src/                 Application React et TypeScript
+├── public/              Icônes, manifeste PWA et service worker
+├── docs/images/         Les 7 captures de ce README
+├── .github/workflows/   Workflow GitHub Pages existant
+├── package.json         Commandes et dépendances
+├── package-lock.json    Versions verrouillées
+├── index.html           Point d’entrée
+├── README.md            Ce guide
+└── …                    Configuration Vite, TypeScript, CSS et lint
 ```
 
-Sous PowerShell : `$env:BASE_PATH='/SoundBlend/'; npm run build`. GitHub Actions recompile avec sa propre base.
-
-Configurer l'origine JavaScript et l'URI de redirection exactes dans Google Cloud. Pour ce site : origine `https://legralltitouan.github.io` et URI `https://legralltitouan.github.io/SoundBlend/`. Ne jamais placer de secret client dans le code navigateur.
-
-## Vérifications et limites
-
-Les tests facultatifs et leurs commandes se trouvent dans `verification/README.md`. Les tests récents de redirection, de recherche et de synchronisation utilisent des services simulés. Les anciens tests de popup sont historiques et ne valident pas la connexion actuelle. Les essais ne garantissent ni le fonctionnement des services réels ni tous les appareils.
-
-Dépendances : les résultats de `npm audit` varient dans le temps. Examiner les correctifs et éviter `npm audit fix --force` sans analyse et tests.
-
-La connexion Google à SoundBlend n'ouvre pas automatiquement une session YouTube dans l'iframe. Si des publicités apparaissent malgré Premium, connecte le compte abonné sur YouTube dans le même navigateur et vérifie les cookies ; consulte aussi [l'aide YouTube](https://support.google.com/youtube/answer/7437519?hl=fr). Le lecteur muet et le son sont synchronisés au mieux, mais YouTube et les images-clés ne permettent pas de promettre un calage parfait.
-
-## Dépannage rapide
-
-| Situation | À vérifier |
-|---|---|
-| Connexion Google impossible | Vérifier que l'URI de redirection configurée correspond exactement au site, le réseau et les autorisations accordées. `invalid_state` indique un retour non reconnu ou expiré ; `permissions_incomplete` un droit manquant. Ne partager ni jeton ni URL OAuth. |
-| Bibliothèque ou playlist indisponible | Message affiché, connexion, autorisations et quota YouTube ; réessayer. Une page partielle n'est pas conservée comme une playlist complète. |
-| Assistant indisponible | Clé Gemini personnelle, quota, accès au modèle et réseau ; aucune source inventée n'est lancée. |
-| Blend incomplet ou faces cachées absentes | Lire le bilan associé au blend : un 429 Gemini indique une limite de quota ou de débit rencontrée ; les erreurs YouTube seules ne prouvent pas un quota. Vérifier les exclusions, l'historique, les titres disponibles et réessayer plus tard si nécessaire. |
-| Synchronisation en attente | Vérifier le réseau et l'état dans Réglages ; elle reprend automatiquement après une erreur temporaire. Si les autorisations ont expiré, les réactiver. |
-| Exclusion inattendue | Réglages → Exclusions → Afficher la liste ; titre et artiste peuvent être débloqués indépendamment. Les noms homonymes et certaines variantes peuvent se rapprocher. |
-| Recherche d'exclusion indisponible | Vérifier le réseau et réessayer : les instances Piped publiques sont indépendantes et peuvent tomber en panne. |
-| Ancienne version visible | Attendre le déploiement, ouvrir l'app en ligne puis fermer et rouvrir tous les onglets et fenêtres installées ; vérifier v6.9.45 dans Réglages. Ne pas effacer le stockage local pour résoudre la connexion. |
-| Export interrompu | Vérifier directement la bibliothèque YouTube ; utiliser le lien conservé ou l'associer avant de relancer une création. |
-| Fichier Drive illisible ou plus récent | Aucune écriture n'est tentée sur ce fichier : vérifier la version et restaurer une copie valide avant de réessayer. |
-| Lecture impossible | Restrictions YouTube, connexion ou intégration ; une vérification de métadonnées ne garantit pas la lecture. |
+Les rapports de versions, patchs, tests de vérification, journaux, sauvegardes, tutoriels de déploiement, `.git/`, `node_modules/` et `dist/` ne font pas partie du ZIP. Le code applicatif correspond à la dernière version de travail, avec les corrections Assistant et l’échelle de volume Live V12.1.

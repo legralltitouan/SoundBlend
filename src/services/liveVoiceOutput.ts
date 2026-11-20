@@ -1,14 +1,19 @@
 /** Playback only. Never touches microphone tracks, constraints or the V8 context lease. */
-export const LIVE_VOICE_VOLUME_KEY = 'soundblend_live_voice_volume_v1';
+export const LIVE_VOICE_VOLUME_KEY = 'soundblend_live_voice_volume_v2';
 const CHANGE = 'sb:live-voice-volume';
-let memoryVolume = 1, volatileVolume: number | null = null;
+export const DEFAULT_LIVE_VOICE_VOLUME = 0.5;
+/** Normalized UI scale: 50% displayed = gain 0.05; 100% = gain 0.1. */
+export function liveVoiceGain(volume: number): number {
+  return Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) * 0.1 : DEFAULT_LIVE_VOICE_VOLUME * 0.1;
+}
+let memoryVolume = DEFAULT_LIVE_VOICE_VOLUME, volatileVolume: number | null = null;
 export function getLiveVoiceVolume(): number {
   if (volatileVolume !== null) return volatileVolume;
   try {
     const raw = localStorage.getItem(LIVE_VOICE_VOLUME_KEY);
-    if (raw === null || !raw.trim()) return 1;
+    if (raw === null || !raw.trim()) return DEFAULT_LIVE_VOICE_VOLUME;
     const value = Number(raw);
-    return Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1;
+    return Number.isFinite(value) && value >= 0 && value <= 1 ? value : DEFAULT_LIVE_VOICE_VOLUME;
   } catch { return memoryVolume; }
 }
 export function setLiveVoiceVolume(value: number): void {
@@ -38,10 +43,10 @@ export class LiveVoiceOutput {
   private mode: 'media' | 'direct' = 'direct';
   get route(): 'media' | 'direct' { return this.mode; }
   constructor(readonly context: AudioContext) {
-    this.input = context.createGain(); this.input.gain.value = getLiveVoiceVolume();
+    this.input = context.createGain(); this.input.gain.value = liveVoiceGain(getLiveVoiceVolume());
     this.unsubscribe = subscribeLiveVoiceVolume(() => {
       if (this.disposed) return;
-      const value = getLiveVoiceVolume(); this.input.gain.cancelScheduledValues(context.currentTime);
+      const value = liveVoiceGain(getLiveVoiceVolume()); this.input.gain.cancelScheduledValues(context.currentTime);
       if (value === 0) this.input.gain.setValueAtTime(0, context.currentTime);
       else this.input.gain.setTargetAtTime(value, context.currentTime, 0.015);
     });
