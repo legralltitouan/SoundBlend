@@ -2,11 +2,13 @@ import { createPortal } from 'react-dom';
 import { promptWithTags } from './AssistantPrompt';
 import { AssistantMentionPicker } from './AssistantMentionPicker';
 import { MAX_ASSISTANT_MENTIONS, compactMention, mentionKey, mentionToken, mentionTrack, mentionUrl, type AssistantMention } from '../../services/assistantMentions';
+import { AssistantMosaic, AssistantSeedPreview, AssistantInstruction, AssistantDuration, AssistantSourcePalette, AssistantThinking, type AssistantSourceChoice } from './AssistantBlendDesign';
+import { assertAssistantBlendDraft, prepareAssistantBlendDraft, type AssistantBlendDraft } from '../../services/assistantBlend';
 import { AssistantPrivacy } from './AssistantPrivacy';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowUp, ArrowUpRight, AudioLines, Check, ChevronDown, ChevronRight, ExternalLink,
-  Keyboard, ListMusic, Loader2, Mic, MicOff, Music2, Plus, Settings2, ShieldCheck,
+  Keyboard, ListMusic, Mic, MicOff, Music2, Plus, Settings2, ShieldCheck,
   Sparkles, X, WandSparkles,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
@@ -55,7 +57,7 @@ const CatalogCard: React.FC<{
 /** Conversation sans effet de bord ; chaque écriture YouTube et
     chaque génération passent par leur propre bouton de confirmation. */
 export const AssistantView: React.FC = () => {
-  const { playlists, recentBlends, exclusions, loadPlaylistTracks, refreshLibrary, generate, generating, userProfile, setCurrentBlend } = useData();
+  const { playlists, recentBlends, exclusions, loadPlaylistTracks, refreshLibrary, generate, generating, userProfile, setCurrentBlend, updateBlend } = useData();
   const { setView, showToast } = useUI();
   const { currentTrack, isPlaying, togglePlay } = usePlayer();
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -70,6 +72,7 @@ export const AssistantView: React.FC = () => {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ text: string; url?: string } | null>(null);
   const [plan, setPlan] = useState<AssistantReply | null>(null);
+  const [blendDraft, setBlendDraft] = useState<AssistantBlendDraft | null>(null);
   const [playlistDraft, setPlaylistDraft] = useState<AssistantPlaylistDraft | null>(null);
   const [destination, setDestination] = useState<'' | 'original' | 'copy'>('');
   const [recoveryRefresh, setRecoveryRefresh] = useState(0);
@@ -106,7 +109,6 @@ export const AssistantView: React.FC = () => {
   const actionAbort = useRef<AbortController | null>(null);
   const planRef = useRef<HTMLElement | null>(null);
   const latest = useRef<any>(null);
-  const hasDemo = playlists.some((p) => p.id.startsWith('demo-pl-'));
   const recovery = playlistDraft ? getExportAttempt(copyJournalKey(playlistDraft.playlistId)) : null;
   void recoveryRefresh; // changement explicite après écriture/effacement du journal
 
@@ -129,7 +131,7 @@ export const AssistantView: React.FC = () => {
       operation.current++; busyRef.current = false; actionAbort.current?.abort(); actionAbort.current = null;
       liveRef.current?.stop(); liveRef.current = null; finishingLive.current?.stop(); finishingLive.current = null;
       partialRef.current = { user: '', assistant: '' };
-      setPlan(null); setPlaylistDraft(null); setDestination(''); setMentionPickerOpen(false); setDraftMentions([]); setCaptureStatus(null); setAudioActivationRequired(false);
+      setPlan(null); setBlendDraft(null); setPlaylistDraft(null); setDestination(''); setMentionPickerOpen(false); setDraftMentions([]); setCaptureStatus(null); setAudioActivationRequired(false);
       setBusy(false); setResponding(false); setBusyLabel(''); setFinishing(false); setRecoveryQuery(null); restoredTask.current = null; setLiveOpen(false); setCreatedBlend(null); setSpeaking(false); setLiveQuote('');
       if (event.type === 'sb:auth-changing') {
         // Une conversation peut contenir les titres et noms privés d'un compte.
@@ -177,7 +179,7 @@ export const AssistantView: React.FC = () => {
       messagesRef.current = result.messages; setMessages(result.messages);
       setCatalog(result.catalog); setCatalogSelected(result.selected);
       if (result.prepared) {
-        setPlan(result.answer); setPlaylistDraft(result.playlistDraft); setDestination('');
+        setPlan(result.answer); setPlaylistDraft(result.playlistDraft); setBlendDraft(result.blendDraft || null); setDestination('');
         setSource(result.source); setExtraSources(result.extraSources); setInstruction(result.instruction); setMinutes(result.answer.durationMinutes);
       }
     };
@@ -248,10 +250,11 @@ export const AssistantView: React.FC = () => {
     if (alive.current) append(requestMessage);
     else messagesRef.current = [...messagesRef.current, requestMessage];
     const conversation = [...messagesRef.current];
-    const activeProposal = plan?.action === 'blend' ? { title: plan.title, source: source === 'catalog' ? null : (() => { const i = source.indexOf(':'); return { type: source.slice(0, i) as 'playlist' | 'blend', id: source.slice(i + 1) }; })(),
+    const activeProposal = plan && (plan.action === 'blend' || plan.action === 'blend_edit') ? { action: plan.action, blendEdits: plan.blendEdits, title: plan.title, source: plan.action === 'blend_edit' && blendDraft ? { type: 'blend' as const, id: blendDraft.blendId } : source === 'catalog' ? null : (() => { const i = source.indexOf(':'); return { type: source.slice(0, i) as 'playlist' | 'blend', id: source.slice(i + 1) }; })(),
       extraSources: extraSources.map((key) => { const i = key.indexOf(':'); return { type: key.slice(0, i) as 'playlist' | 'blend', id: key.slice(i + 1) }; }), instruction, durationMinutes: minutes } : undefined;
     let prepared = false;
     let preparedDraft: AssistantPlaylistDraft | null = null;
+    let preparedBlendDraft: AssistantBlendDraft | null = null;
     try {
       setBusyLabel('Lecture de ton contexte musical…');
       let contextPlaylists = playlists.map((p) => ({ ...p }));
@@ -264,7 +267,7 @@ export const AssistantView: React.FC = () => {
       const ask = async (catalogData: Track[] = []) => {
         guard(); setBusyLabel('Gemini réfléchit à ta demande…');
         const r = await geminiService.converse(conversation, contextPlaylists, getStoredBlends(), exclusions,
-          { catalog: catalogData, proposal: activeProposal, signal: controller.signal });
+          { catalog: catalogData, proposal: activeProposal, signal: controller.signal, onProgress: (stage) => { if (alive.current && op === operation.current && !controller.signal.aborted) setBusyLabel(stage); } });
         guard(); return r;
       };
       const referencedTracks = references.map(mentionTrack).filter((track): track is Track => !!track);
@@ -315,7 +318,15 @@ export const AssistantView: React.FC = () => {
       }
       const replyText = `${answer.reply}${warnings.length ? `\n\n${warnings.join(' ')}` : ''}`;
       append({ role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) });
-      if (answer.action === 'playlist_edit') {
+      if (answer.action === 'blend_edit') {
+        if (!answer.source || answer.source.type !== 'blend' || !answer.blendEdits) throw new Error('Précise le blend à modifier et les changements souhaités.');
+        setBusyLabel('Vérification du blend et préparation des changements…');
+        preparedBlendDraft = await prepareAssistantBlendDraft(answer.source.id, answer.blendEdits); guard();
+        if (preparedBlendDraft.mode === 'regenerate' && !answer.instruction.trim()) throw new Error('Il manque la direction musicale pour recomposer ce blend.');
+        setCreatedBlend(null); setBlendDraft(preparedBlendDraft); setPlaylistDraft(null); setPlan(answer); setDestination('');
+        setSource(sourceKey(answer.source)); setExtraSources([]);
+        setInstruction(blendInstruction(answer.instruction, conversation.filter(m => m.role === 'user').map(m => m.text))); setMinutes(answer.durationMinutes); prepared = true;
+      } else if (answer.action === 'playlist_edit') {
         if (!answer.source || answer.source.type !== 'playlist' || !answer.playlistEdits) {
           setError('Il me manque la playlist ou les changements précis. Demande une nouvelle proposition en indiquant les titres.');
         } else {
@@ -324,10 +335,10 @@ export const AssistantView: React.FC = () => {
           setBusyLabel('Vérification complète de la playlist et préparation de l’aperçu…');
           const proposal = await prepareAssistantPlaylistDraft(p, answer.playlistEdits); guard();
           preparedDraft = proposal;
-          setCreatedBlend(null); setPlaylistDraft(proposal); setPlan(answer); setDestination(''); prepared = true;
+          setCreatedBlend(null); setBlendDraft(null); setPlaylistDraft(proposal); setPlan(answer); setDestination(''); prepared = true;
         }
       } else if (answer.action === 'blend' && (validSource(answer.source, contextPlaylists) || recommended.length)) {
-        setCreatedBlend(null); setPlan(answer); setPlaylistDraft(null); setDestination('');
+        setCreatedBlend(null); setPlan(answer); setBlendDraft(null); setPlaylistDraft(null); setDestination('');
         setSource(answer.source && validSource(answer.source, contextPlaylists) ? sourceKey(answer.source) : 'catalog');
         setExtraSources([...new Set(answer.extraSources.filter((s) => validSource(s, contextPlaylists) && (!answer.source || sourceKey(s) !== sourceKey(answer.source))).map(sourceKey))].slice(0, 3));
         setInstruction(blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)));
@@ -336,7 +347,7 @@ export const AssistantView: React.FC = () => {
       // Le travail appartient au compte, pas au montage de la vue ni au micro.
       if (voiceTask) completeVoicePreparation(voiceTask, {
         messages: [...conversation, { role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) }],
-        answer, catalog: found, selected: recommended, prepared, playlistDraft: preparedDraft,
+        answer, catalog: found, selected: recommended, prepared, playlistDraft: preparedDraft, blendDraft: preparedBlendDraft,
         source: answer.source && validSource(answer.source, contextPlaylists) ? sourceKey(answer.source) : 'catalog',
         extraSources: [...new Set(answer.extraSources.filter((s) => validSource(s, contextPlaylists) && (!answer.source || sourceKey(s) !== sourceKey(answer.source))).map(sourceKey))].slice(0, 3),
         instruction: blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)),
@@ -358,7 +369,7 @@ export const AssistantView: React.FC = () => {
   const prepareFromCatalog = (tracks: Track[]) => {
     const selected = tracks.filter((t) => catalogSelected.includes(t.videoId) && !isAssistantTrackExcluded(t));
     if (!selected.length || busyRef.current || generating) return;
-    setCreatedBlend(null); setCatalog(tracks); setCatalogSelected(selected.map((t) => t.videoId)); setPlaylistDraft(null); setDestination(''); setError('');
+    setCreatedBlend(null); setBlendDraft(null); setCatalog(tracks); setCatalogSelected(selected.map((t) => t.videoId)); setPlaylistDraft(null); setDestination(''); setError('');
     setSource('catalog'); setExtraSources([]); setMinutes(45);
     const request = [...messagesRef.current].reverse().find((m) => m.role === 'user')?.text || 'Composer à partir des titres sélectionnés.';
     setInstruction(`Demandes de l’auditeur :\n${request}`.slice(0, 6000));
@@ -368,12 +379,13 @@ export const AssistantView: React.FC = () => {
   };
 
   const launchBlend = async () => {
-    if (!plan || plan.action !== 'blend' || !source || busyRef.current || generating) return;
+    if (!plan || (plan.action !== 'blend' && !(plan.action === 'blend_edit' && blendDraft?.mode === 'regenerate')) || !source || busyRef.current || generating) return;
     cancelVoicePreparation();
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const guard = () => guardFor(op, revision, serial);
     busyRef.current = true; setBusy(true); setError('');
     try {
+      if (blendDraft) assertAssistantBlendDraft(blendDraft);
       const keys = [...new Set([source, ...extraSources])]; let tracks: Track[] = [];
       for (const key of keys) {
         if (key === 'catalog') { tracks.push(...catalog.filter((t) => catalogSelected.includes(t.videoId))); continue; }
@@ -392,12 +404,23 @@ export const AssistantView: React.FC = () => {
       const allowed = uniqueAssistantTracks(tracks, isAssistantTrackExcluded);
       if (!allowed.length) throw new Error('Les sources sont vides ou tous leurs titres sont bloqués.');
       if (!instruction.trim()) throw new Error('Précise ta consigne avant de générer.');
-      const blend = await generate({ durationMinutes: minutes, ratio: { anchor: 30, deepDive: 30, fresh: 40 }, instruction: instruction.trim() }, { seeds: allowed });
+      const blend = await generate({ durationMinutes: minutes, ratio: { anchor: 30, deepDive: 30, fresh: 40 }, instruction: instruction.trim() }, { seeds: allowed, ...(blendDraft ? { replace: { id: blendDraft.blendId, signature: blendDraft.signature, title: blendDraft.after.title, description: blendDraft.after.description } } : {}) });
       guard();
-      if (blend) { setCreatedBlend(blend); setPlan(null); showToast(`Blend enregistré : ${blend.tracks.length} titres.`); append({ role: 'assistant', text: 'Ton blend est prêt et enregistré dans tes blends. Tu peux maintenant découvrir la sélection.' }); }
+      if (blend) { setCreatedBlend(blend); setPlan(null); setBlendDraft(null); showToast(`Blend enregistré : ${blend.tracks.length} titres.`); append({ role: 'assistant', text: blendDraft ? 'Ton blend a été modifié en place. Son identifiant est conservé ; son éventuelle playlist YouTube est inchangée.' : 'Ton blend est prêt et enregistré dans tes blends. Tu peux maintenant découvrir la sélection.' }); }
       else throw new Error('Aucun blend n’a été enregistré. Vérifie tes sources puis réessaie.');
     } catch (e: any) { if (alive.current && op === operation.current) setError(e?.message || 'La génération a échoué.'); }
     finally { if (alive.current && op === operation.current) { busyRef.current = false; setBusy(false); setBusyLabel(''); } }
+  };
+
+  const applyBlendEdits = () => {
+    if (!blendDraft || blendDraft.mode !== 'tracks' || busyRef.current || generating) return;
+    try {
+      assertAssistantBlendDraft(blendDraft); updateBlend(blendDraft.after);
+      const saved = getStoredBlends().find(b => b.id === blendDraft.blendId);
+      cancelVoicePreparation(); setCreatedBlend(saved || null); setPlan(null); setBlendDraft(null); setError('');
+      setNotice({ text: 'Blend modifié en place dans SoundBlend. Son identifiant et son expiration sont conservés. Rien n’a été envoyé à YouTube.' });
+      append({ role: 'assistant', text: 'Les changements confirmés sont enregistrés dans ton blend existant.' });
+    } catch (e) { setError(e instanceof Error ? e.message : 'Impossible de modifier ce blend.'); }
   };
 
   const applyPlaylist = async () => {
@@ -444,13 +467,13 @@ export const AssistantView: React.FC = () => {
         clearExportAttempt(attempt); setRecoveryRefresh((n) => n + 1);
         setNotice({ text: `Copie privée créée et vérifiée : ${draft.after.length} titre(s). La playlist originale est conservée.`, url: playlistLink(id) });
       }
-      setPlan(null); setPlaylistDraft(null); setDestination('');
+      setPlan(null); setBlendDraft(null); setPlaylistDraft(null); setDestination('');
       void refreshLibrary().catch(() => {});
     } catch (e: any) {
       if (alive.current && op === operation.current) {
         const problem = e?.message || 'L’opération YouTube a échoué.';
         setError(`${problem}${started ? ' L’opération peut être partielle : vérifie YouTube avant toute nouvelle tentative.' : ''}`);
-        if (choice === 'original' && started) { setNotice({ text: 'Vérifie l’état actuel de la playlist avant de demander un nouvel aperçu.', url: playlistLink(draft.playlistId) }); setPlan(null); setPlaylistDraft(null); setDestination(''); }
+        if (choice === 'original' && started) { setNotice({ text: 'Vérifie l’état actuel de la playlist avant de demander un nouvel aperçu.', url: playlistLink(draft.playlistId) }); setPlan(null); setBlendDraft(null); setPlaylistDraft(null); setDestination(''); }
         setRecoveryRefresh((n) => n + 1);
       }
     } finally {
@@ -563,7 +586,6 @@ export const AssistantView: React.FC = () => {
   }, [audioActivationRequired, liveOpen]);
   useLayoutEffect(() => { latest.current = { handleVoiceTool, closeLive, stopVoice }; });
   const toggleCatalog = (id: string) => setCatalogSelected((old) => old.includes(id) ? old.filter((x) => x !== id) : [...old, id].slice(0, 20));
-  const toggleExtra = (value: string) => setExtraSources((old) => old.includes(value) ? old.filter((x) => x !== value) : [...old, value].slice(0, 3));
   const setExample = (value: string) => { setText(`${value}${draftMentions.length ? ` ${draftMentions.map(mentionToken).join(' ')}` : ''}`); composerRef.current?.focus({ preventScroll: true }); };
 
   const closeMentionPicker = () => {
@@ -597,12 +619,31 @@ export const AssistantView: React.FC = () => {
       : key.startsWith('blend:') ? validBlends.find((b) => `blend:${b.id}` === key)?.tracks || [] : []),
     ...catalog.filter((track) => catalogSelected.includes(track.videoId)),
   ], isAssistantTrackExcluded);
+  const sourceChoices: AssistantSourceChoice[] = [
+    ...playlists.map(p => ({ key: `playlist:${p.id}`, title: p.title, kind: 'playlist' as const, count: p.trackCount, tracks: p.tracks || [], thumbnail: p.thumbnailUrl })),
+    ...validBlends.map(b => ({ key: `blend:${b.id}`, title: b.title, kind: 'blend' as const, count: b.tracks.length, tracks: b.tracks })),
+    ...(catalogSelected.length ? [{ key: 'catalog', title: 'Tes titres YouTube choisis', kind: 'catalog' as const, count: catalogSelected.length, tracks: catalog.filter(t => catalogSelected.includes(t.videoId)) }] : []),
+  ];
+  const selectedSourceKey = [source, ...extraSources].join('|');
+  const requestedSources = useRef(new Set<string>());
+  useEffect(() => {
+    if (!plan || !['blend', 'blend_edit'].includes(plan.action)) return;
+    let active = true;
+    for (const key of selectedSourceKey.split('|')) {
+      const playlist = key.startsWith('playlist:') ? playlists.find(p => `playlist:${p.id}` === key) : null;
+      const requestKey = `${youtubeService.sessionRevision()}:${key}`;
+      if (!playlist || playlist.tracks || requestedSources.current.has(requestKey)) continue;
+      requestedSources.current.add(requestKey);
+      void loadPlaylistTracks(playlist.id).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Source indisponible.'); });
+    }
+    return () => { active = false; };
+  }, [selectedSourceKey, plan, playlists, loadPlaylistTracks]);
   const sourceTitle = source.startsWith('playlist:') ? playlists.find((p) => `playlist:${p.id}` === source)?.title
     : source.startsWith('blend:') ? validBlends.find((b) => `blend:${b.id}` === source)?.title : 'Ta sélection YouTube';
   const resetConversation = () => {
     if (busyRef.current || generating || liveRef.current || finishingLive.current) return;
     cancelVoicePreparation(); setRecoveryQuery(null);
-    messagesRef.current = []; setMessages([]); setDraftMentions([]); setMentionPickerOpen(false); setPlan(null); setPlaylistDraft(null); setCreatedBlend(null);
+    messagesRef.current = []; setMessages([]); setDraftMentions([]); setMentionPickerOpen(false); setPlan(null); setBlendDraft(null); setPlaylistDraft(null); setCreatedBlend(null);
     setCatalog([]); setCatalogSelected([]); setSource(''); setExtraSources([]); setInstruction(''); setMinutes(45);
     setNotice(null); setError(''); setText(''); setLiveQuote(''); composerRef.current?.focus({ preventScroll: true });
   };
@@ -664,7 +705,7 @@ export const AssistantView: React.FC = () => {
           {!!m.references?.length && <div className="sa-message-mentions" aria-label="Références YouTube du message">{m.references.map((mention) => <a key={mentionKey(mention)} href={mentionUrl(mention)} target="_blank" rel="noopener noreferrer">{mention.kind === 'artist' ? '@' : '#'}{mention.title}<ExternalLink size={10} /></a>)}</div>}
           {m.catalog && <CatalogCard tracks={m.catalog} selected={catalogSelected} onToggle={toggleCatalog} onPrepare={() => prepareFromCatalog(m.catalog!)} />}
         </div>)}
-        {busy && !generating && <div className="sb-chat-thinking"><Loader2 size={15} className="anim-spin" /> <span>{busyLabel || 'Un instant…'}{longResponse && <small style={{ display: 'block', marginTop: 6 }}>La préparation prend du temps. Elle continue ; tu peux l’arrêter à tout moment.</small>}</span></div>}
+        {busy && !generating && <AssistantThinking stage={busyLabel || 'Lecture de ton contexte musical…'} long={longResponse} />}
       </div>
       {error && <p className="sb-assistant-error" role="alert">{error}</p>}
       {recoveryQuery && <div className="sb-assistant-notice" role="status"><span>
@@ -674,35 +715,40 @@ export const AssistantView: React.FC = () => {
       </span></div>}
       {notice && <div className="sb-assistant-notice" role="status"><Check size={16} /><span>{notice.text}{notice.url && <> <a href={notice.url} target="_blank" rel="noopener noreferrer">Ouvrir sur YouTube <ExternalLink size={12} /></a></>}</span></div>}
 
-      {plan?.action === 'blend' && <>
+      {(plan?.action === 'blend' || (plan?.action === 'blend_edit' && blendDraft?.mode === 'regenerate')) && <>
         <section ref={planRef} className="sb-assistant-plan sa-blend-card" aria-label="Proposition de blend">
-          <div className="sa-blend-heading"><div className="sa-cover"><span>{(plan.title || 'TON BLEND').slice(0, 45)}</span><small>SOUNDBLEND</small></div>
-            <div><span className="sa-kicker">BLEND POUR TOI</span><h2>{plan.title || 'À ta façon'}</h2><p>Objectif : {minutes} min · à composer</p></div></div>
+          <div className="sa-blend-heading"><AssistantMosaic tracks={sourceTracks} /><div><span className="sa-kicker">{blendDraft ? 'NOUVELLE DIRECTION · MÊME BLEND' : 'BLEND POUR TOI'}</span><h2>{blendDraft?.after.title || plan.title || 'À ta façon'}</h2><p>{blendDraft ? 'Remplacera le contenu du blend existant après confirmation' : `Objectif : ${minutes} min · à composer`}</p></div></div>
           <p className="sa-direction">{plan.instruction || 'Une sélection à ton image, entre repères et découvertes.'}</p>
           <div className="sa-seeds-label">Points de départ · {sourceTitle || 'Source à choisir'}</div>
-          {sourceTracks.length > 0 ? <ol className="sa-track-preview">{sourceTracks.slice(0, 3).map((track, i) => <li key={track.videoId}><span>{String(i + 1).padStart(2, '0')}</span><div><b>{track.title}</b><small>{track.artist}</small></div><time>{track.durationFormatted || (track.durationSeconds ? `${Math.floor(track.durationSeconds / 60)}:${String(track.durationSeconds % 60).padStart(2, '0')}` : '—')}</time></li>)}</ol>
-            : <p className="sa-small">Les morceaux de cette source seront chargés à la génération.</p>}
+          {sourceTracks.length > 0 ? <AssistantSeedPreview tracks={sourceTracks} /> : <p className="sa-small">Les pochettes s’affichent après le chargement des sources.</p>}
           <p className="sa-small">Ces titres inspirent le blend : ce n’est pas la sélection finale.</p>
           <details className="sa-adjust"><summary><Settings2 size={14} /> Ajuster les sources et la durée <ChevronDown size={14} /></summary>
             <fieldset disabled={busy || generating}>
-              <label>Source principale<select aria-label="Source du blend" value={source} onChange={(e) => { setSource(e.target.value); setExtraSources((old) => old.filter((key) => key !== e.target.value)); }}><option value="" disabled>Choisir une source</option>
-                <optgroup label={hasDemo ? 'Playlists de démonstration' : 'Playlists YouTube Music'}>{playlists.map((p) => <option key={p.id} value={`playlist:${p.id}`}>{p.title}</option>)}</optgroup>
-                <optgroup label="Blends valides">{validBlends.map((b) => <option key={b.id} value={`blend:${b.id}`}>{b.title}</option>)}</optgroup>
-                {catalogSelected.length > 0 && <option value="catalog">Titres YouTube sélectionnés ({catalogSelected.length})</option>}</select></label>
-              {(playlists.length + validBlends.length > 1) && <details className="sb-assistant-extra"><summary>Autres sources ({extraSources.filter((key) => key !== source).length}/3) <ChevronDown size={14} /></summary>
-                <div>{[...playlists.map((p) => ({ value: `playlist:${p.id}`, label: p.title })), ...validBlends.map((b) => ({ value: `blend:${b.id}`, label: b.title }))].filter((x) => x.value !== source).map((x) => <label key={x.value}><input type="checkbox" checked={extraSources.includes(x.value)} disabled={!extraSources.includes(x.value) && extraSources.length >= 3} onChange={() => toggleExtra(x.value)} /> {x.label}</label>)}</div></details>}
-              <label>Consigne transmise à Gemini<textarea aria-label="Consigne transmise à Gemini" value={instruction} onChange={(e) => setInstruction(e.target.value)} rows={4} maxLength={6000} /></label>
-              <label>Durée souhaitée<select aria-label="Durée du blend" value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[20, 45, 60, 120].map((n) => <option key={n} value={n}>{n} min</option>)}{![20, 45, 60, 120].includes(minutes) && <option value={minutes}>{minutes} min</option>}</select></label>
+              <AssistantSourcePalette choices={sourceChoices} primary={source} extras={extraSources} onChange={(primary, extras) => { setSource(primary); setExtraSources(extras); }} disabled={busy || generating} />
+              <AssistantInstruction value={instruction} onChange={setInstruction} />
+              <AssistantDuration minutes={minutes} onChange={setMinutes} />
             </fieldset>
           </details>
-          <button type="button" className="sa-primary" disabled={busy || generating || !source || !instruction.trim() || (source === 'catalog' && !catalogSelected.length)} onClick={() => void launchBlend()}><WandSparkles size={16} /> Générer et ajouter à mes blends</button>
-          <p className="sa-small sa-center">Rien ne sera modifié sur YouTube. Tes exclusions sont respectées.</p>
+          <button type="button" className="sa-primary" disabled={busy || generating || !source || !instruction.trim() || (source === 'catalog' && !catalogSelected.length)} onClick={() => void launchBlend()}><WandSparkles size={16} /> {blendDraft ? 'Confirmer : recomposer ce blend' : 'Générer et ajouter à mes blends'}</button>
+          <p className="sa-small sa-center">{blendDraft ? 'Le contenu actuel sera remplacé, sans copie et sans prolonger son expiration. Sa playlist YouTube reste inchangée.' : 'Rien ne sera modifié sur YouTube. Tes exclusions sont respectées.'}</p>
         </section>
         <div className="sa-followups" aria-label="Affiner ce blend">{(plan.followUps?.length ? plan.followUps : ['Plus jazzy', 'Plus de découvertes', 'Plus d’énergie']).map((followUp) => <button type="button" key={followUp} disabled={busy || generating} onClick={() => void send(followUp)}>{followUp}</button>)}</div>
       </>}
 
-      {createdBlend && <section className="sb-assistant-plan sa-blend-card" aria-label="Blend enregistré"><div className="sa-blend-heading"><PlaylistArt tracks={createdBlend.tracks} title={createdBlend.title} size={70} radius={12} /><div><span className="sa-kicker"><Check size={12} /> DANS TES BLENDS</span><h2>{createdBlend.title}</h2><p>{createdBlend.tracks.length} titres · {Math.round(createdBlend.tracks.reduce((sum, t) => sum + (t.durationSeconds || 0), 0) / 60)} min</p></div></div>
-        <ol className="sa-track-preview">{createdBlend.tracks.slice(0, 3).map((track, i) => <li key={track.id}><span>{String(i + 1).padStart(2, '0')}</span><div><b>{track.title}</b><small>{track.artist}</small></div><time>{track.durationFormatted || '—'}</time></li>)}</ol>
+      {blendDraft?.mode === 'tracks' && plan?.action === 'blend_edit' && <section ref={planRef} className="sb-assistant-plan sa-blend-card" aria-label="Proposition de modification de blend">
+        <div className="sa-blend-heading"><AssistantMosaic tracks={blendDraft.after.tracks} /><div><span className="sa-kicker">TON BLEND · AJUSTÉ, PAS DUPLIQUÉ</span><h2>{blendDraft.after.title}</h2><p>{blendDraft.before.tracks.length} → {blendDraft.after.tracks.length} titres · même identifiant</p></div></div>
+        {blendDraft.before.title !== blendDraft.after.title && <p className="sa-direction">Nouveau nom : « {blendDraft.after.title} » (avant : « {blendDraft.before.title} »).</p>}
+        {blendDraft.before.description !== blendDraft.after.description && <p className="sa-direction">Description proposée : {blendDraft.after.description}</p>}
+        <div className="sb-plan-diff">{blendDraft.removals.map(t => <div key={t.id}><span className="sb-plan-sign sb-plan-sign--remove">−</span><p>Retirer <b>{t.title}</b> · {t.artist}</p></div>)}{blendDraft.moves.map((m, i) => <div key={`${m.trackId}-${i}`}><span className="sb-plan-sign">↕</span><p>Déplacer <b>{m.title}</b> → position {m.position + 1}</p></div>)}{blendDraft.additions.map(t => <div key={t.id}><span className="sb-plan-sign sb-plan-sign--add">+</span><p>Ajouter <b>{t.title}</b> · {t.artist} <a href={videoLink(t.videoId)} target="_blank" rel="noopener noreferrer">Vérifier <ExternalLink size={12} /></a></p></div>)}</div>
+        <AssistantSeedPreview tracks={blendDraft.after.tracks} />
+        <details className="sa-adjust"><summary>Voir les {blendDraft.after.tracks.length} titres après modification <ChevronDown size={14} /></summary><ol className="sb-plan-order">{blendDraft.after.tracks.map(t => <li key={t.id}>{t.title} <small>· {t.artist}</small></li>)}</ol></details>
+        <p className="sa-small">L’original sera mis à jour dans SoundBlend. Son expiration et son export connu sont conservés ; aucun changement sur YouTube sans une action distincte.</p>
+        <button type="button" className="sa-primary" disabled={busy || generating} onClick={applyBlendEdits}><Check size={16} /> Confirmer : modifier ce blend</button>
+        <button type="button" className="sb-assistant-inline-button" disabled={busy || generating} onClick={() => { setPlan(null); setBlendDraft(null); }}>Annuler la modification</button>
+      </section>}
+
+      {createdBlend && <section className="sb-assistant-plan sa-blend-card" aria-label="Blend enregistré"><div className="sa-blend-heading"><PlaylistArt tracks={createdBlend.tracks} title={createdBlend.title} size={70} radius={12} /><div><span className="sa-kicker"><Check size={12} /> DANS TES BLENDS</span><h2>{createdBlend.title}</h2><p>{createdBlend.tracks.length} titres · enregistré dans SoundBlend</p></div></div>
+        <AssistantSeedPreview tracks={createdBlend.tracks} />
         {createdBlend.tracks.length > 3 && <p className="sa-small">+ {createdBlend.tracks.length - 3} titres à découvrir</p>}
         {createdBlend.generation?.warning && <p className="sb-assistant-note">{createdBlend.generation.warning}</p>}
         <button type="button" className="sa-primary" onClick={openCreatedBlend}>Découvrir mon blend <ChevronRight size={16} /></button>
@@ -728,7 +774,7 @@ export const AssistantView: React.FC = () => {
           {recovery.playlistId && <a href={playlistLink(recovery.playlistId)} target="_blank" rel="noopener noreferrer">Ouvrir la copie connue <ExternalLink size={12} /></a>}
           <button type="button" onClick={clearRecovery} disabled={busy}>J’ai vérifié YouTube : autoriser une nouvelle tentative</button>
         </div>}
-        <div className="sb-assistant-plan-bottom"><button type="button" className="sb-plan-cancel" disabled={busy} onClick={() => { setPlan(null); setPlaylistDraft(null); setDestination(''); }}>Annuler la proposition</button>
+        <div className="sb-assistant-plan-bottom"><button type="button" className="sb-plan-cancel" disabled={busy} onClick={() => { setPlan(null); setBlendDraft(null); setPlaylistDraft(null); setDestination(''); }}>Annuler la proposition</button>
           <button type="button" className="btn" disabled={busy || generating || !destination || !!recovery} onClick={() => void applyPlaylist()}>
             <Check size={16} /> {destination === 'original' ? 'Confirmer : modifier l’originale' : destination === 'copy' ? 'Confirmer : créer la copie' : 'Choisis une destination'}</button></div>
       </section>}

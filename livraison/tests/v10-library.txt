@@ -1,0 +1,14 @@
+  ✓ requête sans en-têtes interrompue et erreur explicite
+  ✓ corps JSON bloqué après les en-têtes également interrompu
+  ✓ signal d’annulation envoyé pour les deux délais
+  ✓ erreur HTTP conservée même si le corps n’est pas du JSON
+  ✓ page 2 en échec puis nouvel essai complet, sans cache partiel
+  ✓ identifiant de playlist et jeton de page correctement encodés
+  ✓ même session utilisée pour toutes les pages
+  ✓ boucles de pagination détectées pour titres et bibliothèque
+  ✓ jetons de pagination non textuels refusés
+  ✓ plus de 150 playlists chargées intégralement
+  ✓ déconnexion en cours de lecture : aucun cache du compte précédent réinjecté
+  ✓ refus 401 signale la session expirée et déconnecte
+
+12/12 contrôles bibliothèque YouTube simulés réussis

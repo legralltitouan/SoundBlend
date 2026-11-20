@@ -2,9 +2,10 @@ import React, { createContext, useContext, useEffect, useMemo, useState, useCall
 import { Playlist, Track, GeneratedBlend, BlendConfig, AppSettings, UserProfile, Exclusions } from '../types';
 import { sameTrack, trackKey } from '../lib/track';
 import { clientIdGoogle } from '../config/app';
-import { youtubeService, isSupersededGoogleLogin, type GoogleLoginState } from '../services/youtube';
+import { youtubeService, isSupersededGoogleLogin, isCancelledGoogleLogin, type GoogleLoginState } from '../services/youtube';
 import { accountRevision, assertAccountRevision } from '../services/accountScope';
 import { geminiService } from '../services/gemini';
+import { assertAssistantBlendCurrent } from '../services/assistantBlend';
 import { uniqueTracks } from '../lib/dedupe';
 import {
   getStoredSettings, saveStoredSettings, getStoredBlends, saveBlendToStorage, deleteStoredBlend,
@@ -56,7 +57,7 @@ interface DataContextType {
   generatingStatus: string;
   /** Derniers messages réellement émis pendant cette génération. */
   generatingLog: string[];
-  generate: (config: BlendConfig, options?: { seeds?: Track[] }) => Promise<GeneratedBlend | null>;
+  generate: (config: BlendConfig, options?: { seeds?: Track[]; replace?: { id: string; signature: string; title?: string; description?: string } }) => Promise<GeneratedBlend | null>;
 
   exclusions: Exclusions;
   blockTrack: (track: { title?: string; artist?: string; videoId?: string }, kind: 'track' | 'artist') => void;
@@ -243,7 +244,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     catch (error) {
       // Le clic « Réessayer » a volontairement remplacé cet ancien essai.
       // Ne pas afficher « annulé » au-dessus du nouveau parcours.
-      if (isSupersededGoogleLogin(error)) return;
+      if (isSupersededGoogleLogin(error) || isCancelledGoogleLogin(error)) return;
       throw error;
     }
     if (!youtubeService.isAuthenticated() || youtubeService.getAccessToken() !== token) {
@@ -317,8 +318,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const generate = useCallback(
-    async (config: BlendConfig, options?: { seeds?: Track[] }): Promise<GeneratedBlend | null> => {
+    async (config: BlendConfig, options?: { seeds?: Track[]; replace?: { id: string; signature: string; title?: string; description?: string } }): Promise<GeneratedBlend | null> => {
       const revision = accountRevision();
+      if (options?.replace) assertAssistantBlendCurrent(options.replace.id, options.replace.signature);
       const requested = options?.seeds ?? selectedTracks;
       if (!requested.length) return null;
       const seeds = uniqueTracks(requested.filter((t) => !isExcluded(t)));
@@ -374,8 +376,14 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
           methode: { kind: geminiService.derniereMethode, model: geminiService.dernierModele || undefined, detail: geminiService.derniereNote },
           generation,
         };
+        // Relecture après tous les await : ne jamais écraser une version modifiée.
+        const current = options?.replace ? assertAssistantBlendCurrent(options.replace.id, options.replace.signature) : null;
+        const finalBlend: GeneratedBlend = current ? { ...current, tracks, seedTracks: seeds,
+          title: options?.replace?.title?.trim() || current.title,
+          description: options?.replace?.description?.trim() || current.description,
+          instruction: blend.instruction, methode: blend.methode, generation: blend.generation } : blend;
         recordDiscoveries(tracks, now.getTime());
-        const saved = saveBlendToStorage(blend);
+        const saved = saveBlendToStorage(finalBlend);
         setRecentBlends(getStoredBlends());
         setCurrentBlendState(saved);
         if (!options?.seeds) setSelectedTracks([]);

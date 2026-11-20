@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useData } from '../../context/DataContext';
 import { useUI } from '../../context/UIContext';
 
@@ -7,11 +7,18 @@ import { useUI } from '../../context/UIContext';
 export const GoogleLoginStatus: React.FC<{ page?: boolean }> = ({ page = false }) => {
   const { googleLoginState, retryGoogleLogin, cancelGoogleLogin, dismissGoogleLoginError } = useData();
   const { showToast } = useUI();
-  if (googleLoginState.phase === 'idle') return null;
+  const waiting = googleLoginState.phase === 'waiting' || googleLoginState.phase === 'waiting-long';
+  const [visibleFor, setVisibleFor] = useState<typeof googleLoginState | null>(null);
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = window.setTimeout(() => setVisibleFor(googleLoginState), 3000);
+    return () => window.clearTimeout(timer);
+  }, [waiting, googleLoginState]);
+  if (googleLoginState.phase === 'idle' || (waiting && visibleFor !== googleLoginState)) return null;
 
   const isError = googleLoginState.phase === 'error';
   const message = googleLoginState.phase === 'waiting'
-    ? 'Redirection vers Google en cours… Si rien ne se passe, recharge cette page puis réessaie.'
+    ? 'Redirection vers Google en cours… Si tu es revenu ici ou si rien ne se passe, annule puis réessaie la connexion.'
     // waiting-long appartient à l’ancien parcours popup conservé pour comparaison.
     : googleLoginState.phase === 'waiting-long'
       ? 'SoundBlend attend toujours Google : prends ton temps, ce message n’annule pas la connexion. Si la fenêtre Google s’est fermée et que tu n’es toujours pas connecté après quelques secondes, utilise Réessayer et choisis à nouveau ton compte.'

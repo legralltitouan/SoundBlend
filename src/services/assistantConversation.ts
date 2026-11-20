@@ -13,8 +13,8 @@ export function mergeLiveTranscript(previous: string, next: string): string {
 
 /** La dernière correction ne doit jamais disparaître lors d'une troncature. */
 export function blendInstruction(summary: string, requests: string[]): string {
-  const recent = requests.slice(-10).join('\n').slice(-4000);
-  return `Direction musicale (actualisée) :\n${summary.trim().slice(0, 1800)}\n\nDemandes récentes de l’auditeur (la dernière prévaut en cas de correction) :\n${recent}`.slice(0, 6000);
+  const latest = requests.at(-1)?.trim().slice(-3500) || '';
+  return `Direction musicale (actualisée) :\n${summary.trim().slice(0, 2200)}${latest ? `\n\nDernière demande :\n${latest}` : ''}`.slice(0, 6000);
 }
 
 export function uniqueAssistantTracks(tracks: Track[], excluded: (track: Track) => boolean): Track[] {

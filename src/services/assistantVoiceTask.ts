@@ -2,11 +2,12 @@ import { accountRevision, assertAccountRevision, scopedStorageKey } from './acco
 import { youtubeService } from './youtube';
 import type { AssistantMessage, AssistantReply } from './gemini';
 import type { AssistantPlaylistDraft } from './assistantPlaylist';
+import type { AssistantBlendDraft } from './assistantBlend';
 import type { Track } from '../types';
 
 export type VoicePreparationResult = {
   messages: AssistantMessage[]; answer: AssistantReply; catalog: Track[]; selected: string[];
-  prepared: boolean; playlistDraft: AssistantPlaylistDraft | null;
+  prepared: boolean; playlistDraft: AssistantPlaylistDraft | null; blendDraft?: AssistantBlendDraft | null;
   source: string; extraSources: string[]; instruction: string;
 };
 export type VoicePreparation = {

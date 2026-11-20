@@ -279,7 +279,7 @@ async function callModel(
   prompt: string,
   temperature: number,
   opts: {
-    json?: boolean; budgetMs?: number; signal?: AbortSignal; assistantStream?: boolean;
+    json?: boolean; budgetMs?: number; signal?: AbortSignal; assistantStream?: boolean; assistantProgress?: (stage: string) => void;
     /** sans limite de sortie imposée : le modèle prend son défaut */
     light?: boolean;
     /** sans aucun réglage de génération : juste le prompt */
@@ -313,7 +313,7 @@ async function callModel(
         signal: ctrl.signal,
       };
     if (opts.assistantStream) return await requestAssistantText(model,
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`, request, ctrl.signal);
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`, request, ctrl.signal, opts.assistantProgress);
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, request);
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
@@ -360,7 +360,7 @@ async function callModelResilient(
   apiKey: string,
   prompt: string,
   temperature: number,
-  opts: { json?: boolean; budgetMs?: number; signal?: AbortSignal; assistantStream?: boolean } = {},
+  opts: { json?: boolean; budgetMs?: number; signal?: AbortSignal; assistantStream?: boolean; assistantProgress?: (stage: string) => void } = {},
 ): Promise<string | null> {
   try {
     return await callModel(model, apiKey, prompt, temperature, opts);
@@ -521,7 +521,7 @@ export type AssistantReply = {
   reply: string;
   title?: string;
   followUps?: string[];
-  action: 'none' | 'blend' | 'playlist_edit';
+  action: 'none' | 'blend' | 'playlist_edit' | 'blend_edit';
   source: AssistantSource | null;
   extraSources: AssistantSource[];
   instruction: string;
@@ -530,6 +530,7 @@ export type AssistantReply = {
   catalogVideoIds: string[];
   researchQuery: string;
   playlistEdits: import('./assistantPlaylist').AssistantPlaylistEdits | null;
+  blendEdits?: import('./assistantBlend').AssistantBlendEdits | null;
 };
 
 export class GeminiService {
@@ -610,12 +611,13 @@ export class GeminiService {
   /** Conversation sans effet de bord : elle ne lance jamais la génération. */
   public async converse(
     messages: AssistantMessage[], playlists: Playlist[], blends: GeneratedBlend[], exclusions: Exclusions,
-    options: { catalog?: Track[]; research?: string; proposal?: { title?: string; source: AssistantSource | null; extraSources: AssistantSource[]; instruction: string; durationMinutes: number }; signal?: AbortSignal } = {},
+    options: { catalog?: Track[]; research?: string; proposal?: { action?: 'blend' | 'blend_edit'; blendEdits?: import('./assistantBlend').AssistantBlendEdits | null; title?: string; source: AssistantSource | null; extraSources: AssistantSource[]; instruction: string; durationMinutes: number }; signal?: AbortSignal; onProgress?: (stage: string) => void } = {},
   ): Promise<AssistantReply> {
     const revision = accountRevision();
     const apiKey = cleGemini(getStoredSettings().geminiApiKey);
     if (!apiKey) throw new Error('Ajoute une clé Gemini dans Réglages pour utiliser l’assistant.');
     let models: string[];
+    options.onProgress?.('Recherche d’un modèle Gemini disponible…');
     try { models = await engineQueue(apiKey, options.signal); }
     catch (e: any) {
       if (options.signal?.aborted) throw new Error('Préparation interrompue.');
@@ -644,19 +646,21 @@ Les referencesYouTube de chaque message sont des références choisies explicite
 
 Sois un disquaire attentif : 2 à 4 phrases simples, pas de Markdown lourd ni de jargon technique. Pour une envie musicale exploitable, propose directement une direction personnalisée à partir d'une source pertinente de la bibliothèque ; ne demande pas systématiquement une playlist si le contexte suffit. Si plusieurs sources sont vraiment indécidables, pose UNE question courte. Lors d'une relance (plus jazzy, moins énergique…), révise propositionEnCours, conserve sa source et sa durée sauf demande contraire, et synthétise la nouvelle consigne complète : la dernière correction prévaut. Ne réintroduis pas une ancienne envie contredite. title est un titre court et musical, pas une promesse de création. followUps contient jusqu'à 3 courtes envies musicales pour affiner cette direction (jamais une confirmation d'exécution). N'invente ni morceaux ni durée réelle pour l'aperçu.
 
+Tu PEUX modifier un blend SoundBlend existant EN PLACE après confirmation à l'écran : action=blend_edit, source={type:blend,id:ID exact}, extraSources=[], blendEdits. Cela conserve son identifiant ; ce n'est pas obligatoirement une copie. Pour un retrait, déplacement, ajout, renommage ou description précis : mode=tracks, removeTrackIds et moves.trackId utilisent les itemId exacts du tableau morceaux du blend, positions zéro-indexées après retraits ; additions précisent artiste et titre. Au maximum cinq ajouts et 25 changements. Pour une nouvelle direction musicale qui demande de recomposer les titres (plus jazz, autre durée…), mode=regenerate, tableaux de changements vides, instruction complète et fidèle. La recomposition remplacera le contenu du MÊME blend seulement après le bouton de confirmation, sans modifier YouTube et sans prolonger son expiration. Ne confonds pas les playlists YouTube et les blends locaux. Si plusieurs blends sont possibles, demande lequel ; n'invente aucun identifiant. À une simple question sur tes capacités, explique la modification en place sans proposer des changements arbitraires. Si la personne demande expressément un nouveau blend ou une copie, action=blend.
+
 Pour un blend identifiable : action=blend, une source exacte et éventuellement extraSources, avec une consigne fidèle. Pour une modification explicite d'une playlist : action=playlist_edit, source playlist exacte et playlistEdits précis. Les retraits utilisent les itemId exacts, pas les videoId ; moves sont des déplacements successifs, position zéro-indexée APRÈS les retraits ; additions comportent artiste et titre exacts et seront placés en fin. Maximum 5 ajouts et 25 changements. Si la source n'est pas chargée, indique-la pour que l'application la charge et repose la question ; n'invente aucun itemId. Pose une question si la demande est ambiguë. Pour une question simple : action=none, source=null.
 
 Si l'auditeur demande explicitement de trouver un artiste ou des morceaux, fournis jusqu'à 2 catalogQueries courtes et précises ; l'application peut effectuer une recherche YouTube puis te redemander une réponse. Ne présente pas des résultats non fournis comme existants. catalogVideoIds ne contient que les videoId du tableau rechercheYouTube que tu recommandes comme amorces d'un blend. researchQuery est une courte requête encyclopédique représentant le sujet de la dernière question, sans donnée privée inutile.
 
 Données : ${JSON.stringify(context)}
 
-Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "title":"titre du blend proposé", "followUps":["Plus jazzy","Plus de découvertes"], "action":"none|blend|playlist_edit", "source":{"type":"playlist|blend","id":"ID exact"} ou null, "extraSources":[{"type":"playlist|blend","id":"ID exact"}], "instruction":"consigne musicale fidèle en français", "durationMinutes":45, "catalogQueries":["artiste titre"], "catalogVideoIds":["ID vidéo déjà fourni"], "researchQuery":"sujet précis", "playlistEdits":{"removeItemIds":["itemId exact"],"moves":[{"itemId":"itemId exact","position":0}],"additions":[{"title":"titre exact","artist":"artiste exact"}]} ou null}.`;
+Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "title":"titre du blend proposé", "followUps":["Plus jazzy","Plus de découvertes"], "action":"none|blend|playlist_edit|blend_edit", "source":{"type":"playlist|blend","id":"ID exact"} ou null, "extraSources":[{"type":"playlist|blend","id":"ID exact"}], "instruction":"consigne musicale fidèle en français", "durationMinutes":45, "catalogQueries":["artiste titre"], "catalogVideoIds":["ID vidéo déjà fourni"], "researchQuery":"sujet précis", "blendEdits":{"mode":"tracks|regenerate","title":"titre proposé si demandé","description":"description si demandée","removeTrackIds":["itemId exact du blend"],"moves":[{"trackId":"itemId exact","position":0}],"additions":[{"title":"titre exact","artist":"artiste exact"}]} ou null, "playlistEdits":{"removeItemIds":["itemId exact"],"moves":[{"itemId":"itemId exact","position":0}],"additions":[{"title":"titre exact","artist":"artiste exact"}]} ou null}.`;
     let last: any = null;
     for (const model of models) {
       assertAccountRevision(revision);
       if (options.signal?.aborted) throw new Error('Préparation interrompue.');
       try {
-        const raw = await callModelResilient(model, apiKey, prompt, 0.5, { json: true, assistantStream: true, signal: options.signal });
+        const raw = await callModelResilient(model, apiKey, prompt, 0.5, { json: true, assistantStream: true, assistantProgress: options.onProgress, signal: options.signal });
         assertAccountRevision(revision);
         if (options.signal?.aborted) throw new Error('Préparation interrompue.');
         const data = firstJson(raw || '');
@@ -665,7 +669,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ti
           s && (s.type === 'playlist' || s.type === 'blend') && typeof s.id === 'string' && s.id.length <= 220
             ? { type: s.type, id: s.id } : null;
         const source = toSource(data.source);
-        const action: AssistantReply['action'] = data.action === 'playlist_edit' || data.action === 'blend' || data.action === 'none'
+        const action: AssistantReply['action'] = data.action === 'blend_edit' || data.action === 'playlist_edit' || data.action === 'blend' || data.action === 'none'
           ? data.action : (source ? 'blend' : 'none'); // compatibilité avec les anciennes réponses
         const extraSources: AssistantSource[] = Array.isArray(data.extraSources)
           ? data.extraSources.map(toSource).filter((s: AssistantSource | null): s is AssistantSource => !!s).slice(0, 3) : [];
@@ -683,6 +687,16 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ti
             additions: edits.additions.slice(0, 6).map((a: any) => ({ title: a.title.slice(0, 120), artist: a.artist.slice(0, 120) })),
           };
         }
+        let blendEdits: AssistantReply['blendEdits'] = null;
+        const edit = data.blendEdits;
+        if (edit && ['tracks', 'regenerate'].includes(edit.mode) && Array.isArray(edit.removeTrackIds) && Array.isArray(edit.moves) && Array.isArray(edit.additions)
+          && edit.removeTrackIds.every((id: unknown) => typeof id === 'string' && id.length <= 220)
+          && edit.moves.every((m: any) => m && typeof m.trackId === 'string' && m.trackId.length <= 220 && Number.isInteger(m.position))
+          && edit.additions.every((a: any) => a && typeof a.title === 'string' && typeof a.artist === 'string')) {
+          blendEdits = { mode: edit.mode, title: typeof edit.title === 'string' ? edit.title.slice(0, 80) : undefined,
+            description: typeof edit.description === 'string' ? edit.description.slice(0, 1000) : undefined,
+            removeTrackIds: edit.removeTrackIds.slice(0, 26), moves: edit.moves.slice(0, 26), additions: edit.additions.slice(0, 6) };
+        }
         rememberEngine(apiKey, model);
         return { reply: data.reply.trim().slice(0, 3000),
           title: typeof data.title === 'string' ? data.title.trim().slice(0, 80) : '',
@@ -691,7 +705,7 @@ Réponds UNIQUEMENT par un objet JSON : {"reply":"réponse courte et utile", "ti
           durationMinutes: Math.max(10, Math.min(180, Number(data.durationMinutes) || 45)),
           catalogQueries: textArray(data.catalogQueries, 2, 160), catalogVideoIds: textArray(data.catalogVideoIds, 12, 11),
           researchQuery: typeof data.researchQuery === 'string' ? data.researchQuery.trim().slice(0, 160) : '',
-          playlistEdits };
+          playlistEdits, blendEdits };
       } catch (e: any) {
         if (options.signal?.aborted) throw new Error('Préparation interrompue.');
         last = e;

@@ -1,0 +1,3 @@
+OK changement A vers B avec retour et identité vérifiée
+OK réponse rejouée refusée, B conservé
+OK réponse expirée refusée, B conservé

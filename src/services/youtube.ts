@@ -79,6 +79,7 @@ class GoogleLoginError extends Error {
 
 /** Une tentative remplacée par un clic explicite n'est pas un nouvel échec
     à afficher : le nouveau parcours possède son propre état et sa réponse. */
+export const isCancelledGoogleLogin = (error: unknown): boolean => error instanceof GoogleLoginError && error.code === 'cancelled';
 export const isSupersededGoogleLogin = (error: unknown): boolean =>
   error instanceof GoogleLoginError && error.code === 'superseded';
 
@@ -198,6 +199,9 @@ export class YouTubeService {
         this.armExpiry();
       }
     } catch { /* pas de session fiable : rester dans l'espace local */ }
+    if (typeof window !== 'undefined') window.addEventListener('pageshow', event => {
+      if (event.persisted && this.loginState.phase === 'waiting') this.cancelPendingLogin();
+    });
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && this.owner && !this.isAuthenticated()) this.notifyExpired();
     });
@@ -241,7 +245,14 @@ export class YouTubeService {
     this.loginState = state;
     window.dispatchEvent(new CustomEvent('sb:google-login-state'));
   }
-  public cancelPendingLogin(): void { this.cancelLogin?.(); }
+  public cancelPendingLogin(): void {
+    if (this.cancelLogin) this.cancelLogin();
+    else if (this.loginState.phase !== 'idle' && this.loginState.phase !== 'error') {
+      this.attempt++;
+      try { sessionStorage.removeItem('soundblend_oauth_redirect_pending'); } catch { /* stockage indisponible */ }
+      this.setLoginState({ phase: 'idle' });
+    }
+  }
   /** Clic explicite seulement, après l'aide d'attente. La fenêtre précédente
       est supposée fermée par l'utilisateur ; on n'en déduit rien de Google.
       Invalider son callback AVANT d'ouvrir le nouveau client, sans await :
@@ -334,6 +345,7 @@ export class YouTubeService {
   }
   /** Parcours courant : retour sur la base autorisée, sans message entre fenêtres. */
   public login(clientId?: string): Promise<string> {
+    if (this.cancelLogin || ['waiting', 'verifying', 'waiting-long'].includes(this.loginState.phase)) return Promise.reject(new GoogleLoginError('already_pending', 'Une connexion Google est déjà en cours.'));
     const id = clientId || getStoredSettings().googleClientId;
     if (!id) {
       const e = new GoogleLoginError('client_missing', "Cette installation n'a pas d'identifiant Google.");
@@ -350,10 +362,25 @@ export class YouTubeService {
         client_id: id, redirect_uri: redirectUri, response_type: 'token',
         scope: SCOPE_YOUTUBE, state, prompt: 'select_account',
       });
-      this.setLoginState({ phase: 'waiting' });
-      window.location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString());
-      // La navigation remplace cette page. Ne pas déclarer de succès avant retour.
-      return new Promise(() => {});
+      return new Promise<string>((_resolve, reject) => {
+        const cancel = () => {
+          if (this.cancelLogin !== cancel) return;
+          this.cancelLogin = null; this.attempt++;
+          try { sessionStorage.removeItem('soundblend_oauth_redirect_pending'); } catch { /* stockage indisponible */ }
+          this.setLoginState({ phase: 'idle' });
+          reject(new GoogleLoginError('cancelled', 'Connexion annulée.'));
+        };
+        this.cancelLogin = cancel;
+        this.setLoginState({ phase: 'waiting' });
+        try { window.location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString()); }
+        catch {
+          this.cancelLogin = null;
+          try { sessionStorage.removeItem('soundblend_oauth_redirect_pending'); } catch { /* stockage indisponible */ }
+          const e = new GoogleLoginError('opening_failed', 'Impossible d’ouvrir Google. Réessaie la connexion.');
+          this.setLoginState({ phase: 'error', code: e.code, message: e.message }); reject(e);
+        }
+        // Seul le retour OAuth vérifié active une session ; pas cette navigation.
+      });
     } catch {
       try { sessionStorage.removeItem('soundblend_oauth_redirect_pending'); } catch { /* ignore */ }
       const e = new GoogleLoginError('opening_failed', 'Impossible de démarrer la connexion Google. Vérifie le stockage du navigateur et réessaie.');
@@ -619,6 +646,27 @@ export class YouTubeService {
     }
   }
 
+  /** Métadonnées de durée officielles, jamais déduites d'un titre ni d'un défaut.
+   * Un résultat absent reste inconnu. Au plus 50 vidéos par requête. */
+  public async fetchVideoDurations(ids: string[]): Promise<Record<string, number>> {
+    const wanted = [...new Set(ids.filter(id => /^[A-Za-z0-9_-]{11}$/.test(id)))].slice(0, 200);
+    if (!wanted.length || !this.isAuthenticated()) return {};
+    const token = this.accessToken, serial = this.serial, revision = accountRevision();
+    const durations: Record<string, number> = {};
+    for (let i = 0; i < wanted.length; i += 50) {
+      const { resp, data } = await fetchLibrary(`${YOUTUBE_API_BASE}/videos?part=contentDetails&id=${wanted.slice(i, i + 50).join(',')}`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+      this.assertSession(token, serial, revision);
+      if (resp.status === 401) { this.invalidateToken(token); throw new Error('Session YouTube expirée. Reconnecte-toi.'); }
+      if (!resp.ok) throw new Error('Durées YouTube indisponibles.');
+      for (const item of data?.items || []) {
+        const match = String(item?.contentDetails?.duration || '').match(/^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/);
+        const seconds = match ? Math.round(Number(match[1] || 0) * 86400 + Number(match[2] || 0) * 3600 + Number(match[3] || 0) * 60 + Number(match[4] || 0)) : 0;
+        if (wanted.includes(item.id) && Number.isFinite(seconds) && seconds > 0) durations[item.id] = seconds;
+      }
+    }
+    return durations;
+  }
+
   /**
    * Fetch ALL tracks from a specific playlist with complete pagination
    */
@@ -690,8 +738,8 @@ export class YouTubeService {
               thumbnailUrl: item.snippet.thumbnails?.medium?.url ||
                             item.snippet.thumbnails?.default?.url ||
                             (videoId ? `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg` : ''),
-              durationSeconds: 210,
-              durationFormatted: '3:30',
+              durationSeconds: 0, // playlistItems ne fournit pas la durée : ne jamais inventer 3:30.
+              durationFormatted: undefined,
               videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
             };
           });

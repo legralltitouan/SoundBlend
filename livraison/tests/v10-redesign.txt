@@ -1,0 +1,52 @@
+  ✓ pochette de proposition : carré parfait, pas rectangle
+  ✓ mosaïque des trois points de départ et pochette arrondie à gauche de chaque titre
+  ✓ durées officielles variées, anciennes valeurs fictives 3:30 ignorées
+  ✓ réglages sans select ni longue liste de cases sources
+  ✓ consigne haute automatiquement : tout visible, ni scroll interne ni poignée de redimensionnement
+  ✓ consigne : la hauteur diminue aussi quand le texte est raccourci
+  ✓ slider de durée accessible au clavier, valeur exacte
+  ✓ raccourci de durée synchronisé avec le slider
+  ✓ recherche locale de sources visuelles
+  ✓ maximum de quatre sources respecté dans le sélecteur visuel
+  ✓ Échap ferme le sélecteur, focus rendu au bouton
+  ✓ une nuance peut devenir la base sans dupliquer les sources
+  ✓ retirer la base promeut une nuance, palette cohérente
+  ✓ réglages de proposition : aucune mutation YouTube ni erreur
+  ✓ modification de blend : simple aperçu ne change rien au stockage
+  ✓ confirmation : modification en place exacte, sans copie
+  ✓ identité, création, expiration et export connu préservés
+  ✓ modifier le blend local ne modifie jamais sa playlist YouTube
+  ✓ version modifiée depuis l’aperçu : confirmation bloquée, jamais écrasée
+  ✓ recomposition : aucune génération avant confirmation
+  ✓ recomposition confirmée remplace le même blend, sans nouvelle entrée ni extension d’expiration
+  ✓ recomposition unique et aucun envoi YouTube automatique
+  ✓ réflexion : titre Gemini constant
+  ✓ réflexion : texte explicatif animé sous le titre
+  ✓ réflexion arrêtée proprement avec la demande
+  ✓ garde blend : sans changement
+  ✓ garde blend : retrait inconnu
+  ✓ garde blend : déplacement invalide
+  ✓ garde blend : déplacement d’un titre retiré
+  ✓ garde blend : suppression intégrale
+  ✓ garde blend : trop d’ajouts
+  ✓ garde blend : mélange régénération/changements
+  ✓ garde blend : ajout exact préparé sans mutation
+  ✓ garde blend : exclusion ajoutée après aperçu
+  ✓ garde blend : confirmation de sync seule ne rend pas le brouillon périmé
+  ✓ garde blend : blend supprimé depuis aperçu
+  ✓ changement pendant régénération : refus d’écraser, aucune copie de repli créée
+  ✓ protocole réel du service : capacité de modification en place et identifiants présents dans le prompt
+  ✓ parse Gemini blend_edit : aperçu concret, jamais une exécution automatique
+  ✓ proposition 390 light : aucun débordement
+  ✓ axe réglages 390 light : []
+  ✓ axe sources 390 light : []
+  ✓ proposition 390 dark : aucun débordement
+  ✓ axe réglages 390 dark : []
+  ✓ axe sources 390 dark : []
+  ✓ proposition 1280 light : aucun débordement
+  ✓ axe réglages 1280 light : []
+  ✓ axe sources 1280 light : []
+  ✓ proposition 1280 dark : aucun débordement
+  ✓ axe réglages 1280 dark : []
+  ✓ axe sources 1280 dark : []
+51 contrôles de redesign V10 réussis, dont 8 audits axe

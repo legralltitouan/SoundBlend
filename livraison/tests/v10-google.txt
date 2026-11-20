@@ -1,0 +1,22 @@
+✓ tentative 1 : bandeau absent immédiatement
+✓ bandeau toujours masqué avant 3 secondes
+✓ bandeau après 3 secondes, tentative unique protégée
+✓ Annuler ferme le bandeau et réactive la connexion sans recharger
+✓ Annuler supprime le state OAuth, sans créer de session
+✓ tentative 2 : bandeau absent immédiatement
+✓ bandeau toujours masqué avant 3 secondes
+✓ bandeau après 3 secondes, tentative unique protégée
+✓ Annuler ferme le bandeau et réactive la connexion sans recharger
+✓ Annuler supprime le state OAuth, sans créer de session
+✓ tentative 3 : bandeau absent immédiatement
+✓ bandeau toujours masqué avant 3 secondes
+✓ bandeau après 3 secondes, tentative unique protégée
+✓ Annuler ferme le bandeau et réactive la connexion sans recharger
+✓ Annuler supprime le state OAuth, sans créer de session
+✓ navigation complète vers une page Google simulée
+✓ vrai retour historique du navigateur : reconnexion possible sans rechargement manuel
+✓ retour de page BFCache simulé : tentative libérée immédiatement
+✓ une erreur Google réelle ne reste pas cachée pendant le délai
+✓ annuler la vérification ignore un profil reçu tardivement
+✓ aucune exception ni rejet de promesse non géré
+21 contrôles de connexion V10 réussis (navigation bloquée volontairement, pas de compte réel).

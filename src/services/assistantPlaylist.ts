@@ -7,7 +7,7 @@ import { isAssistantTrackExcluded, matchesVideoIdentity, youtubeService, type As
 /** Une écriture YouTube mérite un filtre plus strict que les suggestions de
     découverte : titre nettoyé identique et pas de version alternative non
     demandée. L'utilisateur doit encore vérifier la vidéo dans l'aperçu. */
-const matchesAddition = (title: string, artist: string, hit: AssistantCatalogTrack): boolean => {
+export const matchesAddition = (title: string, artist: string, hit: AssistantCatalogTrack): boolean => {
   const requested = norm(cleanTitle(title).title), actual = norm(cleanTitle(hit.youtubeTitle).title);
   if (!requested || requested !== actual || !matchesVideoIdentity(title, artist, hit.youtubeTitle, hit.youtubeChannel)) return false;
   const variants = /\b(remix|cover|karaoke|tribute|instrumental|live|acoustic|acoustique|nightcore|slowed|sped[ -]?up)\b/gi;
