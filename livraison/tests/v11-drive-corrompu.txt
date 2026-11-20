@@ -1,0 +1,18 @@
+  ✓ JSON tronqué : erreur explicite, aucun PATCH et attente conservée
+  ✓ version future : erreur explicite, aucun PATCH et attente conservée
+  ✓ version absente : erreur explicite, aucun PATCH et attente conservée
+  ✓ exclusions au mauvais format : erreur explicite, aucun PATCH et attente conservée
+  ✓ exclusion malformée : erreur explicite, aucun PATCH et attente conservée
+  ✓ clé distante au mauvais format : erreur explicite, aucun PATCH et attente conservée
+  ✓ titres de blend illisibles : erreur explicite, aucun PATCH et attente conservée
+  ✓ suppressions malformées : erreur explicite, aucun PATCH et attente conservée
+  ✓ champ de schéma inconnu : erreur explicite, aucun PATCH et attente conservée
+  ✓ champ de réglages inconnu : erreur explicite, aucun PATCH et attente conservée
+  ✓ identifiant absent dans la liste : aucune écriture ni création aveugle
+  ✓ nom absent dans la liste : aucune écriture ni création aveugle
+  ✓ nom inattendu dans la liste : aucune écriture ni création aveugle
+  ✓ fichier listé puis 404 : aucun nouveau fichier créé sans relistage ultérieur
+  ✓ reprise possible après restauration d’un fichier valide
+  ✓ modification locale préservée et confirmée après réparation
+
+16/16 contrôles fichiers Drive réussis — API simulée.

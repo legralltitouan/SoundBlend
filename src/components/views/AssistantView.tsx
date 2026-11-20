@@ -1,3 +1,5 @@
+import { AssistantHistoryPanel } from './AssistantHistoryPanel';
+import { assistantHistoryWarning, assistantRuntime, cleanConversationSnapshot, getActiveConversationId, getAssistantConversations, newConversationId, saveAssistantConversation, setActiveConversationId, stampAssistantMessage, emptyConversationSnapshot } from '../../services/assistantHistory';
 import { createPortal } from 'react-dom';
 import { promptWithTags } from './AssistantPrompt';
 import { AssistantMentionPicker } from './AssistantMentionPicker';
@@ -21,7 +23,7 @@ import { geminiService, type AssistantMessage, type AssistantReply, type Assista
 import { GeminiLiveSession, type LivePhase, type LiveToolName, type LiveCaptureStatus } from '../../services/geminiLive';
 import { prepareAssistantPlaylistDraft, assertAssistantSnapshot, type AssistantPlaylistDraft } from '../../services/assistantPlaylist';
 import { beginExportAttempt, clearExportAttempt, getExportAttempt, rememberExportPlaylist } from '../../services/exportRecovery';
-import { beginVoicePreparation, cancelVoicePreparation, completeVoicePreparation, getVoicePreparation, guardVoicePreparation, ownsVoicePreparation, recoverVoiceQuery, forgetVoiceQuery, subscribeVoicePreparation } from '../../services/assistantVoiceTask';
+import { beginVoicePreparation, cancelVoicePreparation, completeVoicePreparation, getVoicePreparation, guardVoicePreparation, ownsVoicePreparation, recoverVoiceQuery, forgetVoiceQuery, subscribeVoicePreparation, updateVoicePreparation } from '../../services/assistantVoiceTask';
 import { accountRevision, assertAccountRevision } from '../../services/accountScope';
 import { isAssistantTrackExcluded, youtubeService } from '../../services/youtube';
 import { getStoredBlends, getStoredSettings } from '../../services/storage';
@@ -57,13 +59,35 @@ const CatalogCard: React.FC<{
 /** Conversation sans effet de bord ; chaque écriture YouTube et
     chaque génération passent par leur propre bouton de confirmation. */
 export const AssistantView: React.FC = () => {
-  const { playlists, recentBlends, exclusions, loadPlaylistTracks, refreshLibrary, generate, generating, userProfile, setCurrentBlend, updateBlend } = useData();
+  const [id,setId]=useState(getActiveConversationId);
+  const [scope,setScope]=useState(accountRevision);
+  const explicit=useRef(false);
+  useEffect(()=>{
+    const account=()=>{explicit.current=false;setScope(accountRevision());setId(getActiveConversationId());};
+    const remote=()=>{if(!explicit.current && !getAssistantConversations().some(c=>c.id===id)){const latest=getAssistantConversations()[0];if(latest){setId(latest.id);setActiveConversationId(latest.id);}}};
+    window.addEventListener('sb:account-changed',account);window.addEventListener('sb:assistant-history-remote',remote);
+    return ()=>{window.removeEventListener('sb:account-changed',account);window.removeEventListener('sb:assistant-history-remote',remote);};
+  },[id]);
+  const select=(next:string)=>{explicit.current=true;setActiveConversationId(next);setId(next);};
+  return <AssistantSession key={`${scope}:${id}`} conversationId={id} onSelectConversation={select} />;
+};
+
+const AssistantSession: React.FC<{conversationId:string;onSelectConversation:(id:string)=>void}> = ({conversationId,onSelectConversation}) => {
+  const [initial]=useState(()=>getAssistantConversations().find(c=>c.id===conversationId));
+  const [historyOpen,setHistoryOpen]=useState(false);
+  const [needsRefresh,setNeedsRefresh]=useState(initial?.snapshot.needsRefresh || false);
+  const sessionRevision=useRef(accountRevision());
+  const [historyVersion,setHistoryVersion]=useState(0);
+  const saved=initial?.snapshot || emptyConversationSnapshot();
+  const persistedContent=useRef('');
+
+  const { playlists, recentBlends, exclusions, loadPlaylistTracks, refreshLibrary, generate, generating, userProfile, setCurrentBlend, updateBlend, syncState, syncNow } = useData();
   const { setView, showToast } = useUI();
   const { currentTrack, isPlaying, togglePlay } = usePlayer();
-  const [messages, setMessages] = useState<AssistantMessage[]>([]);
-  const messagesRef = useRef<AssistantMessage[]>([]);
-  const [text, setText] = useState('');
-  const [draftMentions, setDraftMentions] = useState<AssistantMention[]>([]);
+  const [messages, setMessages] = useState<AssistantMessage[]>(initial?.messages || []);
+  const messagesRef = useRef<AssistantMessage[]>(initial?.messages || []);
+  const [text, setText] = useState(saved.text);
+  const [draftMentions, setDraftMentions] = useState<AssistantMention[]>(saved.draftMentions);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [responding, setResponding] = useState(false);
@@ -71,17 +95,17 @@ export const AssistantView: React.FC = () => {
   const [busyLabel, setBusyLabel] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ text: string; url?: string } | null>(null);
-  const [plan, setPlan] = useState<AssistantReply | null>(null);
+  const [plan, setPlan] = useState<AssistantReply | null>(saved.plan);
   const [blendDraft, setBlendDraft] = useState<AssistantBlendDraft | null>(null);
   const [playlistDraft, setPlaylistDraft] = useState<AssistantPlaylistDraft | null>(null);
   const [destination, setDestination] = useState<'' | 'original' | 'copy'>('');
   const [recoveryRefresh, setRecoveryRefresh] = useState(0);
-  const [source, setSource] = useState('');
-  const [extraSources, setExtraSources] = useState<string[]>([]);
-  const [catalog, setCatalog] = useState<Track[]>([]);
-  const [catalogSelected, setCatalogSelected] = useState<string[]>([]);
-  const [instruction, setInstruction] = useState('');
-  const [minutes, setMinutes] = useState(45);
+  const [source, setSource] = useState(saved.source);
+  const [extraSources, setExtraSources] = useState<string[]>(saved.extraSources);
+  const [catalog, setCatalog] = useState<Track[]>(saved.catalog);
+  const [catalogSelected, setCatalogSelected] = useState<string[]>(saved.selected);
+  const [instruction, setInstruction] = useState(saved.instruction);
+  const [minutes, setMinutes] = useState(saved.minutes);
   const [createdBlend, setCreatedBlend] = useState<GeneratedBlend | null>(null);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -103,7 +127,7 @@ export const AssistantView: React.FC = () => {
   const liveRef = useRef<GeminiLiveSession | null>(null);
   const taskOwner = useRef<object>({});
   const restoredTask = useRef<object | null>(null);
-  const [recoveryQuery, setRecoveryQuery] = useState<string | null>(() => getVoicePreparation() ? null : recoverVoiceQuery());
+  const [recoveryQuery, setRecoveryQuery] = useState<string | null>(() => initial?.run || getVoicePreparation(conversationId) ? null : recoverVoiceQuery());
   const finishingLive = useRef<GeminiLiveSession | null>(null);
   const alive = useRef(true), operation = useRef(0), busyRef = useRef(false);
   const actionAbort = useRef<AbortController | null>(null);
@@ -114,7 +138,7 @@ export const AssistantView: React.FC = () => {
 
   const append = (m: AssistantMessage) => {
     if (!alive.current) return;
-    messagesRef.current = [...messagesRef.current, m]; setMessages(messagesRef.current);
+    messagesRef.current = [...messagesRef.current, stampAssistantMessage(m)]; setMessages(messagesRef.current);
   };
   const flushVoice = (role?: 'user' | 'assistant') => {
     const roles: ('user' | 'assistant')[] = role ? [role] : ['user', 'assistant'];
@@ -164,11 +188,14 @@ export const AssistantView: React.FC = () => {
 
   useEffect(() => {
     const restore = () => {
-      const task = getVoicePreparation();
-      if (!task || task.owner === taskOwner.current) return;
+      const task = getVoicePreparation(conversationId);
+      if (!task) { setHistoryVersion(v=>v+1); return; }
+      if (task.owner === taskOwner.current) return;
+      const storedRun=getAssistantConversations().find(c=>c.id===conversationId)?.run;
+      if(storedRun && storedRun.id!==task.run.id)return;
       if (task.status === 'running') {
         busyRef.current = true; actionAbort.current = task.controller;
-        setBusy(true); setResponding(true); setBusyLabel('Gemini termine ta demande vocale…');
+        setBusy(true); setResponding(true); setLongResponse(Date.now()-task.run.startedAt>=30000); setBusyLabel(task.run.stage || 'Gemini termine ta demande…');
         return;
       }
       busyRef.current = false; actionAbort.current = null; setBusy(false); setResponding(false); setBusyLabel('');
@@ -176,6 +203,10 @@ export const AssistantView: React.FC = () => {
       restoredTask.current = task;
       if (task.error) { setError(task.error); setRecoveryQuery(recoverVoiceQuery()); return; }
       const result = task.result; if (!result) return;
+      if(initial?.run?.status==='done') {
+        if(initial.snapshot.needsRefresh && result.prepared){setPlan(result.answer);setPlaylistDraft(result.playlistDraft);setBlendDraft(result.blendDraft || null);setNeedsRefresh(false);}
+        return;
+      }
       messagesRef.current = result.messages; setMessages(result.messages);
       setCatalog(result.catalog); setCatalogSelected(result.selected);
       if (result.prepared) {
@@ -184,7 +215,39 @@ export const AssistantView: React.FC = () => {
       }
     };
     const unsubscribe = subscribeVoicePreparation(restore); restore(); return unsubscribe;
-  }, []);
+  }, [conversationId,initial]);
+
+  useLayoutEffect(() => {
+    if(sessionRevision.current!==accountRevision())return;
+    const snapshot=cleanConversationSnapshot({text,draftMentions,plan,catalog,selected:catalogSelected,source,extraSources,instruction,minutes,needsRefresh:needsRefresh || !!plan && plan.action!=='blend'});
+    persistedContent.current=JSON.stringify([messagesRef.current.map(stampAssistantMessage),snapshot]);
+    saveAssistantConversation(conversationId,{messages:messagesRef.current,snapshot},sessionRevision.current);
+  },[conversationId,messages,text,draftMentions,plan,catalog,catalogSelected,source,extraSources,instruction,minutes,needsRefresh]);
+  useEffect(()=>{
+    const remote=()=>{
+      setHistoryVersion(v=>v+1);
+      if(getVoicePreparation(conversationId)?.status==='running')return;
+      const row=getAssistantConversations().find(c=>c.id===conversationId);if(!row)return;
+      if(persistedContent.current===JSON.stringify([row.messages,row.snapshot]))return;
+      persistedContent.current=JSON.stringify([row.messages,row.snapshot]);
+      messagesRef.current=row.messages;setMessages(row.messages);
+      const snap=row.snapshot;setText(snap.text);setDraftMentions(snap.draftMentions);setPlan(snap.plan);setCatalog(snap.catalog);setCatalogSelected(snap.selected);setSource(snap.source);setExtraSources(snap.extraSources);setInstruction(snap.instruction);setMinutes(snap.minutes);setNeedsRefresh(snap.needsRefresh);
+      setBlendDraft(null);setPlaylistDraft(null);setDestination('');setCreatedBlend(null);
+    };
+    window.addEventListener('sb:assistant-history-remote',remote);
+    return ()=>window.removeEventListener('sb:assistant-history-remote',remote);
+  },[conversationId]);
+  void historyVersion;
+  const historicalRun=getAssistantConversations().find(c=>c.id===conversationId)?.run;
+  const localTask=getVoicePreparation(conversationId);
+  const detachedRun=historicalRun?.status==='running' && (localTask?.status!=='running' || localTask.run.id!==historicalRun.id);
+  useEffect(()=>{
+    if(!detachedRun || !youtubeService.isAuthenticated())return;
+    const timer=window.setInterval(()=>{if(document.visibilityState!=='hidden')void syncNow();},15000);
+    return ()=>clearInterval(timer);
+  },[detachedRun,syncNow]);
+  const interruptedRun=historicalRun && ['error','cancelled'].includes(historicalRun.status) && !busy;
+  const relaunch=()=>{const query=[...messagesRef.current].reverse().find(m=>m.role==='user')?.text;if(query){setNeedsRefresh(false);void send(query.replace(/^Demande vocale à préparer : /,''),{voice:query.startsWith('Demande vocale à préparer : ')});}};
 
   // Ne pas arracher la lecture d'un ancien message lors d'une réponse.
   useEffect(() => {
@@ -230,8 +293,8 @@ export const AssistantView: React.FC = () => {
 
   const send = async (raw = text, opts: { voice?: boolean; signal?: AbortSignal; attachDraft?: boolean } = {}): Promise<boolean> => {
     const request = raw.trim();
-    if (!request || request.length > 6000 || (opts.voice && getVoicePreparation()?.status === 'running') || busyRef.current || generating || ((liveRef.current || finishingLive.current) && !opts.voice)) return false;
-    if (!opts.voice) cancelVoicePreparation();
+    if (!request || request.length > 6000 || (getVoicePreparation(conversationId)?.status === 'running') || busyRef.current || generating || ((liveRef.current || finishingLive.current) && !opts.voice)) return false;
+    if (!opts.voice) cancelVoicePreparation(conversationId);
     stickToBottom.current = true;
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const controller = new AbortController(); actionAbort.current = controller;
@@ -240,23 +303,25 @@ export const AssistantView: React.FC = () => {
     const responseTimer = window.setTimeout(() => { if (alive.current && op === operation.current && !controller.signal.aborted) setLongResponse(true); }, 30000);
     const cancel = () => controller.abort();
     if (opts.signal?.aborted) controller.abort(); else opts.signal?.addEventListener('abort', cancel, { once: true });
-    const voiceTask = opts.voice ? beginVoicePreparation(taskOwner.current, request, controller) : null;
+    const voiceTask = beginVoicePreparation(taskOwner.current, request, controller, conversationId, !!opts.voice);
     const guard = () => voiceTask ? guardVoicePreparation(voiceTask) : guardFor(op, revision, serial, controller.signal);
     busyRef.current = true; setBusy(true); setResponding(true); setError(''); setNotice(null);
     const references = opts.attachDraft || opts.voice ? [...draftMentions] : [];
     if (!opts.voice && opts.attachDraft) { setText(''); setDraftMentions([]); }
     else if (!opts.voice && !draftMentions.length) setText('');
-    const requestMessage: AssistantMessage = { role: 'user', text: opts.voice ? `Demande vocale à préparer : ${request}` : request, ...(references.length ? { references } : {}) };
+    const requestMessage = stampAssistantMessage({ role: 'user', text: opts.voice ? `Demande vocale à préparer : ${request}` : request, ...(references.length ? { references } : {}) });
     if (alive.current) append(requestMessage);
     else messagesRef.current = [...messagesRef.current, requestMessage];
     const conversation = [...messagesRef.current];
+    saveAssistantConversation(conversationId,{messages:conversation,run:voiceTask.run},revision);
+    setActiveConversationId(conversationId);
     const activeProposal = plan && (plan.action === 'blend' || plan.action === 'blend_edit') ? { action: plan.action, blendEdits: plan.blendEdits, title: plan.title, source: plan.action === 'blend_edit' && blendDraft ? { type: 'blend' as const, id: blendDraft.blendId } : source === 'catalog' ? null : (() => { const i = source.indexOf(':'); return { type: source.slice(0, i) as 'playlist' | 'blend', id: source.slice(i + 1) }; })(),
       extraSources: extraSources.map((key) => { const i = key.indexOf(':'); return { type: key.slice(0, i) as 'playlist' | 'blend', id: key.slice(i + 1) }; }), instruction, durationMinutes: minutes } : undefined;
     let prepared = false;
     let preparedDraft: AssistantPlaylistDraft | null = null;
     let preparedBlendDraft: AssistantBlendDraft | null = null;
     try {
-      setBusyLabel('Lecture de ton contexte musical…');
+      updateVoicePreparation(voiceTask,'Lecture de ton contexte musical…'); setBusyLabel('Lecture de ton contexte musical…');
       let contextPlaylists = playlists.map((p) => ({ ...p }));
       const namedText = norm(conversation.filter((m) => m.role === 'user').map((m) => m.text).join(' '));
       const named = contextPlaylists.filter((p) => norm(p.title).length >= 3 && namedText.includes(norm(p.title)) && !p.tracks);
@@ -267,7 +332,7 @@ export const AssistantView: React.FC = () => {
       const ask = async (catalogData: Track[] = []) => {
         guard(); setBusyLabel('Gemini réfléchit à ta demande…');
         const r = await geminiService.converse(conversation, contextPlaylists, getStoredBlends(), exclusions,
-          { catalog: catalogData, proposal: activeProposal, signal: controller.signal, onProgress: (stage) => { if (alive.current && op === operation.current && !controller.signal.aborted) setBusyLabel(stage); } });
+          { catalog: catalogData, proposal: activeProposal, signal: controller.signal, onProgress: (stage) => { updateVoicePreparation(voiceTask,stage); if (alive.current && op === operation.current && !controller.signal.aborted) setBusyLabel(stage); } });
         guard(); return r;
       };
       const referencedTracks = references.map(mentionTrack).filter((track): track is Track => !!track);
@@ -317,7 +382,8 @@ export const AssistantView: React.FC = () => {
           reply: `${answer.reply}\n\nJe ne retrouve pas cette source dans ta bibliothèque. Précise son nom.` };
       }
       const replyText = `${answer.reply}${warnings.length ? `\n\n${warnings.join(' ')}` : ''}`;
-      append({ role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) });
+      const responseMessage = stampAssistantMessage({ role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) });
+      append(responseMessage);
       if (answer.action === 'blend_edit') {
         if (!answer.source || answer.source.type !== 'blend' || !answer.blendEdits) throw new Error('Précise le blend à modifier et les changements souhaités.');
         setBusyLabel('Vérification du blend et préparation des changements…');
@@ -346,12 +412,13 @@ export const AssistantView: React.FC = () => {
       }
       // Le travail appartient au compte, pas au montage de la vue ni au micro.
       if (voiceTask) completeVoicePreparation(voiceTask, {
-        messages: [...conversation, { role: 'assistant', text: replyText, ...(searchedThisTurn ? { catalog: found } : {}) }],
+        messages: [...conversation, responseMessage],
         answer, catalog: found, selected: recommended, prepared, playlistDraft: preparedDraft, blendDraft: preparedBlendDraft,
         source: answer.source && validSource(answer.source, contextPlaylists) ? sourceKey(answer.source) : 'catalog',
         extraSources: [...new Set(answer.extraSources.filter((s) => validSource(s, contextPlaylists) && (!answer.source || sourceKey(s) !== sourceKey(answer.source))).map(sourceKey))].slice(0, 3),
         instruction: blendInstruction(answer.instruction, conversation.filter((m) => m.role === 'user').map((m) => m.text)),
       });
+      if(alive.current)setNeedsRefresh(false);
       return prepared;
     } catch (e: any) {
       if (voiceTask) completeVoicePreparation(voiceTask, undefined, e?.message || 'Préparation vocale impossible.');
@@ -380,7 +447,7 @@ export const AssistantView: React.FC = () => {
 
   const launchBlend = async () => {
     if (!plan || (plan.action !== 'blend' && !(plan.action === 'blend_edit' && blendDraft?.mode === 'regenerate')) || !source || busyRef.current || generating) return;
-    cancelVoicePreparation();
+    cancelVoicePreparation(conversationId);
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const guard = () => guardFor(op, revision, serial);
     busyRef.current = true; setBusy(true); setError('');
@@ -417,7 +484,7 @@ export const AssistantView: React.FC = () => {
     try {
       assertAssistantBlendDraft(blendDraft); updateBlend(blendDraft.after);
       const saved = getStoredBlends().find(b => b.id === blendDraft.blendId);
-      cancelVoicePreparation(); setCreatedBlend(saved || null); setPlan(null); setBlendDraft(null); setError('');
+      cancelVoicePreparation(conversationId); setCreatedBlend(saved || null); setPlan(null); setBlendDraft(null); setError('');
       setNotice({ text: 'Blend modifié en place dans SoundBlend. Son identifiant et son expiration sont conservés. Rien n’a été envoyé à YouTube.' });
       append({ role: 'assistant', text: 'Les changements confirmés sont enregistrés dans ton blend existant.' });
     } catch (e) { setError(e instanceof Error ? e.message : 'Impossible de modifier ce blend.'); }
@@ -426,7 +493,7 @@ export const AssistantView: React.FC = () => {
   const applyPlaylist = async () => {
     const draft = playlistDraft, choice = destination;
     if (!draft || !choice || busyRef.current || generating || recovery) return;
-    cancelVoicePreparation();
+    cancelVoicePreparation(conversationId);
     const op = ++operation.current, revision = accountRevision(), serial = youtubeService.sessionRevision();
     const controller = new AbortController(); actionAbort.current = controller;
     const guard = () => guardFor(op, revision, serial, controller.signal);
@@ -641,11 +708,8 @@ export const AssistantView: React.FC = () => {
   const sourceTitle = source.startsWith('playlist:') ? playlists.find((p) => `playlist:${p.id}` === source)?.title
     : source.startsWith('blend:') ? validBlends.find((b) => `blend:${b.id}` === source)?.title : 'Ta sélection YouTube';
   const resetConversation = () => {
-    if (busyRef.current || generating || liveRef.current || finishingLive.current) return;
-    cancelVoicePreparation(); setRecoveryQuery(null);
-    messagesRef.current = []; setMessages([]); setDraftMentions([]); setMentionPickerOpen(false); setPlan(null); setBlendDraft(null); setPlaylistDraft(null); setCreatedBlend(null);
-    setCatalog([]); setCatalogSelected([]); setSource(''); setExtraSources([]); setInstruction(''); setMinutes(45);
-    setNotice(null); setError(''); setText(''); setLiveQuote(''); composerRef.current?.focus({ preventScroll: true });
+    if (generating || liveRef.current || finishingLive.current) return;
+    onSelectConversation(newConversationId());
   };
   const openCreatedBlend = () => {
     const saved = createdBlend && getStoredBlends().find((b) => b.id === createdBlend.id && Date.parse(b.expiresAt) > Date.now());
@@ -658,10 +722,11 @@ export const AssistantView: React.FC = () => {
       {liveOpen && <button id="sb-live-close" type="button" className="sa-icon" onClick={closeLive} aria-label="Fermer le mode Live"><X size={20} /></button>}
       <div><h1>{liveOpen ? 'Assistant Live' : 'Assistant'}</h1><p>{liveOpen ? 'La musique, à voix haute' : 'Le son de tes envies'}</p></div>
       <div className="sa-header-actions">
-        {!liveOpen && <button type="button" className="sa-icon" disabled={busy || finishing || generating || livePhase !== 'off'} onClick={resetConversation} aria-label="Nouvelle conversation" title="Nouvelle conversation"><Plus size={21} /></button>}
+        {!liveOpen && <button type="button" className="sa-icon" disabled={finishing || generating || livePhase !== 'off'} onClick={() => { setHistoryOpen(true); void syncNow(); }} aria-label="Nouvelle conversation" title="Discussions et nouvelle conversation" aria-haspopup="dialog"><Plus size={21} /></button>}
         <button type="button" className="sa-icon sa-privacy-trigger" onClick={() => setPrivacyOpen(true)} aria-label="Confidentialité de l’assistant" aria-haspopup="dialog" title="Confidentialité"><ShieldCheck size={18} /></button>
       </div>
     </header>
+    {historyOpen && <AssistantHistoryPanel activeId={conversationId} onSelect={id=>{setHistoryOpen(false);onSelectConversation(id);}} onNew={resetConversation} onClose={()=>setHistoryOpen(false)} onRefresh={()=>void syncNow()} syncing={syncState.phase==='envoi'} syncLabel={!youtubeService.isAuthenticated()?'Conservé sur cet appareil. Connecte le même compte Google pour synchroniser.':syncState.phase==='pret'?'Discussions synchronisées avec ce compte Google.':syncState.message || 'Synchronisation du compte en cours…'}/>}
     {privacyOpen && <AssistantPrivacy onClose={() => setPrivacyOpen(false)} />}
     {mentionPickerOpen && <AssistantMentionPicker selected={draftMentions} onToggle={toggleDraftMention} onClose={closeMentionPicker} />}
 
@@ -707,6 +772,11 @@ export const AssistantView: React.FC = () => {
         </div>)}
         {busy && !generating && <AssistantThinking stage={busyLabel || 'Lecture de ton contexte musical…'} long={longResponse} />}
       </div>
+      {assistantHistoryWarning() && <p className="sb-assistant-error" role="alert">{assistantHistoryWarning()}</p>}
+      {(detachedRun || interruptedRun || needsRefresh) && !busy && <div className="sb-assistant-notice" role="status"><span>{detachedRun ? (historicalRun.runtime===assistantRuntime ? 'Cette demande n’est plus active dans cette page.' : 'Demande lancée dans une autre page ou sur un autre appareil. Elle peut continuer là-bas tant que son navigateur reste actif. Actualise pour récupérer son résultat ; aucune tâche ne s’exécute ici.') : needsRefresh ? 'Discussion restaurée. Pour ta sécurité, l’ancienne proposition de modification doit être préparée à nouveau avant une confirmation.' : historicalRun?.error || 'Cette demande a été interrompue.'}
+        <button type="button" className="sb-assistant-inline-button" onClick={()=>void syncNow()}>Actualiser le résultat</button>
+        <button type="button" className="sb-assistant-inline-button" disabled={generating || getVoicePreparation(conversationId)?.status==='running'} onClick={relaunch}>{needsRefresh?'Repréparer la proposition':'Relancer la demande ici'}</button>
+      </span></div>}
       {error && <p className="sb-assistant-error" role="alert">{error}</p>}
       {recoveryQuery && <div className="sb-assistant-notice" role="status"><span>
         Une demande vocale a été interrompue : « {recoveryQuery} ». Seule sa consigne a été conservée, pas l’audio.
@@ -791,7 +861,7 @@ export const AssistantView: React.FC = () => {
           <button type="button" className="sa-icon sa-mention-add" aria-label="Ajouter une référence YouTube" aria-haspopup="dialog" disabled={busy || generating} onClick={() => setMentionPickerOpen(true)}><Plus size={20} /></button>
           <button type="button" className="sa-live-button" disabled={busy || finishing || generating} aria-describedby="sa-live-disclosure" onClick={() => { setLiveOpen(true); void startVoice(); }}><span className="sa-orb sa-orb--trigger" aria-hidden="true" /> Live</button>
           <span id="sa-live-disclosure" className="sr-only">Démarrer le micro et le Live avec Google via ta clé Gemini. Quotas possibles. Tu peux arrêter à tout moment.</span>
-          {responding && !generating && <button type="button" className="sa-send" aria-label="Arrêter la réponse" onClick={() => { operation.current++; cancelVoicePreparation(); setRecoveryQuery(null); finishingLive.current?.stop(); finishingLive.current = null; setFinishing(false); actionAbort.current?.abort(); actionAbort.current = null; busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); setNotice({ text: 'Réponse interrompue. Tu peux reformuler ta demande.' }); }}><X size={18} /></button>}
+          {responding && !generating && <button type="button" className="sa-send" aria-label="Arrêter la réponse" onClick={() => { operation.current++; cancelVoicePreparation(conversationId); setRecoveryQuery(null); finishingLive.current?.stop(); finishingLive.current = null; setFinishing(false); actionAbort.current?.abort(); actionAbort.current = null; busyRef.current = false; setBusy(false); setResponding(false); setBusyLabel(''); setNotice({ text: 'Réponse interrompue. Tu peux reformuler ta demande.' }); }}><X size={18} /></button>}
           <button type="submit" className="sa-send" disabled={!text.trim() || busy || finishing || generating} aria-label="Envoyer à l’assistant"><ArrowUp size={19} /></button>
         </div>
       </form>

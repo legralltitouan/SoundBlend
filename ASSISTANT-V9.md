@@ -1,6 +1,6 @@
 # Assistant V9 — laisser aboutir les analyses longues (archive)
 
-> La livraison actuelle est décrite dans `ASSISTANT-V10.md`. Elle conserve les analyses longues et le micro V8, améliore la connexion Google, les propositions de l’Assistant et ajoute la modification confirmée des blends existants en place.
+> Archive V9. La livraison actuelle est décrite dans `ASSISTANT-V11.md` : elle conserve les analyses longues et le moteur micro V8, les améliorations V10/V10.1, et ajoute les discussions sauvegardées et synchronisées par compte.
 
 ## Signalement et diagnostic
 

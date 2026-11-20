@@ -501,9 +501,11 @@ const cleGemini = (cleSaisie: string): string => cleSaisie || GEMINI_API_KEY || 
 
 export type AssistantSource = { type: 'playlist' | 'blend'; id: string };
 export type AssistantMessage = {
+  /** Stable identifiers for account-scoped conversation merging. */
+  id?: string; at?: number;
   role: 'user' | 'assistant'; text: string;
   references?: AssistantMention[];
-  /** Résultats gardés uniquement dans la conversation courante en mémoire. */
+  /** Résultats de lecture conservés avec la conversation. */
   research?: AssistantResearch;
   grounded?: GroundedResearch;
   catalog?: Track[];

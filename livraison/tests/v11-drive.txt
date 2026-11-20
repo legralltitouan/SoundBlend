@@ -1,0 +1,37 @@
+  ✓ premier échange avec le Drive simulé
+  ✓ migration Drive : anciens avis retirés, sans conversion en bannissement
+  ✓ blend expiré réellement retiré du fichier Drive et anciens pouces effacés
+  ✓ découverte d’un ancien blend valide reconstruite et synchronisée
+  ✓ envoi du geste de blocage depuis les réglages
+  ✓ blocage précis de la musique présent dans Drive
+  ✓ le blocage d’un morceau ne bannit pas son artiste
+  ✓ deuxième appareil synchronisé
+  ✓ exclusion reçue sur le second appareil
+  ✓ clé Gemini et thème reçus
+  ✓ blend et historique de découvertes reçus
+  ✓ déblocage et suppression envoyés
+  ✓ suppression réelle du blend et tombstone dans le fichier Drive
+  ✓ déblocage représenté par un tombstone
+  ✓ appareil périmé relit le Drive avant son propre envoi
+  ✓ la vieille copie ne ressuscite pas le blend supprimé
+  ✓ la vieille copie ne réactive pas l’exclusion et ajoute sa propre modification
+  ✓ la modification du second appareil revient au premier
+  ✓ une suppression de titres gagne sur une ancienne copie plus longue
+  ✓ blend éphémère effectivement présent avant expiration
+  ✓ le minuteur retire le blend du JSON Drive après expiration
+  ✓ panne réseau signalée sans effacement local
+  ✓ modification hors ligne conservée en attente
+  ✓ reprise après rétablissement du réseau
+  ✓ modification hors ligne effectivement envoyée
+  ✓ suppression de la clé et changement de thème synchronisés
+  ✓ doublon Drive fusionné et conservé sans DELETE à risque
+  ✓ doublon modifié après lecture conservé au lieu d’être supprimé
+  ✓ relecture supplémentaire planifiée après conflit détecté
+  ✓ modification concurrente relue et fusionnée au cycle suivant sans suppression des copies
+  ✓ changement distant pendant la première lecture : nouveau contrôle avant écriture
+  ✓ la modification détectée au précontrôle est effectivement fusionnée avant PATCH
+  ✓ conflits répétés : arrêt borné et état en attente, sans succès fictif
+  ✓ aucun PATCH aveugle après épuisement des contrôles
+  ✓ reprise après stabilisation, modifications concurrentes conservées
+
+35/35 contrôles Drive simulés réussis

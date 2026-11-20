@@ -25,7 +25,7 @@
 ✓ références conservées dans le contexte des relances
 ✓ simple question sans génération ni écriture YouTube automatique
 ✓ aucun guillemet ni doublon de tags au-dessus du champ
-✓ références et messages non persistés dans localStorage
+✓ références et messages conservés uniquement dans l’historique du périmètre local, sans clés API dans sa structure
 ✓ effacer le token retire le contexte ; texte libre non transformé en fausse référence
 ✓ limite de huit références, sans empêcher leur désélection
 ✓ Échap ferme le picker et garde les tags dans le prompt

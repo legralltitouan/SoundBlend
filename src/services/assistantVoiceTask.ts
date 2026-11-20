@@ -4,6 +4,7 @@ import type { AssistantMessage, AssistantReply } from './gemini';
 import type { AssistantPlaylistDraft } from './assistantPlaylist';
 import type { AssistantBlendDraft } from './assistantBlend';
 import type { Track } from '../types';
+import { assistantRuntime, cleanConversationSnapshot, getAssistantConversations, saveAssistantConversation, type ConversationRun } from './assistantHistory';
 
 export type VoicePreparationResult = {
   messages: AssistantMessage[]; answer: AssistantReply; catalog: Track[]; selected: string[];
@@ -13,50 +14,77 @@ export type VoicePreparationResult = {
 export type VoicePreparation = {
   owner: object; query: string; controller: AbortController; revision: number; serial: number;
   status: 'running' | 'done' | 'error'; result?: VoicePreparationResult; error?: string; journalKey: string;
+  conversationId?: string; run: ConversationRun;
 };
 const KEY = 'soundblend_assistant_voice_pending_v1';
 const MAX_AGE = 30 * 60 * 1000;
-let task: VoicePreparation | null = null;
+const tasks = new Map<string,VoicePreparation>();
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach(fn => fn());
 export function subscribeVoicePreparation(fn: () => void): () => void { listeners.add(fn); return () => { listeners.delete(fn); }; }
-export function getVoicePreparation(): VoicePreparation | null {
-  return task && task.revision === accountRevision() && task.serial === youtubeService.sessionRevision() ? task : null;
+export function getVoicePreparation(conversationId?: string): VoicePreparation | null {
+  const value = conversationId ? tasks.get(conversationId) : [...tasks.values()].at(-1);
+  return value && value.revision === accountRevision() && value.serial === youtubeService.sessionRevision() ? value : null;
 }
-/** Seulement la consigne textuelle acceptée, jamais de clé, audio ou historique.
- * Après destruction du processus, reprise en lecture seule sur bouton explicite. */
+/** Legacy voice-only crash journal. Conversation history is stored separately, by account. */
 export function recoverVoiceQuery(): string | null {
   try {
     const value = JSON.parse(localStorage.getItem(scopedStorageKey(KEY)) || 'null');
     if (typeof value?.query === 'string' && value.query.trim() && value.query.length <= 6000
       && Number.isFinite(value.at) && Date.now() >= value.at && Date.now() - value.at < MAX_AGE) return value.query;
     localStorage.removeItem(scopedStorageKey(KEY));
-  } catch { /* stockage indisponible : la tâche en mémoire reste fonctionnelle */ }
+  } catch { /* memory task remains functional */ }
   return null;
 }
-export function forgetVoiceQuery(): void { try { localStorage.removeItem(scopedStorageKey(KEY)); } catch { /* stockage indisponible */ } }
-export function beginVoicePreparation(owner: object, query: string, controller: AbortController): VoicePreparation {
-  if (getVoicePreparation()?.status === 'running') throw new Error('Une demande vocale est déjà en préparation.');
-  task = { owner, query, controller, revision: accountRevision(), serial: youtubeService.sessionRevision(), status: 'running', journalKey: scopedStorageKey(KEY) };
-  try { localStorage.setItem(task.journalKey, JSON.stringify({ query, at: Date.now() })); } catch { /* pas de fausse garantie de reprise */ }
-  notify(); return task;
+export function forgetVoiceQuery(): void { try { localStorage.removeItem(scopedStorageKey(KEY)); } catch { /* unavailable */ } }
+export function beginVoicePreparation(owner: object, query: string, controller: AbortController, conversationId?: string, voice = true): VoicePreparation {
+  if (getVoicePreparation(conversationId)?.status === 'running') throw new Error('Une demande est déjà en préparation dans cette discussion.');
+  const previous=getAssistantConversations().find(c=>c.id===conversationId);
+  // Logical ordering survives a second device whose clock is behind.
+  const startedAt=Math.max(Date.now(),(previous?.updatedAt || 0)+1,(previous?.run?.startedAt || 0)+1);
+  const value: VoicePreparation = { owner, query, controller, revision: accountRevision(), serial: youtubeService.sessionRevision(), status: 'running', journalKey: voice ? scopedStorageKey(KEY) : '', conversationId,
+    run: { id:`run-${crypto.randomUUID()}`, runtime:assistantRuntime, startedAt,status:'running',stage:'Lecture de ton contexte musical…',error:'' } };
+  const retained=new Set(getAssistantConversations().map(c=>c.id));
+  for(const [key,old] of tasks)if(old.status!=='running' && old.conversationId && !retained.has(old.conversationId))tasks.delete(key);
+  tasks.set(conversationId || 'legacy',value);
+  if (voice) try { localStorage.setItem(value.journalKey, JSON.stringify({ query, at: Date.now() })); } catch { /* no false recovery guarantee */ }
+  if (conversationId) saveAssistantConversation(conversationId,{run:value.run},value.revision);
+  notify(); return value;
 }
 export function guardVoicePreparation(value: VoicePreparation): void {
   assertAccountRevision(value.revision);
-  if (task !== value || value.controller.signal.aborted || value.serial !== youtubeService.sessionRevision()) throw new Error('Préparation vocale interrompue.');
+  if (tasks.get(value.conversationId || 'legacy') !== value || value.controller.signal.aborted || value.serial !== youtubeService.sessionRevision()) throw new Error('Préparation interrompue.');
+}
+export function updateVoicePreparation(value: VoicePreparation, stage: string): void {
+  guardVoicePreparation(value);
+  if (value.run.stage === stage) return;
+  value.run = {...value.run,stage:stage.slice(0,500)};
+  if (value.conversationId) saveAssistantConversation(value.conversationId,{run:value.run},value.revision);
+  notify();
 }
 export function completeVoicePreparation(value: VoicePreparation, result?: VoicePreparationResult, error?: string): void {
   try { guardVoicePreparation(value); } catch { return; }
   value.status = error ? 'error' : 'done'; value.result = result; value.error = error;
-  if (!error) { try { localStorage.removeItem(value.journalKey); } catch { /* stockage indisponible */ } }
+  value.run={...value.run,status:error?'error':'done',error:(error || '').slice(0,2000),stage:''};
+  if (value.conversationId) {
+    const old = getAssistantConversations().find(c=>c.id===value.conversationId);
+    saveAssistantConversation(value.conversationId,{run:value.run,...(result ? {messages:result.messages,snapshot:cleanConversationSnapshot({...(old?.snapshot || {}),plan:result.prepared ? result.answer : old?.snapshot.plan,catalog:result.catalog,selected:result.selected,source:result.source,extraSources:result.extraSources,instruction:result.instruction,minutes:result.answer.durationMinutes,needsRefresh:result.prepared && result.answer.action!=='blend'})} : {})},value.revision);
+  }
+  if (!error && value.journalKey) try { localStorage.removeItem(value.journalKey); } catch { /* unavailable */ }
   notify();
 }
-export function ownsVoicePreparation(controller: AbortController | null): boolean { return !!controller && getVoicePreparation()?.controller === controller && task?.status === 'running'; }
-export function cancelVoicePreparation(): void {
-  if (task) { task.controller.abort(); try { localStorage.removeItem(task.journalKey); } catch { /* stockage indisponible */ } }
-  task = null; forgetVoiceQuery(); notify();
+export function ownsVoicePreparation(controller: AbortController | null): boolean { return !!controller && [...tasks.values()].some(t=>t.controller===controller && t.revision===accountRevision() && t.serial===youtubeService.sessionRevision() && t.status==='running'); }
+export function cancelVoicePreparation(conversationId?: string): void {
+  for (const [key,value] of tasks) {
+    if (conversationId && value.conversationId!==conversationId) continue;
+    value.controller.abort();
+    if (value.journalKey) try { localStorage.removeItem(value.journalKey); } catch { /* unavailable */ }
+    if (value.status==='running' && value.conversationId) try { saveAssistantConversation(value.conversationId,{run:{...value.run,status:'cancelled',stage:'',error:'Demande interrompue. Tu peux la relancer.'}},value.revision); } catch { /* never write into another account */ }
+    tasks.delete(key);
+  }
+  if (!conversationId) forgetVoiceQuery(); notify();
 }
 if (typeof window !== 'undefined') {
-  window.addEventListener('sb:auth-changing', cancelVoicePreparation);
-  window.addEventListener('sb:auth-expired', cancelVoicePreparation);
+  window.addEventListener('sb:auth-changing', () => cancelVoicePreparation());
+  window.addEventListener('sb:auth-expired', () => cancelVoicePreparation());
 }

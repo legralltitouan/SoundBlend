@@ -6,6 +6,30 @@
   ✓ consigne : la hauteur diminue aussi quand le texte est raccourci
   ✓ slider de durée accessible au clavier, valeur exacte
   ✓ raccourci de durée synchronisé avec le slider
+  ✓ piste réellement peinte synchronisée 10 min / 390 light
+  ✓ piste réellement peinte synchronisée 180 min / 390 light
+  ✓ piste réellement peinte synchronisée 10 min / 390 light
+  ✓ piste réellement peinte synchronisée 11 min / 390 light
+  ✓ remplissage suit le glissement en continu / 390 light
+  ✓ raccourci 2 h : piste et curseur synchronisés / 390 light
+  ✓ piste réellement peinte synchronisée 10 min / 390 dark
+  ✓ piste réellement peinte synchronisée 180 min / 390 dark
+  ✓ piste réellement peinte synchronisée 10 min / 390 dark
+  ✓ piste réellement peinte synchronisée 11 min / 390 dark
+  ✓ remplissage suit le glissement en continu / 390 dark
+  ✓ raccourci 2 h : piste et curseur synchronisés / 390 dark
+  ✓ piste réellement peinte synchronisée 10 min / 1280 light
+  ✓ piste réellement peinte synchronisée 180 min / 1280 light
+  ✓ piste réellement peinte synchronisée 10 min / 1280 light
+  ✓ piste réellement peinte synchronisée 11 min / 1280 light
+  ✓ remplissage suit le glissement en continu / 1280 light
+  ✓ raccourci 2 h : piste et curseur synchronisés / 1280 light
+  ✓ piste réellement peinte synchronisée 10 min / 1280 dark
+  ✓ piste réellement peinte synchronisée 180 min / 1280 dark
+  ✓ piste réellement peinte synchronisée 10 min / 1280 dark
+  ✓ piste réellement peinte synchronisée 11 min / 1280 dark
+  ✓ remplissage suit le glissement en continu / 1280 dark
+  ✓ raccourci 2 h : piste et curseur synchronisés / 1280 dark
   ✓ recherche locale de sources visuelles
   ✓ maximum de quatre sources respecté dans le sélecteur visuel
   ✓ Échap ferme le sélecteur, focus rendu au bouton
@@ -49,4 +73,4 @@
   ✓ proposition 1280 dark : aucun débordement
   ✓ axe réglages 1280 dark : []
   ✓ axe sources 1280 dark : []
-51 contrôles de redesign V10 réussis, dont 8 audits axe
+75 contrôles de redesign V10 réussis, dont 8 audits axe

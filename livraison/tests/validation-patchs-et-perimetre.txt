@@ -1,10 +1,23 @@
-Validation de livraison V10
-Source de référence incrémentale : ZIP V9 livré.
-Patch incrémental : git apply --check, application puis comparaison octet par octet : OK.
-Patch complet : référence commit 51f92aa586dfc63119f697acf1ec8781128355e1.
-git apply --check, application puis comparaison octet par octet : OK.
-235 fichiers source/documentation/tests comparés pour chaque patch.
-Les annexes livraison/ ne font pas partie des patchs ; elles sont fournies avec le ZIP.
-Patch incrémental : 193649 octets. Patch complet : 841865 octets.
-Identité V9 conservée : src/services/geminiLive.ts, src/components/views/AssistantPrivacy.tsx, package.json, package-lock.json, public/sw.js.
-Aucun commit du dépôt de travail ni déploiement effectué.
+Validation livraison V11
+Référence incrémentale : archive V10.1 livrée.
+Référence complète : commit 51f92aa586dfc63119f697acf1ec8781128355e1.
+Pour chacun des deux patchs : git apply --check OK, application OK, comparaison des 243 fichiers octet par octet OK.
+Patch incrémental : 152398 octets ; patch complet : 994409 octets.
+Audio geminiLive.ts, navbar Shell.tsx, package.json, package-lock.json et public/sw.js identiques à l’archive V10.1.
+Les annexes livraison/ sont incluses au ZIP, hors patchs.
+Aucun commit dans le dépôt de travail, push ni déploiement.
+
+Fichiers nouveaux ou modifiés depuis V10.1 :
+ASSISTANT-V11.md
+ASSISTANT-V9.md
+src/components/views/AssistantHistoryPanel.tsx
+src/components/views/AssistantPrivacy.tsx
+src/components/views/AssistantView.css
+src/components/views/AssistantView.tsx
+src/services/assistantHistory.ts
+src/services/assistantVoiceTask.ts
+src/services/drive.ts
+src/services/gemini.ts
+verification/t-assistant-continuation-v11.mjs
+verification/t-assistant-history-v11.mjs
+verification/t-assistant-mentions-v11.mjs

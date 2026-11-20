@@ -1,3 +1,4 @@
+import { getAssistantConversations, validAssistantConversations, conversationForDrive, mergeRemoteAssistantConversations, confirmAssistantConversations, type AssistantConversation } from './assistantHistory';
 /* Synchronisation privée dans Google Drive appDataFolder.
    Chaque cycle vérifie le compte et le jeton à chaque reprise asynchrone,
    relit les fichiers, fusionne, vérifie juste avant d'écrire puis relit.
@@ -43,6 +44,7 @@ export type DonneesSync = {
   suppressionsBlends?: Record<string, BlendTombstone>;
   portrait?: SoundPortrait | null;
   blends?: GeneratedBlend[];
+  assistantConversations?: AssistantConversation[];
 };
 export type EtatSync = {
   phase: 'inactif' | 'sans-portee' | 'expire' | 'attente' | 'pret' | 'envoi' | 'erreur';
@@ -57,7 +59,7 @@ const poserEtat = (e: Partial<EtatSync>) => { etat = { ...etat, ...e, enAttente:
 export const etatSync = (): EtatSync => etat;
 
 const lireDirty = (): boolean => {
-  try { return !!scopedGetItem(DIRTY_KEY) || settingsEnAttente() || modeEnAttente()
+  try { return !!scopedGetItem(DIRTY_KEY) || getAssistantConversations().some(c=>c._pending) || settingsEnAttente() || modeEnAttente()
     || getExclusionRecords().some((r) => r._pending) || getStoredBlends().some((b) => b._pending) || !!getStoredPortrait()?._pending; }
   catch { return true; }
 };
@@ -154,9 +156,10 @@ const clefsConnues = (v: Record<string, any>, keys: string[]) => Object.keys(v).
     la réécriture de ce fichier pourrait sinon effacer des données distantes. */
 const fichierValide = (d: unknown): d is DonneesSync => {
   if (!objet(d) || (d.schema !== 1 && d.schema !== 2)) return false;
-  const known = ['schema', 'modifie', 'appareil', 'apparence', 'reglages', 'exclusions', 'decouvertes', 'suppressionsBlends', 'portrait', 'blends'];
+  const known = ['schema', 'modifie', 'appareil', 'apparence', 'reglages', 'exclusions', 'decouvertes', 'suppressionsBlends', 'portrait', 'blends', 'assistantConversations'];
   if (d.schema === 1) known.push('gouts', 'avis');
   if (!clefsConnues(d, known)) return false;
+  if (d.assistantConversations !== undefined && !validAssistantConversations(d.assistantConversations)) return false;
   if (d.modifie !== undefined && typeof d.modifie !== 'string') return false;
   if (d.appareil !== undefined && typeof d.appareil !== 'string') return false;
   if (d.apparence !== undefined && (!objet(d.apparence) || !clefsConnues(d.apparence, ['mode', 'at'])
@@ -239,6 +242,7 @@ const composer = (): DonneesSync => ({
   suppressionsBlends: getBlendTombstones(),
   portrait: getStoredPortrait() ? portraitPourDrive(getStoredPortrait()!) : null,
   blends: getStoredBlends().map(blendPourDrive),
+  assistantConversations: getAssistantConversations().map(conversationForDrive),
 });
 const logicalTime = (n: unknown): number => {
   const t = Number(n || 0);
@@ -246,6 +250,7 @@ const logicalTime = (n: unknown): number => {
   return t;
 };
 const appliquerDistant = (d: DonneesSync): void => {
+  if (d.assistantConversations) mergeRemoteAssistantConversations(d.assistantConversations);
   const remoteExclusions = Array.isArray(d.exclusions) ? d.exclusions.map(exclusionPourDrive) : [];
   remoteExclusions.forEach((r) => logicalTime(r?.updatedAt));
   writeExclusionRecords(fusionnerExclusionsAvecGestesLocaux(getExclusionRecords(), remoteExclusions));
@@ -289,7 +294,7 @@ const appliquerDistant = (d: DonneesSync): void => {
 };
 const fingerprint = (d: DonneesSync | null): string => d ? JSON.stringify({
   schema: d.schema, apparence: d.apparence, reglages: d.reglages, exclusions: d.exclusions,
-  decouvertes: d.decouvertes, suppressionsBlends: d.suppressionsBlends, portrait: d.portrait, blends: d.blends,
+  decouvertes: d.decouvertes, suppressionsBlends: d.suppressionsBlends, portrait: d.portrait, blends: d.blends, assistantConversations: d.assistantConversations || [],
 }) : '';
 const signalerErreur = (e: unknown) => {
   const msg = e instanceof Error ? e.message : String(e || '');
@@ -360,6 +365,7 @@ const cycle = (): Promise<boolean> => {
       if (generation === before && scopedGetItem(DIRTY_KEY) === marqueur && fingerprint(confirmed) === fingerprint(merged)) {
         // N'acquitter que les versions effectivement relues ; un geste plus
         // récent conserve son marqueur et sera renvoyé au cycle suivant.
+        confirmAssistantConversations(sent.assistantConversations || []);
         confirmerExclusions(sent.exclusions || []); confirmerBlends(sent.blends || []);
         confirmerSettings(sent.reglages?.at || 0); confirmerMode(sent.apparence?.at || 0); confirmerPortrait(sent.portrait);
         if (!dirty(false)) throw new Error('Stockage local indisponible : état de synchronisation non enregistré.');
@@ -409,6 +415,7 @@ export const oublierSync = (): void => {
 export const enAttente = (): boolean => aEnvoyer;
 
 if (typeof window !== 'undefined') {
+  window.addEventListener('sb:assistant-history-dirty', planifierEnvoi);
   window.addEventListener('sb:auth-changing', oublierSync);
   window.addEventListener('sb:account-changed', () => {
     oublierSync(); generation = 0; aEnvoyer = lireDirty(); pendingNonPersistant = false;

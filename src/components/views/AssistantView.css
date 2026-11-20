@@ -273,9 +273,13 @@ html .sa-mention-picker input:focus-visible, html .sa-mention-picker input:focus
 .sa-duration-control > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .sa-duration-control label { font-size: 12px; color: var(--ink-2); }
 .sa-duration-control output { font-size: 19px; letter-spacing: -.04em; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.sb-assistant-studio input[type='range']#sa-duration { display: block; width: 100%; height: 5px; margin: 24px 0; padding: 0; border: 0; border-radius: 99px; appearance: none; background: linear-gradient(to right, var(--ink) var(--sa-range), var(--line-2) var(--sa-range)); cursor: pointer; }
-#sa-duration::-webkit-slider-thumb { width: 22px; height: 22px; border-radius: 50%; appearance: none; background: var(--ink); border: 4px solid var(--bg); box-shadow: 0 0 0 1px var(--line-2), 0 2px 8px #0002; }
-#sa-duration::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--ink); border: 4px solid var(--bg); }
+.sb-assistant-studio input[type='range']#sa-duration { display: block; width: 100%; height: 22px; margin: 16px 0; padding: 0; border: 0; border-radius: 99px; appearance: none; background: transparent; cursor: pointer; }
+/* Override the global track: its default --fill is a fixed 50%. */
+#sa-duration::-webkit-slider-runnable-track { height: 5px; border-radius: 99px; background: linear-gradient(to right, var(--accent) var(--sa-range), var(--line-2) var(--sa-range)); }
+#sa-duration::-moz-range-track { height: 5px; border-radius: 99px; background: var(--line-2); }
+#sa-duration::-moz-range-progress { height: 5px; border-radius: 99px; background: var(--accent); }
+#sa-duration::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -8.5px; border-radius: 50%; appearance: none; background: var(--ink); border: 4px solid var(--bg); box-shadow: 0 0 0 1px var(--line-2), 0 2px 8px #0002; }
+#sa-duration::-moz-range-thumb { box-sizing: border-box; width: 22px; height: 22px; border-radius: 50%; background: var(--ink); border: 4px solid var(--bg); }
 .sa-duration-presets { display: flex; gap: 7px; flex-wrap: wrap; }
 .sa-duration-presets button, .sa-source-filters button { min-height: 34px; padding: 7px 13px; border-radius: 99px; border: 1px solid var(--line-2); font-size: 11px; color: var(--ink-2); }
 .sa-duration-presets button[aria-pressed='true'], .sa-source-filters button[aria-pressed='true'] { color: var(--bg); background: var(--ink); border-color: var(--ink); }
@@ -319,3 +323,17 @@ html .sa-mention-picker input:focus-visible, html .sa-mention-picker input:focus
 .sa-source-thumbnail { position: relative; display: grid; place-items: center; background: var(--bg-3); border-radius: 12px; overflow: hidden; flex: none; }
 .sa-source-thumbnail img { position: absolute; width: 100%; height: 100%; object-fit: cover; inset: 0; }
 .sa-source-results button > .sa-source-thumbnail { flex: none !important; }
+
+/* Account-scoped conversations: use the existing private-dialog visual language. */
+.sa-history { width: min(480px, calc(100vw - 28px)); max-height: min(760px, calc(100dvh - 32px)); overflow-y: auto; }
+.sa-history-list { list-style: none; padding: 0; margin: 18px 0; display: grid; gap: 8px; }
+.sa-history-list li > button { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 14px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg-2); color: var(--ink); }
+.sa-history-list li > button[aria-current='true'] { border-color: var(--ink-3); }
+.sa-history-symbol { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: 11px; background: var(--bg); }
+.sa-history-list button > span:nth-child(2) { flex: 1; min-width: 0; }
+.sa-history-list b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 13px; font-weight: 550; line-height: 1.5; }
+.sa-history-list small { display: block; margin-top: 5px; font-size: 11px; color: var(--ink-2); }
+.sa-history-list button > svg { flex-shrink: 0; }
+.sa-history-sync { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+.sa-history-sync p { font-size: 12px; line-height: 1.6; color: var(--ink-2); margin: 0; }
+.sa-history-sync button { flex-shrink: 0; }
