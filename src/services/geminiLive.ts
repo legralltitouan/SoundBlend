@@ -1,3 +1,4 @@
+import { LiveVoiceOutput } from './liveVoiceOutput';
 import { accountRevision, assertAccountRevision } from './accountScope';
 import { youtubeService } from './youtube';
 
@@ -152,6 +153,7 @@ export class GeminiLiveSession {
   private input: MediaStreamAudioSourceNode | null = null;
   private processor: AudioWorkletNode | ScriptProcessorNode | null = null;
   private silentGain: GainNode | null = null;
+  private voiceOutput: LiveVoiceOutput | null = null;
   private captureEngine = '';
   private chunks = 0;
   private sentChunks = 0;
@@ -220,13 +222,14 @@ export class GeminiLiveSession {
         const AudioClass = window.AudioContext || (window as any).webkitAudioContext;
         const old = audioRuntime;
         const context = new AudioClass(); this.activationRebuilt = true;
-        this.stopAudio(); this.detachCapture();
+        this.stopAudio(); this.voiceOutput?.dispose(); this.voiceOutput = null; this.detachCapture();
         if (old) clearUnlock(old);
         audioRuntime = { context, owner: this, idle: Promise.resolve(), suspending: false, availableAt: 0, unlock: null };
         this.context = context;
         if (old && old.context.state !== 'closed') void old.context.close().catch(() => {});
       }
       unlockAudio(this);
+      if(this.context && !this.voiceOutput)this.voiceOutput=new LiveVoiceOutput(this.context);
     }
     catch (error) { this.fail(error instanceof Error ? error.message : 'Activation audio impossible.'); }
   }
@@ -304,6 +307,7 @@ export class GeminiLiveSession {
     this.armStartupTimeout();
     try {
       const audio = leaseAudio(this, AudioClass); this.context = audio.context;
+      this.voiceOutput = new LiveVoiceOutput(audio.context);
       // Le premier appel reste dans le clic. Une RELANCE attend uniquement la
       // suspension précédente et le bref relâchement matériel, pas le réseau.
       if (audio.waiting) this.callbacks.onPhase('connecting', 'Libération de la session audio précédente…');
@@ -624,12 +628,15 @@ export class GeminiLiveSession {
     for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
     // Éviter un retard audio infini si le navigateur est suspendu.
     if (this.nextTime - ctx.currentTime > 30) { this.stopAudio(); this.callbacks.onPhase(this.muted ? 'muted' : 'listening', 'Sortie audio réinitialisée après un trop long retard.'); }
-    const source = ctx.createBufferSource(); source.buffer = buffer; source.connect(ctx.destination);
+    const source = ctx.createBufferSource(); source.buffer = buffer;
+    if(!this.voiceOutput)this.voiceOutput=new LiveVoiceOutput(ctx);
+    this.voiceOutput.resume(); source.connect(this.voiceOutput.input);
     this.playing.add(source); this.callbacks.onSpeaking?.(true);
     source.onended = () => { this.playing.delete(source); if (!this.playing.size) this.callbacks.onSpeaking?.(false); try { source.disconnect(); } catch { /* déjà fermé */ } };
     const at = Math.max(ctx.currentTime + 0.025, this.nextTime); source.start(at); this.nextTime = at + buffer.duration;
   }
   private stopAudio(): void {
+    this.voiceOutput?.pause();
     for (const source of this.playing) { try { source.stop(); source.disconnect(); } catch { /* déjà arrêté */ } }
     this.playing.clear(); this.nextTime = 0; this.callbacks.onSpeaking?.(false);
   }
@@ -648,7 +655,7 @@ export class GeminiLiveSession {
     try { this.send({ realtimeInput: { audioStreamEnd: true } }); } catch { this.stop(); return false; }
     if (this.captureTimer) clearInterval(this.captureTimer); this.captureTimer = null;
     this.detachCapture(); this.media?.getTracks().forEach(t => t.stop()); this.media = null;
-    this.stopAudio(); releaseAudio(this); this.context = null;
+    this.stopAudio(); this.voiceOutput?.dispose(); this.voiceOutput = null; releaseAudio(this); this.context = null;
     this.callbacks.onLevel?.(0); this.callbacks.onPhase('off');
     const timeout = () => { this.callbacks.onDrained?.(true); this.stop(); };
     this.drainTimer = setTimeout(() => {
@@ -680,6 +687,7 @@ export class GeminiLiveSession {
     this.detachCapture();
     this.media?.getTracks().forEach((t) => t.stop()); this.media = null;
     try { this.ws?.close(); } catch { /* déjà fermée */ } this.ws = null;
+    this.voiceOutput?.dispose(); this.voiceOutput = null;
     releaseAudio(this);
     this.context = null; this.callbacks.onLevel?.(0); this.reportCapture(); this.callbacks.onPhase('off');
   }

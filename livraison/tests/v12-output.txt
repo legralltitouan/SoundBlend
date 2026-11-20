@@ -1,0 +1,13 @@
+  ✓ stockage absent/corrompu ignoré, préférence valide enregistrée
+  ✓ geste strict : une seule sortie multimédia active
+  ✓ GainNode : atténuation réelle de 80 % du signal PCM
+  ✓ 0 % coupe réellement la voix
+  ✓ pause/interruption puis reprise du même élément
+  ✓ dispose idempotent : aucun élément ni flux de sortie restant
+  ✓ reject : repli direct unique, gain conservé, élément supprimé
+  ✓ throw : repli direct unique, gain conservé, élément supprimé
+  ✓ pending : repli direct unique, gain conservé, élément supprimé
+  ✓ error : repli direct unique, gain conservé, élément supprimé
+  ✓ résolution play tardive après arrêt : aucune résurrection
+  ✓ aucun rejet non géré
+12 contrôles audio V12 réussis

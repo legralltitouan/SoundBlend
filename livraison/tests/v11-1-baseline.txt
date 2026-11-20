@@ -1,7 +1,0 @@
-  ✓ flux conservé via Bibliothèque
-  ✓ flux conservé via Blends
-  ✓ flux conservé via Réglages
-  ✓ flux conservé via Bibliothèque
-  ✓ flux conservé via Réglages
-  ✓ vrai parseur SSE : réponse au retour, plus de spinner
-  ✓ aucune exception

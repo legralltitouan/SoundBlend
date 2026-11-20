@@ -337,3 +337,13 @@ html .sa-mention-picker input:focus-visible, html .sa-mention-picker input:focus
 .sa-history-sync { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
 .sa-history-sync p { font-size: 12px; line-height: 1.6; color: var(--ink-2); margin: 0; }
 .sa-history-sync button { flex-shrink: 0; }
+
+.sa-live-volume { width: min(100%, 420px); margin: 14px auto 0; text-align: left; color: var(--ink-2); font-size: 12px; }
+.sa-live-volume summary { display: flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; padding: 10px 8px; list-style: none; }
+.sa-live-volume summary::-webkit-details-marker { display: none; }
+.sa-live-volume[open] { border: 1px solid var(--line); border-radius: 16px; padding: 0 16px 12px; background: var(--bg); }
+.sa-live-volume p { line-height: 1.6; font-size: 11px; }
+.sa-live-volume > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 15px 0 6px; }
+.sa-live-volume label { font-size: 11px; }
+.sa-live-volume output { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sa-live-volume input[type='range'] { margin: 8px 0 14px; }

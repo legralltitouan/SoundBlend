@@ -72,11 +72,11 @@ export const AssistantSourcePalette: React.FC<{
   </div>;
 };
 const AssistantSourceDialog: React.FC<{ choices: AssistantSourceChoice[]; selected: string[]; onToggle: (key: string) => void; onClose: () => void }> = ({ choices, selected, onToggle, onClose }) => {
-  const dialog = useRef<HTMLDialogElement>(null), input = useRef<HTMLInputElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all'), [limit, setLimit] = useState(20);
   useEffect(() => {
     const element = dialog.current, opener = document.activeElement as HTMLElement, overflow = document.body.style.overflow;
-    element?.showModal(); document.body.style.overflow = 'hidden'; input.current?.focus({ preventScroll: true });
+    element?.showModal(); document.body.style.overflow = 'hidden';
     const viewport = window.visualViewport;
     const fit = () => { const height = viewport?.height || innerHeight; element?.style.setProperty('--sa-picker-available', `${height}px`); element?.style.setProperty('--sa-picker-inset', `${Math.max(0, innerHeight - height - (viewport?.offsetTop || 0))}px`); };
     fit(); viewport?.addEventListener('resize', fit);
@@ -84,8 +84,8 @@ const AssistantSourceDialog: React.FC<{ choices: AssistantSourceChoice[]; select
   }, []);
   const matches = choices.filter(c => (filter === 'all' || c.kind === filter) && norm(c.title).includes(norm(query)));
   return createPortal(<dialog ref={dialog} className="sb-action-sheet sb-action-sheet--exclusions sa-mention-picker sa-source-dialog" aria-labelledby="sa-source-title" aria-describedby="sa-source-intro" onCancel={onClose} onClick={e => { if (e.target === e.currentTarget) { const r = e.currentTarget.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) onClose(); } }}>
-    <span className="sb-action-grip" aria-hidden="true" /><header className="sb-exclusions-header sb-action-heading"><div><p className="sb-action-eyebrow">LES COULEURS DE TON BLEND</p><h2 id="sa-source-title">Tes inspirations</h2><p id="sa-source-intro">Choisis jusqu’à quatre sources à faire dialoguer.</p></div><button type="button" className="sb-action-close" aria-label="Fermer les sources musicales" onClick={onClose}><X size={19} /></button></header>
-    <div className="sb-exclusions-controls"><div className="sb-exclusions-search"><Search size={17} /><input ref={input} aria-label="Rechercher une source musicale" placeholder="Une playlist, un blend…" value={query} onChange={e => { setQuery(e.target.value); setLimit(20); }} />{query && <button type="button" aria-label="Effacer la recherche de sources" onClick={() => setQuery('')}><X size={15} /></button>}</div>
+    <span className="sb-action-grip" aria-hidden="true" /><header className="sb-exclusions-header sb-action-heading"><div><p className="sb-action-eyebrow">LES COULEURS DE TON BLEND</p><h2 id="sa-source-title">Tes inspirations</h2><p id="sa-source-intro">Choisis jusqu’à quatre sources à faire dialoguer.</p></div><button type="button" className="sb-action-close" aria-label="Fermer les sources musicales" autoFocus onClick={onClose}><X size={19} /></button></header>
+    <div className="sb-exclusions-controls"><div className="sb-exclusions-search"><Search size={17} /><input aria-label="Rechercher une source musicale" placeholder="Une playlist, un blend…" value={query} onChange={e => { setQuery(e.target.value); setLimit(20); }} />{query && <button type="button" aria-label="Effacer la recherche de sources" onClick={() => setQuery('')}><X size={15} /></button>}</div>
       <div className="sa-source-filters" role="group" aria-label="Filtrer les sources">{[['all', 'Tout'], ['playlist', 'Playlists'], ['blend', 'Blends'], ['catalog', 'Titres choisis']].map(([key, text]) => <button type="button" key={key} aria-pressed={filter === key} onClick={() => { setFilter(key); setLimit(20); }}>{text}</button>)}</div></div>
     <div className="sb-exclusions-scroll"><ul className="sa-source-results">{matches.slice(0, limit).map(choice => {
       const chosen = selected.includes(choice.key); return <li key={choice.key}><button type="button" aria-label={`${chosen ? 'Retirer' : 'Ajouter'} ${choice.title}`} aria-pressed={chosen} disabled={!chosen && selected.length >= 4} onClick={() => onToggle(choice.key)}><SourceArtwork choice={choice} size={48} /><span><b>{choice.title}</b><small>{choice.kind === 'blend' ? 'Blend' : choice.kind === 'catalog' ? 'Titres YouTube choisis' : 'Playlist'} · {choice.count} titres</small></span><i aria-hidden="true">{chosen ? <Check size={16} /> : <Plus size={16} />}</i></button></li>;
